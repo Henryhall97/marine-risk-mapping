@@ -69,5 +69,5 @@ htmlcov/
 .dmypy.json
 dmypy.json
 
-# linting 
+# linting
 .ruff_cache/
