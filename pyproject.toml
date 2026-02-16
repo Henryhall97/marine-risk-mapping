@@ -1,0 +1,7 @@
+[project]
+name = "marine-risk-mapping"
+version = "0.1.0"
+description = "Marine risk mapping platform combining AIS vessel data, whale sightings, and ocean data to identify at-risk areas"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
