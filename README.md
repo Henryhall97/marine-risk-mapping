@@ -129,14 +129,14 @@ uv run ruff format .
 | 1.3 | Set up Git and .gitignore | ✅ |
 | 1.4 | Configure Ruff | ✅ |
 | 1.5 | Write README | ✅ |
-| 1.6 | Set up pre-commit hooks | ⬜ |
+| 1.6 | Set up pre-commit hooks | ✅ |
 
 ### Phase 2: Data Acquisition
 
 | Step | Task | Status |
 |------|------|--------|
 | 2.1 | Research and document data sources | ⬜ |
-| 2.2 | Write AIS download script | ⬜ |
+| 2.2 | Write AIS download script | ✅ |
 | 2.3 | Write whale sightings download script | ⬜ |
 | 2.4 | Write bathymetry download script | ⬜ |
 | 2.5 | Write MPA download script | ⬜ |
