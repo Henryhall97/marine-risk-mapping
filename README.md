@@ -1,11 +1,11 @@
 # 🐋 Marine Risk Mapping Platform
 
-This is a platform for predicting and displaying areas of high risk for marine life on the US East Coast.
+This is a platform for predicting and displaying areas of high risk for marine life on the US Coast.
 
 ## Overview
 
 
-Tracking areas of high risk for whale-vessel collisions on the US East Coast
+Tracking areas of high risk for whale-vessel collisions on the US Coast
 
 Combining multiple data sources including: Ship AIS data, Whale sightings, marine protection zones and bathymetry data to identify at-risk areas.
 
@@ -137,9 +137,9 @@ uv run ruff format .
 |------|------|--------|
 | 2.1 | Research and document data sources | ⬜ |
 | 2.2 | Write AIS download script | ✅ |
-| 2.3 | Write whale sightings download script | ⬜ |
+| 2.3 | Write whale sightings download script | ✅ |
 | 2.4 | Write bathymetry download script | ⬜ |
-| 2.5 | Write MPA download script | ⬜ |
+| 2.5 | Write MPA download script | ✅ |
 | 2.6 | Store raw data as Parquet | ⬜ |
 | 2.7 | Upload to S3 | ⬜ |
 
