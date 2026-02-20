@@ -135,21 +135,21 @@ uv run ruff format .
 
 | Step | Task | Status |
 |------|------|--------|
-| 2.1 | Research and document data sources | ⬜ |
+| 2.1 | Research and document data sources | ✅ |
 | 2.2 | Write AIS download script | ✅ |
 | 2.3 | Write whale sightings download script | ✅ |
-| 2.4 | Write bathymetry download script | ⬜ |
+| 2.4 | Write bathymetry download script | ✅ |
 | 2.5 | Write MPA download script | ✅ |
-| 2.6 | Store raw data as Parquet | ⬜ |
-| 2.7 | Upload to S3 | ⬜ |
+| 2.6 | Store raw data as Parquet | ✅ |
+| 2.7 | Upload to S3 | ✅ |
 
 ### Phase 3: Database Setup
 
 | Step | Task | Status |
 |------|------|--------|
-| 3.1 | Set up PostGIS locally with Docker | ⬜ |
-| 3.2 | Design schema for spatial data | ⬜ |
-| 3.3 | Load raw data into PostGIS | ⬜ |
+| 3.1 | Set up PostGIS locally with Docker | ✅ |
+| 3.2 | Design schema for spatial data | ✅ |
+| 3.3 | Load raw data into PostGIS | ✅ |
 | 3.4 | Set up DuckDB for analytical queries | ⬜ |
 
 ### Phase 4: Data Quality
