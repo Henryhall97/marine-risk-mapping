@@ -1,8 +1,12 @@
 """Load raw data from Parquet files into PostGIS.
 
-Reads the cleaned Parquet files for AIS positions, cetacean
-sightings, and marine protected areas, then inserts them
-into the PostGIS tables created by create_schema.py.
+Reads the cleaned Parquet files for cetacean sightings and
+marine protected areas, then inserts them into the PostGIS
+tables created by create_schema.py.
+
+Note: AIS data is NOT loaded into PostGIS — it stays in
+parquet files and is queried directly via DuckDB. Only
+pre-aggregated results will land in PostGIS later (via dbt).
 """
 
 import logging
@@ -12,6 +16,12 @@ import geopandas as gpd
 import pandas as pd
 import psycopg2
 from psycopg2.extras import execute_values
+
+from pipeline.validation.schemas import (
+    cetacean_schema,
+    mpa_schema,
+    validate_dataframe,
+)
 
 # Database connection settings (match docker-compose.yml)
 DB_CONFIG = {
@@ -23,11 +33,8 @@ DB_CONFIG = {
 }
 
 # Data file paths
-AIS_DIR = Path("data/raw/ais")
 CETACEAN_FILE = Path("data/raw/cetacean/us_cetacean_sightings.parquet")
 MPA_FILE = Path("data/raw/mpa/mpa_inventory.parquet")
-
-BATCH_SIZE = 50_000  # rows per INSERT batch for AIS data
 
 logging.basicConfig(
     level=logging.INFO,
@@ -48,6 +55,17 @@ def load_mpa_data(cur) -> None:
 
     gdf = gpd.read_parquet(MPA_FILE)
     logger.info("Read %d MPA features", len(gdf))
+
+    # Validate before loading — reject all if any failures
+    result = validate_dataframe(gdf, mpa_schema)
+    if not result["valid"]:
+        logger.error(
+            "MPA validation failed: %d failures — aborting load",
+            result["n_failures"],
+        )
+        logger.error("Sample failures:\n%s", result["failures"].head(5))
+        return
+    logger.info("MPA validation passed ✅")
 
     rows = []
     for _, row in gdf.iterrows():
@@ -117,6 +135,17 @@ def load_cetacean_data(cur) -> None:
     df = pd.read_parquet(CETACEAN_FILE)
     logger.info("Read %d cetacean sightings", len(df))
 
+    # Validate before loading — reject all if any failures
+    result = validate_dataframe(df, cetacean_schema)
+    if not result["valid"]:
+        logger.error(
+            "Cetacean validation failed: %d failures — aborting load",
+            result["n_failures"],
+        )
+        logger.error("Sample failures:\n%s", result["failures"].head(5))
+        return
+    logger.info("Cetacean validation passed ✅")
+
     sql = """
         INSERT INTO cetacean_sightings
             (scientific_name, decimal_latitude, decimal_longitude,
@@ -149,111 +178,6 @@ def load_cetacean_data(cur) -> None:
     logger.info("Loaded %d cetacean sightings", len(records))
 
 
-def load_ais_data(cur) -> None:
-    """Load AIS position data into PostGIS.
-
-    Uses COPY protocol via a CSV-like string buffer for
-    maximum insert speed. Much faster than execute_values
-    for millions of rows.
-
-    Args:
-        cur: psycopg2 cursor.
-    """
-    from io import StringIO
-
-    parquet_files = sorted(AIS_DIR.glob("*.parquet"))
-    if not parquet_files:
-        logger.warning("No AIS parquet files found in %s", AIS_DIR)
-        return
-
-    logger.info("Found %d AIS files to load", len(parquet_files))
-
-    total_loaded = 0
-
-    for file_idx, filepath in enumerate(parquet_files, start=1):
-        logger.info("(%d/%d) Reading %s", file_idx, len(parquet_files), filepath.name)
-        gdf = gpd.read_parquet(filepath)
-
-        # Build a flat DataFrame with WKT geometry (all vectorized)
-        flat = pd.DataFrame(
-            {
-                "mmsi": gdf["mmsi"],
-                "base_date_time": gdf["base_date_time"].astype(str),
-                "sog": gdf["sog"],
-                "cog": gdf["cog"],
-                "heading": gdf["heading"],
-                "vessel_name": gdf["vessel_name"],
-                "imo": gdf["imo"],
-                "call_sign": gdf["call_sign"],
-                "vessel_type": gdf["vessel_type"],
-                "status": gdf["status"],
-                "length": gdf["length"],
-                "width": gdf["width"],
-                "draft": gdf["draft"],
-                "cargo": gdf["cargo"],
-                "transceiver": gdf["transceiver"],
-                "geom": gdf.geometry.apply(lambda g: g.wkt),
-            }
-        )
-
-        n_rows = len(flat)
-        del gdf
-
-        # Write to a string buffer as tab-separated values
-        buffer = StringIO()
-        flat.to_csv(buffer, sep="\t", header=False, index=False, na_rep="\\N")
-        del flat
-        buffer.seek(0)
-
-        # Use a temp staging table (text geom), then convert to real geometry
-        cur.execute("""
-            CREATE TEMP TABLE ais_staging (
-                mmsi INTEGER, base_date_time TEXT, sog REAL, cog REAL,
-                heading SMALLINT, vessel_name TEXT, imo TEXT, call_sign TEXT,
-                vessel_type SMALLINT, status SMALLINT, length REAL,
-                width SMALLINT, draft REAL, cargo SMALLINT, transceiver TEXT,
-                geom_wkt TEXT
-            );
-        """)
-
-        # COPY into staging table
-        copy_sql = """
-            COPY ais_staging
-                (mmsi, base_date_time, sog, cog, heading, vessel_name,
-                 imo, call_sign, vessel_type, status, length, width,
-                 draft, cargo, transceiver, geom_wkt)
-            FROM STDIN WITH (FORMAT text, NULL '\\N')
-        """
-        cur.copy_expert(copy_sql, buffer)
-
-        # Move from staging to real table, converting geometry
-        cur.execute("""
-            INSERT INTO ais_positions
-                (mmsi, base_date_time, sog, cog, heading, vessel_name,
-                 imo, call_sign, vessel_type, status, length, width,
-                 draft, cargo, transceiver, geom)
-            SELECT
-                mmsi, base_date_time::timestamp, sog, cog, heading,
-                vessel_name, imo, call_sign, vessel_type, status,
-                length, width, draft, cargo, transceiver,
-                ST_GeomFromText(geom_wkt, 4326)
-            FROM ais_staging;
-        """)
-        cur.execute("DROP TABLE ais_staging;")
-        total_loaded += n_rows
-
-        logger.info(
-            "(%d/%d) Loaded %s (%d rows) — total so far: %d",
-            file_idx,
-            len(parquet_files),
-            filepath.name,
-            n_rows,
-            total_loaded,
-        )
-
-    logger.info("AIS loading complete: %d total rows", total_loaded)
-
-
 def load_all_data() -> None:
     """Load all raw data into PostGIS."""
     logger.info("Connecting to PostGIS at %s:%s", DB_CONFIG["host"], DB_CONFIG["port"])
@@ -264,7 +188,7 @@ def load_all_data() -> None:
 
     try:
         # Check if tables already have data
-        for table in ["marine_protected_areas", "cetacean_sightings", "ais_positions"]:
+        for table in ["marine_protected_areas", "cetacean_sightings"]:
             cur.execute(f"SELECT COUNT(*) FROM {table};")
             count = cur.fetchone()[0]
             if count > 0:
@@ -275,12 +199,10 @@ def load_all_data() -> None:
                 load_mpa_data(cur)
             elif table == "cetacean_sightings":
                 load_cetacean_data(cur)
-            elif table == "ais_positions":
-                load_ais_data(cur)
 
         # Final row counts
         logger.info("--- Final row counts ---")
-        for table in ["ais_positions", "cetacean_sightings", "marine_protected_areas"]:
+        for table in ["marine_protected_areas", "cetacean_sightings"]:
             cur.execute(f"SELECT COUNT(*) FROM {table};")
             count = cur.fetchone()[0]
             logger.info("%s: %d rows", table, count)

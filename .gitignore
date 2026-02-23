@@ -71,3 +71,4 @@ dmypy.json
 
 # linting
 .ruff_cache/
+AWSCLIV2.pkg

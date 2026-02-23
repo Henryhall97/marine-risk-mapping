@@ -118,7 +118,35 @@ uv run ruff check .
 uv run ruff format .
 ```
 
-## 📋 Project Status
+## � Project Structure
+
+```
+marine_risk_mapping/
+├── pipeline/              # Python ingestion & validation code
+│   ├── ingestion/         # Download scripts (AIS, cetaceans, MPA, bathymetry)
+│   ├── database/          # PostGIS schema & data loading, DuckDB views
+│   └── validation/        # Pandera schemas & data quality reports
+├── transform/             # dbt project (SQL transformations)
+│   ├── models/
+│   │   ├── staging/       # Clean raw data (stg_ models)
+│   │   ├── intermediate/  # Spatial joins (int_ models)
+│   │   └── marts/         # Final risk scores (fct_/dim_ models)
+│   ├── macros/            # Reusable SQL snippets
+│   └── tests/             # Custom dbt tests
+├── orchestration/         # Dagster project (scheduling & monitoring)
+├── backend/               # FastAPI REST API
+├── frontend/              # Next.js + Deck.gl dashboard
+├── notebooks/             # Jupyter exploration notebooks
+│   ├── data_ingestion/    # Data download & exploration
+│   └── data_quality/      # Quality reports & visualisations
+├── docker/                # Docker Compose & Dockerfiles
+├── data/                  # Local data files (git-ignored)
+│   ├── raw/               # Raw parquet files
+│   └── marine_risk.duckdb # DuckDB analytical database
+└── tests/                 # Python unit & integration tests
+```
+
+## �📋 Project Status
 
 ### Phase 1: Project Setup
 
@@ -150,15 +178,15 @@ uv run ruff format .
 | 3.1 | Set up PostGIS locally with Docker | ✅ |
 | 3.2 | Design schema for spatial data | ✅ |
 | 3.3 | Load raw data into PostGIS | ✅ |
-| 3.4 | Set up DuckDB for analytical queries | ⬜ |
+| 3.4 | Set up DuckDB for analytical queries | ✅ |
 
 ### Phase 4: Data Quality
 
 | Step | Task | Status |
 |------|------|--------|
-| 4.1 | Define Pandera schemas | ⬜ |
-| 4.2 | Add validation to ingestion pipeline | ⬜ |
-| 4.3 | Create data quality reports | ⬜ |
+| 4.1 | Define Pandera schemas | ✅ |
+| 4.2 | Add validation to ingestion pipeline | ✅ |
+| 4.3 | Create data quality reports | ✅ |
 
 ### Phase 5: dbt Transformations
 
