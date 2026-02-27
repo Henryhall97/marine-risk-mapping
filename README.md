@@ -48,6 +48,8 @@ Data is downloaded from external sources (AIS, whale sightings, bathymetry, prot
 
 Messy data is cleaned and transformed - standardising coordinates, handling missing values, joining across datasets. This is orchestrated with Dagster, using dbt to handle the SQL transformations, validating quality with Pandera, and landing the clean data in PostGIS.
 
+AIS vessel traffic (3.1B pings) is too large for direct spatial joins. A DuckDB-based aggregation pipeline assigns each ping to an H3 hexagonal grid cell (resolution 7, ~1.2km) and produces ~66 traffic features per cell per month — including both ping-weighted (temporal exposure) and vessel-weighted (debiased) metrics. This two-pass approach removes AIS ping-rate bias where Class A transponders broadcast 15x more often than Class B. The aggregated output is written to parquet and loaded into PostGIS for spatial joins with cetacean and MPA data via dbt.
+
 ### API Layer
 
 FastAPI sits between the database and anyone who wants the data, exposing endpoints for risk zones, whale sightings, and vessel traffic by region and date.
@@ -66,6 +68,7 @@ Next.js (React) frontend with Deck.gl for map rendering. Users see an interactiv
 | **Data Ingestion** | Python (httpx) | Download data from APIs and file sources |
 | **Data Storage (Raw)** | AWS S3 + Parquet | Cloud storage for raw data in columnar format |
 | **Data Storage (Analytical)** | DuckDB | Fast local analytical queries over Parquet files |
+| **Spatial Aggregation** | H3 (Uber) | Hexagonal grid system for AIS traffic aggregation (res 7 ~1.2km) |
 | **Data Storage (Spatial)** | PostgreSQL + PostGIS | Production database with spatial query support |
 | **Data Transformation** | dbt (dbt-postgres) | SQL-based data transformation with built-in testing |
 | **Data Quality** | Pandera | Schema validation and data contracts |
@@ -125,6 +128,7 @@ marine_risk_mapping/
 ├── pipeline/              # Python ingestion & validation code
 │   ├── ingestion/         # Download scripts (AIS, cetaceans, MPA, bathymetry)
 │   ├── database/          # PostGIS schema & data loading, DuckDB views
+│   ├── aggregation/       # AIS H3 aggregation (DuckDB two-pass pipeline)
 │   └── validation/        # Pandera schemas & data quality reports
 ├── transform/             # dbt project (SQL transformations)
 │   ├── models/
@@ -140,8 +144,10 @@ marine_risk_mapping/
 │   ├── data_ingestion/    # Data download & exploration
 │   └── data_quality/      # Quality reports & visualisations
 ├── docker/                # Docker Compose & Dockerfiles
+├── docs/                  # Design documents (PDF reports)
 ├── data/                  # Local data files (git-ignored)
 │   ├── raw/               # Raw parquet files
+│   ├── processed/         # Aggregated output (ais_h3_res7.parquet)
 │   └── marine_risk.duckdb # DuckDB analytical database
 └── tests/                 # Python unit & integration tests
 ```
@@ -192,9 +198,10 @@ marine_risk_mapping/
 
 | Step | Task | Status |
 |------|------|--------|
-| 5.1 | Initialise dbt project | ⬜ |
-| 5.2 | Build staging models | ⬜ |
-| 5.3 | Build intermediate spatial join models | ⬜ |
+| 5.1 | Initialise dbt project | ✅ |
+| 5.2 | Build staging models (12/12 tests passing) | ✅ |
+| 5.3a | AIS H3 aggregation pipeline (two-pass) | ✅ |
+| 5.3b | Build intermediate spatial join models | ✅ |
 | 5.4 | Build mart models (risk scores) | ⬜ |
 | 5.5 | Add dbt tests | ⬜ |
 
