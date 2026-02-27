@@ -1,0 +1,31 @@
+# dbt project configuration
+# This is the main config file that tells dbt where to find
+# models, what database to target, and how to materialise results.
+
+name: marine_risk
+version: "1.0.0"
+profile: marine_risk
+
+# Where dbt looks for SQL models, tests, macros, etc.
+model-paths: ["models"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+seed-paths: ["seeds"]
+analysis-paths: ["analyses"]
+
+# Compiled SQL and run artifacts go here (git-ignored)
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+# Default materialisation strategy per folder
+# 'view' = CREATE VIEW (no data stored, always fresh)
+# 'table' = CREATE TABLE (data stored, faster reads)
+models:
+  marine_risk:
+    +materialized: view
+    staging:
+      +materialized: view
+    intermediate:
+      +materialized: table
+    marts:
+      +materialized: table

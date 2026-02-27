@@ -1,0 +1,332 @@
+# Schema, tests, and documentation for the mart layer.
+#
+# These models are the final output of the dbt pipeline —
+# consumed by the FastAPI backend and rendered by the
+# Next.js + Deck.gl frontend.
+#
+# Convention: fct_ = fact table (metrics + measures at a grain).
+
+version: 2
+
+models:
+  # ── Collision Risk ──────────────────────────────────────
+  - name: fct_collision_risk
+    description: >
+      Whale–vessel collision risk per H3 cell. Joins vessel traffic
+      (time-aggregated), cetacean sighting density, ocean depth,
+      MPA coverage, and whale–ship proximity into a single feature
+      matrix. A composite risk score (0–1) is computed from
+      percentile-ranked features weighted across five sub-scores:
+      traffic threat (30%), cetacean exposure (30%), proximity (20%),
+      habitat suitability (10%), and protection gap (10%).
+      Land cells are excluded. One row per h3_cell.
+    config:
+      indexes:
+        - columns: ['h3_cell']
+        - columns: ['risk_score']
+        - columns: ['geom']
+          type: gist
+    columns:
+      # ── Keys & spatial ─────────────────────────────
+      - name: h3_cell
+        description: "H3 cell index (resolution 7, BIGINT)"
+        tests:
+          - unique
+          - not_null
+
+      - name: cell_lat
+        description: "Centroid latitude of the H3 cell (WGS-84)"
+        tests:
+          - not_null
+
+      - name: cell_lon
+        description: "Centroid longitude of the H3 cell (WGS-84)"
+        tests:
+          - not_null
+
+      - name: geom
+        description: "PostGIS POINT geometry (SRID 4326) at cell centroid"
+        tests:
+          - not_null
+
+      # ── Risk score ─────────────────────────────────
+      - name: risk_score
+        description: >
+          Composite collision risk on a 0–1 scale (higher = more dangerous).
+          Weighted sum of five sub-scores: traffic_score (30%),
+          cetacean_score (30%), proximity_score (20%),
+          habitat_score (10%), protection_gap (10%).
+        tests:
+          - not_null
+
+      - name: risk_category
+        description: >
+          Human-readable risk bucket based on score thresholds:
+          critical (≥0.7), high (≥0.5), medium (≥0.35),
+          low (≥0.2), minimal (<0.2).
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['critical', 'high', 'medium', 'low', 'minimal']
+
+      # ── Sub-scores ─────────────────────────────────
+      - name: traffic_score
+        description: >
+          Traffic threat sub-score (0–1). Weighted combination of
+          percentile-ranked vessel density (35%), high-speed vessels (25%),
+          large vessels (20%), commercial vessels (10%), and
+          night traffic (10%). Weight in composite: 30%.
+        tests:
+          - not_null
+
+      - name: cetacean_score
+        description: >
+          Cetacean exposure sub-score (0–1). Weighted combination of
+          percentile-ranked total sightings (35%), baleen whale
+          sightings (35%), and recent sightings (30%).
+          Weight in composite: 30%.
+        tests:
+          - not_null
+
+      - name: proximity_score
+        description: >
+          Proximity sub-score (0–1). Geometric mean of whale and
+          ship exponential decay proximity scores (10km half-life).
+          High only when whales and ships are co-located.
+          Weight in composite: 20%.
+        tests:
+          - not_null
+
+      - name: habitat_score
+        description: >
+          Habitat suitability sub-score (0–1). Continental shelf (50%),
+          shelf edge (30%), and depth zone weight (20%). Higher on the
+          continental shelf where whales feed.
+          Weight in composite: 10%.
+        tests:
+          - not_null
+
+      - name: protection_gap
+        description: >
+          Protection gap sub-score (0–1). Higher = less protected.
+          No-take MPA = 0.2, strict IUCN MPA = 0.4, any MPA = 0.7,
+          no MPA = 1.0. Weight in composite: 10%.
+        tests:
+          - not_null
+
+      # ── Feature flags ──────────────────────────────
+      - name: has_traffic
+        description: "True if at least one month of vessel traffic exists in this cell"
+
+      - name: has_whale_sightings
+        description: "True if at least one cetacean sighting exists in this cell"
+
+      - name: in_mpa
+        description: "True if cell centroid falls within any Marine Protected Area"
+
+      # ── Traffic features ───────────────────────────
+      - name: months_active
+        description: "Number of distinct months with vessel traffic (1–12)"
+
+      - name: total_pings
+        description: "Total AIS pings across all months"
+
+      - name: avg_monthly_vessels
+        description: "Average number of unique vessels per active month"
+
+      - name: peak_monthly_vessels
+        description: "Highest unique vessel count in any single month"
+
+      - name: avg_speed_knots
+        description: "Vessel-weighted average speed across all months (knots)"
+
+      - name: peak_speed_knots
+        description: "Maximum observed speed across all months (knots)"
+
+      - name: avg_high_speed_vessels
+        description: "Average count of vessels exceeding 10 knots per month"
+
+      - name: total_high_speed_pings
+        description: "Total AIS pings above 10 knots across all months"
+
+      - name: avg_large_vessels
+        description: "Average count of vessels > 100m per month"
+
+      - name: avg_vessel_length_m
+        description: "Average vessel-weighted length in metres across months"
+
+      - name: avg_deep_draft_vessels
+        description: "Average count of vessels with draft > 8m per month"
+
+      - name: avg_cog_diversity
+        description: "Average cross-vessel COG standard deviation (degrees) — higher = more crossing traffic"
+
+      - name: avg_night_vessels
+        description: "Average unique vessels at night (before 06:00 / after 20:00 local solar)"
+
+      - name: avg_night_high_speed
+        description: "Average high-speed vessels at night per month"
+
+      - name: night_traffic_ratio
+        description: "Proportion of traffic occurring at night (0–1)"
+
+      - name: avg_commercial_vessels
+        description: "Average combined cargo + tanker vessels per month"
+
+      - name: avg_fishing_vessels
+        description: "Average fishing vessels per month"
+
+      - name: avg_passenger_vessels
+        description: "Average passenger vessels per month"
+
+      # ── Cetacean features ──────────────────────────
+      - name: total_sightings
+        description: "Total cetacean sightings in this cell (all years)"
+
+      - name: unique_species
+        description: "Distinct species/taxon labels observed"
+
+      - name: species_level_sightings
+        description: "Sightings identified to species level"
+
+      - name: recent_sightings
+        description: "Sightings from 2019 onward"
+
+      - name: baleen_whale_sightings
+        description: "Sightings of baleen whales (rorquals, right whales, gray whale)"
+
+      - name: sighting_earliest_year
+        description: "Earliest observation year in this cell"
+
+      - name: sighting_latest_year
+        description: "Most recent observation year in this cell"
+
+      # ── Bathymetry features ────────────────────────
+      - name: depth_m
+        description: "Mean ocean depth in metres (negative = below sea level)"
+
+      - name: depth_range_m
+        description: "Depth range across sample points — large values = shelf edge"
+
+      - name: is_continental_shelf
+        description: "True if mean depth between -200m and 0m"
+
+      - name: is_shelf_edge
+        description: "True if sample points straddle the -200m contour"
+
+      - name: depth_zone
+        description: "Categorical: shelf / slope / abyssal (land excluded)"
+
+      # ── MPA features ───────────────────────────────
+      - name: mpa_count
+        description: "Number of overlapping MPAs (null if no overlap)"
+
+      - name: has_strict_protection
+        description: "True if any overlapping MPA has IUCN category Ia–III"
+
+      - name: has_no_take_zone
+        description: "True if any overlapping MPA has No Take / No Access / No Impact"
+
+      # ── Proximity features ─────────────────────────
+      - name: dist_to_nearest_whale_km
+        description: "Haversine distance to nearest cetacean sighting cell (km)"
+
+      - name: dist_to_nearest_ship_km
+        description: "Haversine distance to nearest vessel traffic cell (km)"
+
+
+  # ── Monthly Traffic ─────────────────────────────────────
+  - name: fct_monthly_traffic
+    description: >
+      Monthly vessel traffic per H3 cell enriched with static
+      cell-level context (depth, whale sightings, MPA status).
+      Powers temporal drill-down charts in the API.
+      Land cells excluded. One row per (h3_cell, month).
+    config:
+      indexes:
+        - columns: ['h3_cell']
+        - columns: ['month']
+        - columns: ['h3_cell', 'month']
+          unique: true
+    columns:
+      - name: h3_cell
+        description: "H3 cell index (resolution 7)"
+        tests:
+          - not_null
+
+      - name: month
+        description: "First day of the month (DATE)"
+        tests:
+          - not_null
+
+      - name: cell_lat
+        description: "Centroid latitude of the H3 cell"
+
+      - name: cell_lon
+        description: "Centroid longitude of the H3 cell"
+
+      # ── Traffic metrics ────────────────────────────
+      - name: unique_vessels
+        description: "Distinct vessels in this cell-month"
+        tests:
+          - not_null
+
+      - name: ping_count
+        description: "Total AIS pings in this cell-month"
+        tests:
+          - not_null
+
+      - name: vw_avg_speed_knots
+        description: "Vessel-weighted average speed (knots)"
+
+      - name: vw_median_speed_knots
+        description: "Vessel-weighted median speed (knots)"
+
+      - name: max_speed_knots
+        description: "Maximum observed speed (knots)"
+
+      - name: high_speed_vessel_count
+        description: "Vessels exceeding 10 knots"
+
+      - name: large_vessel_count
+        description: "Vessels > 100m length"
+
+      - name: day_unique_vessels
+        description: "Distinct vessels during daytime"
+
+      - name: night_unique_vessels
+        description: "Distinct vessels at night"
+
+      - name: cargo_vessels
+        description: "Distinct cargo vessels"
+
+      - name: tanker_vessels
+        description: "Distinct tanker vessels"
+
+      - name: fishing_vessels
+        description: "Distinct fishing vessels"
+
+      - name: passenger_vessels
+        description: "Distinct passenger vessels"
+
+      - name: pleasure_vessels
+        description: "Distinct pleasure/sailing craft"
+
+      # ── Cell context (denormalised) ────────────────
+      - name: depth_zone
+        description: "Depth zone of this cell (shelf/slope/abyssal/unknown)"
+
+      - name: is_continental_shelf
+        description: "True if cell is on the continental shelf"
+
+      - name: depth_m
+        description: "Mean ocean depth in metres"
+
+      - name: total_sightings
+        description: "Total cetacean sightings in this cell (all years, 0 if none)"
+
+      - name: baleen_whale_sightings
+        description: "Baleen whale sightings in this cell (0 if none)"
+
+      - name: in_mpa
+        description: "True if cell is within any MPA"

@@ -1,0 +1,64 @@
+# Model documentation and tests for the staging layer.
+#
+# dbt tests run automatically with `dbt test` and catch
+# data issues early. Think of them like unit tests for
+# your SQL transformations.
+
+version: 2
+
+models:
+  - name: stg_cetacean_sightings
+    description: "Cleaned whale/dolphin sightings with backfilled species labels"
+    columns:
+      - name: id
+        description: "Primary key"
+        tests:
+          - unique
+          - not_null
+
+      - name: latitude
+        description: "Latitude WGS-84 (24–49, US waters)"
+        tests:
+          - not_null
+
+      - name: longitude
+        description: "Longitude WGS-84 (-130 to -65, US waters)"
+        tests:
+          - not_null
+
+      - name: species_label
+        description: "Species or higher-level taxon name (never null after backfill)"
+        tests:
+          - not_null
+
+      - name: taxonomic_level
+        description: "Precision of identification: species, family, or higher"
+        tests:
+          - accepted_values:
+              arguments:
+                values: ["species", "family", "higher"]
+
+  - name: stg_marine_protected_areas
+    description: "Cleaned MPAs with valid geometries, filtered to marine areas"
+    columns:
+      - name: id
+        description: "Primary key"
+        tests:
+          - unique
+          - not_null
+
+      - name: site_id
+        description: "NOAA site identifier"
+        tests:
+          - unique
+          - not_null
+
+      - name: site_name
+        description: "Human-readable MPA name"
+        tests:
+          - not_null
+
+      - name: marine_percent
+        description: "Percentage of area that is marine (always > 0 after filter)"
+        tests:
+          - not_null

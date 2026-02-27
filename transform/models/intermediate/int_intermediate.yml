@@ -1,0 +1,369 @@
+# Schema, tests, and documentation for the intermediate layer.
+#
+# These models prepare each domain (grid, traffic, cetaceans, MPAs)
+# for the mart-layer risk model that joins them together.
+#
+# Convention: every column gets a description (data dictionary).
+# Tests are applied selectively — join keys, not-null guarantees,
+# and sanity checks that catch real data problems.
+
+version: 2
+
+models:
+  # ── Hex Grid Spine ──────────────────────────────────────
+  - name: int_hex_grid
+    description: >
+      Unique H3 resolution-7 hex cells with centroid point geometry.
+      Spatial spine that cetacean and MPA models join against.
+      ~1.9M rows (one per cell across the full AIS dataset).
+    config:
+      indexes:
+        - columns: ['geom']
+          type: gist
+        - columns: ['h3_cell']
+    columns:
+      - name: h3_cell
+        description: "H3 cell index (resolution 7, BIGINT)"
+        tests:
+          - unique
+          - not_null
+
+      - name: cell_lat
+        description: "Centroid latitude of the H3 cell (WGS-84)"
+        tests:
+          - not_null
+
+      - name: cell_lon
+        description: "Centroid longitude of the H3 cell (WGS-84)"
+        tests:
+          - not_null
+
+      - name: geom
+        description: "PostGIS POINT geometry (SRID 4326) at cell centroid"
+        tests:
+          - not_null
+
+  # ── Vessel Traffic ──────────────────────────────────────
+  - name: int_vessel_traffic
+    description: >
+      Vessel traffic metrics per H3 cell per month, sourced from
+      the AIS H3 aggregation. Uses vessel-weighted (vw_) metrics
+      to correct for AIS ping-rate bias where Class A ships
+      broadcast 15x more than Class B. ~9.7M rows.
+    config:
+      indexes:
+        - columns: ['h3_cell']
+        - columns: ['month']
+    columns:
+      # ── Keys & spatial ─────────────────────────────
+      - name: h3_cell
+        description: "H3 cell index (resolution 7)"
+        tests:
+          - not_null
+
+      - name: month
+        description: "First day of the month (DATE)"
+        tests:
+          - not_null
+
+      - name: cell_lat
+        description: "Centroid latitude of the H3 cell"
+
+      - name: cell_lon
+        description: "Centroid longitude of the H3 cell"
+
+      # ── Traffic volume ─────────────────────────────
+      - name: ping_count
+        description: "Total AIS pings received in this cell-month (raw, not debiased)"
+        tests:
+          - not_null
+
+      - name: unique_vessels
+        description: "Distinct MMSI count in this cell-month"
+        tests:
+          - not_null
+
+      # ── Speed ──────────────────────────────────────
+      - name: vw_avg_speed_knots
+        description: "Vessel-weighted average speed in knots (debiased)"
+
+      - name: vw_median_speed_knots
+        description: "Vessel-weighted median speed in knots (robust to GPS glitches)"
+
+      - name: max_speed_knots
+        description: "Maximum observed speed across all pings in this cell-month"
+
+      - name: high_speed_pings
+        description: "Pings with SOG > 10 knots (strike-risk threshold)"
+
+      - name: high_speed_vessel_count
+        description: "Distinct vessels exceeding 10 knots at least once"
+
+      # ── Vessel length ──────────────────────────────
+      - name: vw_avg_length_m
+        description: "Vessel-weighted average length in metres (debiased)"
+
+      - name: max_length_m
+        description: "Maximum reported vessel length in this cell-month"
+
+      - name: p95_length_m
+        description: "95th percentile vessel length (filters outliers)"
+
+      - name: large_vessel_count
+        description: "Vessels with length > 100m (ocean-going commercial)"
+
+      - name: length_report_count
+        description: "Vessels that reported a non-zero length value"
+
+      # ── Vessel width ───────────────────────────────
+      - name: vw_avg_width_m
+        description: "Vessel-weighted average beam width in metres"
+
+      - name: max_width_m
+        description: "Maximum reported vessel width in this cell-month"
+
+      - name: wide_vessel_count
+        description: "Vessels with width > 20m (wide-beam commercial)"
+
+      # ── Vessel draft ───────────────────────────────
+      - name: vw_avg_draft_m
+        description: "Vessel-weighted average draft in metres"
+
+      - name: max_draft_m
+        description: "Maximum reported draft in this cell-month"
+
+      - name: p95_draft_m
+        description: "95th percentile vessel draft"
+
+      - name: deep_draft_count
+        description: "Vessels with draft > 8m (deep-draft commercial)"
+
+      - name: draft_report_count
+        description: "Vessels that reported a non-zero draft value"
+
+      # ── Course diversity ───────────────────────────
+      - name: avg_circ_cog_stddev
+        description: >
+          Average within-vessel circular COG standard deviation (degrees).
+          High value = vessels are maneuvering/turning frequently in this cell.
+          Uses Yamartino method for proper circular statistics.
+
+      - name: cross_vessel_circ_cog_stddev
+        description: >
+          Cross-vessel circular COG standard deviation (degrees).
+          High value = vessels heading in many different directions (crossing traffic).
+          Each vessel is normalised to a unit heading vector before averaging.
+
+      - name: cog_vessel_count
+        description: "Vessels that reported at least one valid COG value"
+
+      # ── Day / Night ────────────────────────────────
+      - name: day_unique_vessels
+        description: "Distinct vessels observed during daytime (06:00–20:00 local solar)"
+
+      - name: night_unique_vessels
+        description: "Distinct vessels observed at night (before 06:00 or after 20:00 local solar)"
+
+      - name: vw_day_avg_speed_knots
+        description: "Vessel-weighted average speed during daytime"
+
+      - name: vw_night_avg_speed_knots
+        description: "Vessel-weighted average speed at night"
+
+      - name: day_high_speed_vessel_count
+        description: "Vessels exceeding 10 knots during daytime"
+
+      - name: night_high_speed_vessel_count
+        description: "Vessels exceeding 10 knots at night"
+
+      # ── Vessel type mix ────────────────────────────
+      - name: fishing_vessels
+        description: "Distinct fishing vessels (AIS type 30, MarineCadastre 1001–1002)"
+
+      - name: tug_vessels
+        description: "Distinct tug/tow vessels (AIS types 31, 32, 52, MarineCadastre 1023, 1025)"
+
+      - name: passenger_vessels
+        description: "Distinct passenger vessels (AIS types 60–69, MarineCadastre 1012–1015)"
+
+      - name: cargo_vessels
+        description: "Distinct cargo vessels (AIS types 70–79, MarineCadastre 1003, 1004, 1016)"
+
+      - name: tanker_vessels
+        description: "Distinct tanker vessels (AIS types 80–89, MarineCadastre 1017, 1024)"
+
+      - name: pleasure_vessels
+        description: "Distinct pleasure/sailing craft (AIS types 36–37, MarineCadastre 1019)"
+
+      - name: military_vessels
+        description: "Distinct military vessels (AIS type 35, MarineCadastre 1021)"
+
+      # ── Navigational status ────────────────────────
+      - name: restricted_vessel_count
+        description: >
+          Vessels reporting restricted maneuverability (nav status 2 or 3).
+          These vessels cannot avoid whale strikes even if detected.
+
+  # ── Cetacean Density ────────────────────────────────────
+  - name: int_cetacean_density
+    description: >
+      Cetacean sighting counts per H3 cell. Each sighting is
+      assigned to the nearest cell centroid within 660m (H3 res-7
+      circumradius). Filtered to US coastal waters (lat 23–50,
+      lon −131 to −64). One row per cell, time-aggregated.
+    columns:
+      - name: h3_cell
+        description: "H3 cell index (resolution 7)"
+        tests:
+          - unique
+          - not_null
+
+      - name: total_sightings
+        description: "Total cetacean sightings matched to this cell"
+        tests:
+          - not_null
+
+      - name: unique_species
+        description: "Distinct species/taxon labels observed in this cell"
+        tests:
+          - not_null
+
+      - name: species_level_sightings
+        description: "Sightings identified to species level (highest taxonomic precision)"
+
+      - name: recent_sightings
+        description: "Sightings from 2019 onward (most relevant for current risk)"
+
+      - name: baleen_whale_sightings
+        description: >
+          Sightings of baleen whales: Balaenopteridae (rorquals — blue,
+          fin, humpback, minke), Balaenidae (right whales), and
+          Eschrichtiidae (gray whale). These species are most vulnerable
+          to vessel strikes due to their size, surface behaviour,
+          and overlap with shipping lanes.
+
+      - name: earliest_year
+        description: "Earliest observation year in this cell"
+
+      - name: latest_year
+        description: "Most recent observation year in this cell"
+
+  # ── MPA Coverage ────────────────────────────────────────
+  - name: int_mpa_coverage
+    description: >
+      Marine Protected Area overlap per H3 cell. Identifies which
+      cells fall within MPA boundaries via ST_Intersects on cell
+      centroid. Aggregated to one row per cell.
+    columns:
+      - name: h3_cell
+        description: "H3 cell index (resolution 7)"
+        tests:
+          - unique
+          - not_null
+
+      - name: mpa_count
+        description: "Number of distinct MPAs whose boundary contains this cell centroid"
+        tests:
+          - not_null
+
+      - name: mpa_names
+        description: "Semicolon-separated list of overlapping MPA names (for debugging)"
+
+      - name: has_strict_protection
+        description: "True if any overlapping MPA has IUCN category Ia, Ib, II, or III"
+        tests:
+          - not_null
+
+      - name: has_no_take_zone
+        description: "True if any overlapping MPA has protection level No Take, No Access, or No Impact"
+        tests:
+          - not_null
+
+  # ── Bathymetry ─────────────────────────────────────────
+  - name: int_bathymetry
+    description: >
+      Ocean depth per H3 cell from GEBCO 2025. Averaged across
+      7 sample points (centroid + 6 hex vertices) to capture
+      shelf-edge gradients. Includes derived depth zone
+      classification and continental shelf flag.
+    columns:
+      - name: h3_cell
+        description: "H3 cell index (resolution 7)"
+        tests:
+          - unique
+          - not_null
+
+      - name: depth_m
+        description: "Mean depth in metres (negative = below sea level, positive = land)"
+        tests:
+          - not_null
+
+      - name: min_depth_m
+        description: "Shallowest depth across the 7 sample points"
+
+      - name: max_depth_m
+        description: "Deepest depth across the 7 sample points"
+
+      - name: depth_range_m
+        description: "Depth range across sample points — large values indicate shelf edge"
+
+      - name: sample_count
+        description: "Number of valid raster samples (max 7, fewer at raster edges)"
+
+      - name: is_land
+        description: "True if mean depth >= 0m (GEBCO positive = above sea level)"
+        tests:
+          - not_null
+
+      - name: is_continental_shelf
+        description: "True if mean depth between -200m and 0m (excludes land). Primary whale feeding habitat."
+        tests:
+          - not_null
+
+      - name: is_shelf_edge
+        description: "True if sample points straddle the -200m contour (upwelling zone)"
+        tests:
+          - not_null
+
+      - name: depth_zone
+        description: "Categorical: land / shelf / slope / abyssal"
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['land', 'shelf', 'slope', 'abyssal']
+
+  # ── Proximity ──────────────────────────────────────────
+  - name: int_proximity
+    description: >
+      Nearest-neighbour distances from each grid cell to the
+      nearest cetacean sighting cell and nearest vessel traffic
+      cell. Pre-computed via scipy KDTree with haversine
+      post-correction. Includes exponential decay proximity
+      scores (10km half-life) for the risk model.
+      One row per h3_cell.
+    columns:
+      - name: h3_cell
+        description: "H3 cell index (resolution 7)"
+        tests:
+          - unique
+          - not_null
+
+      - name: dist_to_nearest_whale_km
+        description: "Haversine distance to nearest cetacean sighting cell (km)"
+        tests:
+          - not_null
+
+      - name: dist_to_nearest_ship_km
+        description: "Haversine distance to nearest vessel traffic cell (km)"
+        tests:
+          - not_null
+
+      - name: whale_proximity_score
+        description: "Exponential decay score (0–1) for whale proximity. 1.0 = whale cell, 0.5 at 10km, → 0."
+        tests:
+          - not_null
+
+      - name: ship_proximity_score
+        description: "Exponential decay score (0–1) for ship proximity. 1.0 = traffic cell, 0.5 at 10km, → 0."
+        tests:
+          - not_null

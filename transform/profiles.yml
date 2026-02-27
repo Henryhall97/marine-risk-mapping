@@ -1,0 +1,25 @@
+# Database connection profiles
+# dbt uses this to know WHERE to run the SQL.
+#
+# profiles.yml can live in two places:
+#   1. ~/.dbt/profiles.yml  (global, typical for personal machines)
+#   2. Inside the project   (what we're doing — keeps it with the code)
+#
+# We tell dbt to use this local copy by passing:
+#   dbt run --profiles-dir .
+#
+# In production you'd use environment variables instead of
+# hardcoded credentials.
+
+marine_risk:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: localhost
+      port: 5433
+      user: marine
+      password: marine_dev
+      dbname: marine_risk
+      schema: public
+      threads: 4

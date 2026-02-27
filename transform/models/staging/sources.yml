@@ -1,0 +1,105 @@
+# Source definitions — tells dbt about tables that already
+# exist in the database (loaded outside of dbt).
+#
+# Sources are referenced in models with:
+#   {{ source('marine_risk', 'cetacean_sightings') }}
+#
+# This gives dbt lineage tracking — it knows which models
+# depend on which raw tables.
+
+version: 2
+
+sources:
+  - name: marine_risk
+    schema: public
+    description: "Raw data loaded into PostGIS by load_data.py"
+    tables:
+      - name: cetacean_sightings
+        description: "Whale/dolphin observation records from OBIS"
+        columns:
+          - name: id
+            description: "Auto-generated primary key"
+          - name: scientific_name
+            description: "Binomial or higher-level taxonomic name"
+          - name: decimal_latitude
+            description: "Latitude WGS-84"
+          - name: decimal_longitude
+            description: "Longitude WGS-84"
+          - name: species
+            description: "Species-level identification (nullable)"
+          - name: geom
+            description: "PostGIS POINT geometry (SRID 4326)"
+
+      - name: marine_protected_areas
+        description: "MPA boundaries from NOAA MPA Inventory"
+        columns:
+          - name: id
+            description: "Auto-generated primary key"
+          - name: site_id
+            description: "NOAA site identifier"
+          - name: site_name
+            description: "Human-readable MPA name"
+          - name: geom
+            description: "PostGIS POLYGON/MULTIPOLYGON geometry (SRID 4326)"
+
+      - name: ais_h3_summary
+        description: >
+          AIS vessel traffic aggregated to H3 resolution-7 hex cells
+          (~1.2km) per month. Produced by pipeline/aggregation/aggregate_ais.py.
+          Contains ~66 columns of ping-weighted and vessel-weighted metrics.
+        columns:
+          - name: h3_cell
+            description: "H3 cell index (resolution 7, BIGINT)"
+          - name: month
+            description: "First day of the month (DATE)"
+          - name: cell_lat
+            description: "Centroid latitude of the H3 cell"
+          - name: cell_lon
+            description: "Centroid longitude of the H3 cell"
+
+      - name: cetacean_sighting_h3
+        description: >
+          Mapping of cetacean sightings to H3 resolution-7 cells.
+          Produced by pipeline/aggregation/assign_cetacean_h3.py
+          using the Python h3 library for exact cell assignment.
+        columns:
+          - name: sighting_id
+            description: "Foreign key to cetacean_sightings.id"
+          - name: h3_cell
+            description: "H3 cell index (resolution 7, BIGINT)"
+          - name: cell_lat
+            description: "Centroid latitude of the H3 cell"
+          - name: cell_lon
+            description: "Centroid longitude of the H3 cell"
+
+      - name: bathymetry_h3
+        description: >
+          GEBCO bathymetry sampled at H3 resolution-7 cell centroids
+          and vertices. Produced by pipeline/aggregation/sample_bathymetry.py.
+          Mean of 7 sample points per cell (centroid + 6 hex vertices).
+        columns:
+          - name: h3_cell
+            description: "H3 cell index (resolution 7, BIGINT)"
+          - name: depth_m
+            description: "Mean depth in metres (negative = below sea level)"
+          - name: min_depth_m
+            description: "Shallowest sample point depth"
+          - name: max_depth_m
+            description: "Deepest sample point depth"
+          - name: depth_range_m
+            description: "Depth range across sample points (shelf-edge indicator)"
+          - name: sample_count
+            description: "Number of valid sample points (max 7)"
+
+      - name: cell_proximity
+        description: >
+          Nearest-neighbour distances between grid cells and key features.
+          Produced by pipeline/aggregation/compute_proximity.py using
+          scipy KDTree with haversine post-correction.
+        columns:
+          - name: h3_cell
+            description: "H3 cell index (resolution 7, BIGINT)"
+          - name: dist_to_nearest_whale_km
+            description: "Haversine distance to nearest cetacean sighting cell (km)"
+          - name: dist_to_nearest_ship_km
+            description: "Haversine distance to nearest vessel traffic cell (km)"
