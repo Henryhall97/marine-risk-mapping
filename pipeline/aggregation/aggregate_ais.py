@@ -23,7 +23,7 @@ from psycopg2.extras import execute_values
 
 # Paths
 AIS_DIR = Path("data/raw/ais")
-OUTPUT_DIR = Path("data/processed")
+OUTPUT_DIR = Path("data/processed/ais")
 OUTPUT_FILE = OUTPUT_DIR / "ais_h3_res7.parquet"
 TEST_OUTPUT_FILE = OUTPUT_DIR / "ais_h3_res7_test.parquet"
 DUCKDB_PATH = Path("data/marine_risk.duckdb")
