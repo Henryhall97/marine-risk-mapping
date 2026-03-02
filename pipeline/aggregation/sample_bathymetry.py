@@ -21,17 +21,7 @@ import psycopg2
 import rasterio
 from psycopg2.extras import execute_values
 
-H3_RESOLUTION = 7
-
-GEBCO_PATH = "data/raw/bathymetry/gebco_2025_n49.0_s24.0_w-130.0_e-65.0.tif"
-
-DB_CONFIG = {
-    "host": "localhost",
-    "port": 5433,
-    "dbname": "marine_risk",
-    "user": "marine",
-    "password": "marine_dev",
-}
+from pipeline.config import BATHYMETRY_RASTER, DB_CONFIG
 
 logging.basicConfig(
     level=logging.INFO,
@@ -77,7 +67,7 @@ def main() -> None:
     logger.info("Read %s cells", f"{len(cells):,}")
 
     # ── Open raster ───────────────────────────────────────
-    src = rasterio.open(GEBCO_PATH)
+    src = rasterio.open(BATHYMETRY_RASTER)
     raster_bounds = src.bounds
     band = src.read(1)  # Load full band into memory (187 MB as int16)
     nodata = src.nodata

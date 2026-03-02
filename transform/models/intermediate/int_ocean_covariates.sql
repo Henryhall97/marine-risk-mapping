@@ -49,7 +49,7 @@ nearest_cov as (
 
     from grid g
     inner join covariates c
-        on ST_DWithin(g.geom, c.geom, 0.3)  -- 0.3 degree threshold
+        on ST_DWithin(g.geom, c.geom, {{ var('ocean_covariate_match_degrees') }})  -- degree threshold
     order by g.h3_cell, ST_Distance(g.geom, c.geom)
 
 )

@@ -6,18 +6,10 @@ without loading anything — DuckDB reads parquet directly.
 """
 
 import logging
-from pathlib import Path
 
 import duckdb
 
-# Paths to raw data
-AIS_DIR = Path("data/raw/ais")
-CETACEAN_FILE = Path("data/raw/cetacean/us_cetacean_sightings.parquet")
-MPA_FILE = Path("data/raw/mpa/mpa_inventory.parquet")
-BATHYMETRY_FILE = Path("data/raw/bathymetry")
-
-# Persistent DuckDB database file (stores views, not data)
-DUCKDB_PATH = Path("data/marine_risk.duckdb")
+from pipeline.config import AIS_RAW_DIR, CETACEAN_FILE, DUCKDB_PATH, MPA_FILE
 
 logging.basicConfig(
     level=logging.INFO,
@@ -52,7 +44,7 @@ def create_views(conn: duckdb.DuckDBPyConnection) -> None:
         conn: DuckDB connection.
     """
     # AIS: glob pattern reads all daily files as one table
-    ais_path = str(AIS_DIR / "*.parquet")
+    ais_path = str(AIS_RAW_DIR / "*.parquet")
     conn.execute(f"""
         CREATE OR REPLACE VIEW ais AS
         SELECT * FROM read_parquet('{ais_path}');

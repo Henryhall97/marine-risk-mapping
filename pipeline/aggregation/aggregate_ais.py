@@ -17,23 +17,42 @@ import time
 from pathlib import Path
 
 import duckdb
-import pandas as pd
 import psycopg2
 from psycopg2.extras import execute_values
 
-# Paths
-AIS_DIR = Path("data/raw/ais")
-OUTPUT_DIR = Path("data/processed/ais")
-OUTPUT_FILE = OUTPUT_DIR / "ais_h3_res7.parquet"
-TEST_OUTPUT_FILE = OUTPUT_DIR / "ais_h3_res7_test.parquet"
-DUCKDB_PATH = Path("data/marine_risk.duckdb")
+from pipeline.config import (
+    AIS_H3_PARQUET,
+    AIS_H3_TEST_PARQUET,
+    AIS_RAW_DIR,
+    AIS_YEARS,
+    DB_CONFIG,
+    DEEP_DRAFT_M,
+    H3_RESOLUTION,
+    HIGH_SPEED_KNOTS,
+    LARGE_VESSEL_LENGTH_M,
+    NAV_STATUS_RESTRICTED,
+    NAV_STATUS_UNDERWAY,
+    NIGHT_END_HOUR,
+    NIGHT_START_HOUR,
+    VESSEL_TYPE_CODES,
+    WIDE_VESSEL_WIDTH_M,
+)
+from pipeline.utils import to_python
 
-# H3 resolution: 7 = ~1.2km cells (good for shipping lanes)
-H3_RESOLUTION = 7
+# Processed output directory (derived from config)
+OUTPUT_DIR = AIS_H3_PARQUET.parent
+OUTPUT_FILE = AIS_H3_PARQUET
+TEST_OUTPUT_FILE = AIS_H3_TEST_PARQUET
 
 # Resource defaults — keep the laptop usable during long runs
 DEFAULT_THREADS = 4
 DEFAULT_MEMORY = "8GB"
+
+
+def _sql_in(codes: list[int] | tuple[int, ...]) -> str:
+    """Format a sequence of ints for a SQL IN clause: '30, 1001, 1002'."""
+    return ", ".join(str(c) for c in codes)
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -90,28 +109,11 @@ def build_aggregation_query(*, test_mode: bool = False) -> str:
     DuckDB executes this as a streaming pipeline — it doesn't load
     all 3.1B rows into memory at once.
 
-    Vessel type codes (AIS standard + MarineCadastre 1001+):
-      Fishing:   30, 1001, 1002
-      Tug/Tow:   31, 32, 52, 1023, 1025
-      Military:  35, 1021
-      Pleasure:  36, 37, 1019
-      Passenger: 60-69, 1012-1015
-      Cargo:     70-79, 1003, 1004, 1016
-      Tanker:    80-89, 1017, 1024
-
-    Navigational status codes (collision-relevant):
-      0 = Under way using engine (primary risk)
-      2 = Not under command     (cannot avoid whales)
-      3 = Restricted maneuverability
-
-    Day/night split via approximate local solar time:
-      local_hour ≈ (UTC_hour + longitude / 15) mod 24
-      Night = before 06:00 or after 20:00 local
-
-    Large-vessel thresholds:
-      Length > 100m  (ocean-going cargo / tanker / cruise)
-      Width  > 20m   (wide-beam commercial vessels)
-      Draft  > 8m    (deep-draft vessels)
+    All domain constants (vessel type codes, speed/size thresholds,
+    day/night boundaries, nav status codes) are defined in
+    pipeline/config.py — see VESSEL_TYPE_CODES, HIGH_SPEED_KNOTS,
+    LARGE_VESSEL_LENGTH_M, WIDE_VESSEL_WIDTH_M, DEEP_DRAFT_M,
+    NIGHT_START_HOUR, NIGHT_END_HOUR, NAV_STATUS_*.
 
     Args:
         test_mode: If True, only process January data for fast validation.
@@ -120,10 +122,21 @@ def build_aggregation_query(*, test_mode: bool = False) -> str:
         SQL query string.
     """
     if test_mode:
-        ais_glob = str(AIS_DIR / "ais-2024-01-*.parquet")
-        logger.info("TEST MODE: processing January 2024 only")
+        first_year = AIS_YEARS[0]
+        ais_glob = str(AIS_RAW_DIR / f"ais-{first_year}-01-*.parquet")
+        logger.info("TEST MODE: processing January %d only", first_year)
     else:
-        ais_glob = str(AIS_DIR / "*.parquet")
+        ais_glob = str(AIS_RAW_DIR / "*.parquet")
+
+    # Pre-format vessel type codes for SQL IN clauses
+    fishing = _sql_in(VESSEL_TYPE_CODES["fishing"])
+    tug = _sql_in(VESSEL_TYPE_CODES["tug"])
+    passenger = _sql_in(VESSEL_TYPE_CODES["passenger"])
+    cargo = _sql_in(VESSEL_TYPE_CODES["cargo"])
+    tanker = _sql_in(VESSEL_TYPE_CODES["tanker"])
+    pleasure = _sql_in(VESSEL_TYPE_CODES["pleasure"])
+    military = _sql_in(VESSEL_TYPE_CODES["military"])
+    restricted = _sql_in(NAV_STATUS_RESTRICTED)
 
     return f"""
     -- ================================================================
@@ -176,7 +189,8 @@ def build_aggregation_query(*, test_mode: bool = False) -> str:
 
         select
             *,
-            (local_hour < 6 or local_hour >= 20) as is_night
+            (local_hour < {NIGHT_END_HOUR}
+                or local_hour >= {NIGHT_START_HOUR}) as is_night
         from with_h3
 
     ),
@@ -209,20 +223,22 @@ def build_aggregation_query(*, test_mode: bool = False) -> str:
             max(sog)                          as vessel_max_speed,
 
             -- Pings above NOAA lethal threshold (overall + day/night)
-            count(*) filter (where sog > 10)  as vessel_high_speed_pings,
             count(*) filter (
-                where sog > 10 and not is_night
+                where sog > {HIGH_SPEED_KNOTS}
+            )                                 as vessel_high_speed_pings,
+            count(*) filter (
+                where sog > {HIGH_SPEED_KNOTS} and not is_night
             )                                 as vessel_day_high_speed_pings,
             count(*) filter (
-                where sog > 10 and is_night
+                where sog > {HIGH_SPEED_KNOTS} and is_night
             )                                 as vessel_night_high_speed_pings,
 
             -- Nav status counts for this vessel
             count(*) filter (
-                where status = 0
+                where status = {NAV_STATUS_UNDERWAY}
             )                                 as vessel_underway_pings,
             count(*) filter (
-                where status in (2, 3)
+                where status in ({restricted})
             )                                 as vessel_restricted_pings,
             count(status)                     as vessel_status_reports,
 
@@ -302,7 +318,7 @@ def build_aggregation_query(*, test_mode: bool = False) -> str:
             (order by vessel_length)          as p95_length_m,
         count(vessel_length)                  as length_report_count,
         count(*) filter (
-            where vessel_length > 100
+            where vessel_length > {LARGE_VESSEL_LENGTH_M}
         )                                     as large_vessel_count,
 
         -- ── Vessel size: width ──────────────────────────
@@ -317,7 +333,7 @@ def build_aggregation_query(*, test_mode: bool = False) -> str:
             (order by vessel_width)           as p95_width_m,
         count(vessel_width)                   as width_report_count,
         count(*) filter (
-            where vessel_width > 20
+            where vessel_width > {WIDE_VESSEL_WIDTH_M}
         )                                     as wide_vessel_count,
 
         -- ── Vessel size: draft ──────────────────────────
@@ -332,7 +348,7 @@ def build_aggregation_query(*, test_mode: bool = False) -> str:
             (order by vessel_draft)           as p95_draft_m,
         count(vessel_draft)                   as draft_report_count,
         count(*) filter (
-            where vessel_draft > 8
+            where vessel_draft > {DEEP_DRAFT_M}
         )                                     as deep_draft_count,
 
         -- ── Course diversity (circular statistics) ──────
@@ -420,54 +436,48 @@ def build_aggregation_query(*, test_mode: bool = False) -> str:
 
         -- ── Vessel type: vessel-weighted (debiased) ─────
         count(*) filter (
-            where vessel_type in (30, 1001, 1002)
+            where vessel_type in ({fishing})
         )                                     as fishing_vessels,
         count(*) filter (
-            where vessel_type in (31, 32, 52, 1023, 1025)
+            where vessel_type in ({tug})
         )                                     as tug_vessels,
         count(*) filter (
-            where vessel_type between 60 and 69
-               or vessel_type between 1012 and 1015
+            where vessel_type in ({passenger})
         )                                     as passenger_vessels,
         count(*) filter (
-            where vessel_type between 70 and 79
-               or vessel_type in (1003, 1004, 1016)
+            where vessel_type in ({cargo})
         )                                     as cargo_vessels,
         count(*) filter (
-            where vessel_type between 80 and 89
-               or vessel_type in (1017, 1024)
+            where vessel_type in ({tanker})
         )                                     as tanker_vessels,
         count(*) filter (
-            where vessel_type in (36, 37, 1019)
+            where vessel_type in ({pleasure})
         )                                     as pleasure_vessels,
         count(*) filter (
-            where vessel_type in (35, 1021)
+            where vessel_type in ({military})
         )                                     as military_vessels,
 
         -- ── Vessel type: ping-weighted (exposure time) ──
         sum(vessel_ping_count) filter (
-            where vessel_type in (30, 1001, 1002)
+            where vessel_type in ({fishing})
         )                                     as fishing_pings,
         sum(vessel_ping_count) filter (
-            where vessel_type in (31, 32, 52, 1023, 1025)
+            where vessel_type in ({tug})
         )                                     as tug_pings,
         sum(vessel_ping_count) filter (
-            where vessel_type between 60 and 69
-               or vessel_type between 1012 and 1015
+            where vessel_type in ({passenger})
         )                                     as passenger_pings,
         sum(vessel_ping_count) filter (
-            where vessel_type between 70 and 79
-               or vessel_type in (1003, 1004, 1016)
+            where vessel_type in ({cargo})
         )                                     as cargo_pings,
         sum(vessel_ping_count) filter (
-            where vessel_type between 80 and 89
-               or vessel_type in (1017, 1024)
+            where vessel_type in ({tanker})
         )                                     as tanker_pings,
         sum(vessel_ping_count) filter (
-            where vessel_type in (36, 37, 1019)
+            where vessel_type in ({pleasure})
         )                                     as pleasure_pings,
         sum(vessel_ping_count) filter (
-            where vessel_type in (35, 1021)
+            where vessel_type in ({military})
         )                                     as military_pings
 
     from vessel_summaries
@@ -500,7 +510,7 @@ def run_aggregation(
     query = build_aggregation_query(test_mode=test_mode)
 
     logger.info("Starting AIS H3 aggregation...")
-    logger.info("  Input:  %s/*.parquet", AIS_DIR)
+    logger.info("  Input:  %s/*.parquet", AIS_RAW_DIR)
     logger.info("  Output: %s", output_file)
     logger.info("  H3 resolution: %d (~1.2km cells)", H3_RESOLUTION)
 
@@ -549,15 +559,6 @@ def load_to_postgis(parquet_path: Path = OUTPUT_FILE) -> None:
     Args:
         parquet_path: Path to the aggregated parquet file.
     """
-
-    DB_CONFIG = {
-        "host": "localhost",
-        "port": 5433,
-        "dbname": "marine_risk",
-        "user": "marine",
-        "password": "marine_dev",
-    }
-
     if not parquet_path.exists():
         logger.error("Aggregated parquet not found: %s", parquet_path)
         logger.error("Run aggregation first.")
@@ -677,15 +678,8 @@ def load_to_postgis(parquet_path: Path = OUTPUT_FILE) -> None:
 
         # Convert to list of tuples, handling NaN → None
         # and numpy types → native Python (psycopg2 can't adapt numpy)
-        def _to_python(v):
-            if pd.isna(v):
-                return None
-            if hasattr(v, "item"):  # numpy scalar → Python native
-                return v.item()
-            return v
-
         records = [
-            tuple(_to_python(v) for v in row)
+            tuple(to_python(v) for v in row)
             for row in df.itertuples(index=False, name=None)
         ]
 
@@ -750,7 +744,7 @@ def main() -> None:
     parser.add_argument(
         "--test",
         action="store_true",
-        help="Test mode: process January 2024 only (~8.5M pings)",
+        help="Test mode: process January of first configured year only",
     )
     parser.add_argument(
         "--threads",

@@ -1,20 +1,19 @@
 """Download AIS broadcast point data from MarineCadastre.gov.
 
-Downloads daily GeoParquet files for 2024 from the NOAA Marine Cadastre
+Downloads daily GeoParquet files for each year in AIS_YEARS
+(configured in pipeline/config.py) from the NOAA Marine Cadastre
 Azure storage. Supports resuming interrupted downloads.
 """
 
 import logging
 import time
 from datetime import date, timedelta
-from pathlib import Path
 
 import httpx
 
-BASE_URL = "https://marinecadastre.gov/downloads/ais2024"
-OUTPUT_DIR = Path("data/raw/ais")
-START_DATE = date(2024, 1, 1)
-END_DATE = date(2024, 12, 31)
+from pipeline.config import AIS_RAW_DIR, AIS_YEARS
+
+BASE_URL_TEMPLATE = "https://marinecadastre.gov/downloads/ais{year}"
 CHUNK_SIZE = 65536  # 64KB chunks for download
 DELAY_BETWEEN_DOWNLOADS = 1.0  # seconds, be polite to NOAA servers
 
@@ -35,18 +34,19 @@ def generate_dates(start: date, end: date) -> list[date]:
     return dates
 
 
-def download_file(file_date: date, output_dir: Path) -> bool:
+def download_file(file_date: date, output_dir, base_url: str) -> bool:
     """Download a single day's AIS GeoParquet file.
 
     Args:
         file_date: The date to download data for.
         output_dir: Directory to save the file.
+        base_url: Year-specific MarineCadastre base URL.
 
     Returns:
         True if downloaded successfully, False if skipped or failed.
     """
     filename = f"ais-{file_date.isoformat()}.parquet"
-    url = f"{BASE_URL}/{filename}"
+    url = f"{base_url}/{filename}"
     output_path = output_dir / filename
 
     # Skip if already downloaded
@@ -80,39 +80,41 @@ def download_file(file_date: date, output_dir: Path) -> bool:
 
 
 def download_all_ais_data() -> None:
-    """Download all AIS GeoParquet files for 2024."""
-    # Create output directory
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    """Download AIS GeoParquet files for all configured years."""
+    AIS_RAW_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Generate list of dates to download
-    dates = generate_dates(START_DATE, END_DATE)
-    logger.info("Starting AIS download: %d files", len(dates))
+    for year in AIS_YEARS:
+        base_url = BASE_URL_TEMPLATE.format(year=year)
+        start = date(year, 1, 1)
+        end = date(year, 12, 31)
+        dates = generate_dates(start, end)
+        logger.info("Starting AIS download for %d: %d files", year, len(dates))
 
-    downloaded = 0
-    skipped = 0
-    failed = 0
+        downloaded = 0
+        skipped = 0
+        failed = 0
 
-    for i, file_date in enumerate(dates, start=1):
-        logger.info("Progress: %d/%d", i, len(dates))
-        result = download_file(file_date, OUTPUT_DIR)
+        for i, file_date in enumerate(dates, start=1):
+            logger.info("Progress: %d/%d (%d)", i, len(dates), year)
+            result = download_file(file_date, AIS_RAW_DIR, base_url)
 
-        if result:
-            downloaded += 1
-            time.sleep(DELAY_BETWEEN_DOWNLOADS)
-        else:
-            # Check if it was skipped (exists) or failed (doesn't exist)
-            filename = f"ais-{file_date.isoformat()}.parquet"
-            if (OUTPUT_DIR / filename).exists():
-                skipped += 1
+            if result:
+                downloaded += 1
+                time.sleep(DELAY_BETWEEN_DOWNLOADS)
             else:
-                failed += 1
+                filename = f"ais-{file_date.isoformat()}.parquet"
+                if (AIS_RAW_DIR / filename).exists():
+                    skipped += 1
+                else:
+                    failed += 1
 
-    logger.info(
-        "Download complete: %d downloaded, %d skipped, %d failed",
-        downloaded,
-        skipped,
-        failed,
-    )
+        logger.info(
+            "%d complete: %d downloaded, %d skipped, %d failed",
+            year,
+            downloaded,
+            skipped,
+            failed,
+        )
 
 
 if __name__ == "__main__":

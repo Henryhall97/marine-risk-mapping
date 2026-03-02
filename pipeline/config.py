@@ -1,0 +1,148 @@
+"""Centralised configuration for the marine risk mapping pipeline.
+
+Single source of truth for database credentials, H3 resolution,
+geographic bounding box, and file paths used across ingestion,
+aggregation, and database scripts.
+"""
+
+from pathlib import Path
+
+# ── Project root (two levels up from this file) ────────────
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# ── Database connection (matches docker-compose.yml) ────────
+DB_CONFIG: dict[str, str | int] = {
+    "host": "localhost",
+    "port": 5433,
+    "dbname": "marine_risk",
+    "user": "marine",
+    "password": "marine_dev",
+}
+
+# ── H3 spatial indexing ─────────────────────────────────────
+H3_RESOLUTION = 7  # ~1.22 km edge length
+
+# ── AIS data range ──────────────────────────────────────────
+# Years of AIS data to download and process. Each year produces
+# 365 daily GeoParquet files from MarineCadastre.gov.
+AIS_YEARS: list[int] = [2024]
+
+# ── AIS vessel type codes (ITU-R M.1371 + MarineCadastre 1001+) ─
+VESSEL_TYPE_CODES: dict[str, list[int]] = {
+    "fishing": [30, 1001, 1002],
+    "tug": [31, 32, 52, 1023, 1025],
+    "passenger": [*range(60, 70), 1012, 1013, 1014, 1015],
+    "cargo": [*range(70, 80), 1003, 1004, 1016],
+    "tanker": [*range(80, 90), 1017, 1024],
+    "pleasure": [36, 37, 1019],
+    "military": [35, 1021],
+}
+
+# ── AIS navigational status codes ───────────────────────────
+NAV_STATUS_UNDERWAY: int = 0  # Under way using engine
+NAV_STATUS_RESTRICTED: tuple[int, ...] = (2, 3)  # Not under command / restricted
+
+# ── Speed & size thresholds ──────────────────────────────────
+HIGH_SPEED_KNOTS = 10  # NOAA lethal strike threshold
+LARGE_VESSEL_LENGTH_M = 100  # Ocean-going commercial
+WIDE_VESSEL_WIDTH_M = 20  # Wide-beam commercial
+DEEP_DRAFT_M = 8  # Deep-draft vessel
+
+# ── Day/night boundaries (local solar hour) ──────────────────
+NIGHT_START_HOUR = 20  # 8 PM local
+NIGHT_END_HOUR = 6  # 6 AM local
+
+# ── Proximity decay half-lives (km) ─────────────────────────
+PROXIMITY_HALF_LIFE_WHALE_KM = 10.0
+PROXIMITY_HALF_LIFE_STRIKE_KM = 25.0
+PROXIMITY_HALF_LIFE_PROTECTION_KM = 50.0
+PROXIMITY_DISTANCE_CAP_KM = 700.0
+PROXIMITY_PROTECTION_CAP_KM = 1000.0
+
+# Derived decay rates: λ = ln(2) / half-life
+_LN2 = 0.693147180559945
+PROXIMITY_LAMBDA_WHALE = _LN2 / PROXIMITY_HALF_LIFE_WHALE_KM  # ≈ 0.0693
+PROXIMITY_LAMBDA_STRIKE = _LN2 / PROXIMITY_HALF_LIFE_STRIKE_KM  # ≈ 0.0277
+PROXIMITY_LAMBDA_PROTECTION = _LN2 / PROXIMITY_HALF_LIFE_PROTECTION_KM  # ≈ 0.01386
+
+# ── Bathymetry classification (metres, negative = below sea level)
+SHELF_DEPTH_M = -200  # Continental shelf break
+SLOPE_DEPTH_M = -1000  # Slope–abyssal boundary
+
+# ── Cetacean analysis ────────────────────────────────────────
+CETACEAN_RECENT_YEAR = 2019  # "Recent" sighting cutoff year
+BALEEN_FAMILIES: tuple[str, ...] = (
+    "Balaenopteridae",  # Rorquals: blue, fin, humpback, minke
+    "Balaenidae",  # Right whales
+    "Eschrichtiidae",  # Gray whale
+)
+
+# ── US coastal bounding box ─────────────────────────────────
+# All pipeline scripts filter to this region.
+# Note: ocean covariates intentionally use a wider box
+# (US_BBOX_WIDE) because Copernicus grid cells near the
+# boundary need extra margin for interpolation.
+US_BBOX = {
+    "lat_min": 24.0,
+    "lat_max": 49.0,
+    "lon_min": -130.0,
+    "lon_max": -65.0,
+}
+
+US_BBOX_WIDE = {
+    "lat_min": 24.0,
+    "lat_max": 50.0,
+    "lon_min": -130.0,
+    "lon_max": -60.0,
+}
+
+# ── Data directories ────────────────────────────────────────
+DATA_DIR = PROJECT_ROOT / "data"
+RAW_DIR = DATA_DIR / "raw"
+PROCESSED_DIR = DATA_DIR / "processed"
+
+# ── Raw data file paths ────────────────────────────────────
+AIS_RAW_DIR = RAW_DIR / "ais"
+CETACEAN_FILE = RAW_DIR / "cetacean" / "us_cetacean_sightings.parquet"
+OBIS_PARQUET_GLOB = "data/raw/occurrence/*.parquet"  # MANUAL
+
+MPA_FILE = RAW_DIR / "mpa" / "mpa_inventory.parquet"
+SPEED_ZONES_FILE = (
+    RAW_DIR
+    / "mpa"
+    / "Proposed-Right-Whale-Seasonal-Speed-Zones"
+    / "Proposed_Right_Whale_Seasonal_Speed_Zones.shp"
+)
+SMA_DIR = RAW_DIR / "mpa" / "seasonal_management_areas"
+SMA_FILE = SMA_DIR / "seasonal_management_areas.geojson"
+
+SHIP_STRIKES_PDF = RAW_DIR / "cetacean" / "noaa_23127_DS1.pdf"  # MANUAL
+SHIP_STRIKES_FILE = PROCESSED_DIR / "ship_strikes" / "ship_strikes.csv"
+
+NISI_DIR = RAW_DIR / "nisi_2024"
+NISI_RISK_FILE = NISI_DIR / "global_whale_ship_risk.csv"
+NISI_SHIPPING_FILE = NISI_DIR / "shipping_density.csv"
+NISI_ISDM_FILES = {
+    "blue_whale": NISI_DIR / "blue_whale_isdm_data.csv",
+    "fin_whale": NISI_DIR / "fin_whale_isdm_data.csv",
+    "humpback_whale": NISI_DIR / "humpback_whale_isdm_data.csv",
+    "sperm_whale": NISI_DIR / "sperm_whale_isdm_data.csv",
+}
+
+OCEAN_DIR = RAW_DIR / "ocean"
+OCEAN_COVARIATES_FILE = OCEAN_DIR / "ocean_covariates.parquet"
+
+# MANUAL: see docs/manual_data_acquisition.md
+BATHYMETRY_RASTER = RAW_DIR / "bathymetry" / "gebco_2025_n49.0_s24.0_w-130.0_e-65.0.tif"
+
+# ── Processed data file paths ──────────────────────────────
+AIS_H3_DIR = PROCESSED_DIR / "ais"
+AIS_H3_PARQUET = AIS_H3_DIR / "ais_h3_res7.parquet"
+AIS_H3_TEST_PARQUET = AIS_H3_DIR / "ais_h3_res7_test.parquet"
+
+# ── DuckDB ──────────────────────────────────────────────────
+DUCKDB_PATH = DATA_DIR / "marine_risk.duckdb"
+
+# ── dbt ─────────────────────────────────────────────────────
+DBT_PROJECT_DIR = PROJECT_ROOT / "transform"
+DBT_PROFILES_DIR = PROJECT_ROOT / "transform"

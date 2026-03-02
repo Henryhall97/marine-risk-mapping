@@ -40,7 +40,7 @@ cell_sightings as (
 
         -- Recency: sightings in last 5 years
         count(*) filter (
-            where observation_year >= 2019
+            where observation_year >= {{ var('cetacean_recent_year') }}
         )                                     as recent_sightings,
 
         -- Baleen whales (highest collision risk)

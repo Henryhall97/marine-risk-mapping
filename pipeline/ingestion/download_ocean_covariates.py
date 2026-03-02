@@ -36,11 +36,15 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
-OUTPUT_DIR = Path("data/raw/ocean")
+from pipeline.config import OCEAN_DIR, US_BBOX_WIDE
 
-# Bounding box: All US coastal waters (East Coast, Gulf, West Coast)
-LAT_MIN, LAT_MAX = 24.0, 50.0
-LON_MIN, LON_MAX = -130.0, -60.0
+OUTPUT_DIR = OCEAN_DIR
+
+# Bounding box: wider than standard US_BBOX for interpolation margin
+LAT_MIN = US_BBOX_WIDE["lat_min"]
+LAT_MAX = US_BBOX_WIDE["lat_max"]
+LON_MIN = US_BBOX_WIDE["lon_min"]
+LON_MAX = US_BBOX_WIDE["lon_max"]
 
 # Time range: 6 years for climatological means
 TIME_START = "2019-01-01"

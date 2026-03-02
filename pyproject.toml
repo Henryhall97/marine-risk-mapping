@@ -6,6 +6,9 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "boto3>=1.42.52",
+    "dagster>=1.9.0",
+    "dagster-webserver>=1.9.0",
+    "dagster-dbt>=0.25.0",
     "dbt-postgres>=1.10.0",
     "duckdb>=1.4.4",
     "fpdf2>=2.8.6",
@@ -18,6 +21,17 @@ dependencies = [
     "pyarrow>=23.0.1",
     "rasterio>=1.5.0",
     "scipy>=1.17.1",
+    "pypdf2>=3.0.1",
+    "xarray>=2026.2.0",
+    "netcdf4>=1.7.4",
+    "copernicusmarine>=2.2.3",
+    "graphviz>=0.21",
+    "xgboost>=3.2.0",
+    "lightgbm>=4.6.0",
+    "scikit-learn>=1.8.0",
+    "mlflow>=3.10.0",
+    "shap>=0.49.1",
+    "optuna>=4.7.0",
 ]
 
 [dependency-groups]

@@ -61,7 +61,7 @@ nearest_nisi as (
 
     from grid g
     inner join nisi n
-        on ST_DWithin(g.geom, n.geom, 1.0)  -- 1 degree threshold
+        on ST_DWithin(g.geom, n.geom, {{ var('nisi_match_degrees') }})  -- degree threshold
     order by g.h3_cell, ST_Distance(g.geom, n.geom)
 
 )

@@ -30,13 +30,7 @@ import psycopg2
 from psycopg2.extras import execute_values
 from scipy.spatial import cKDTree
 
-DB_CONFIG = {
-    "host": "localhost",
-    "port": 5433,
-    "dbname": "marine_risk",
-    "user": "marine",
-    "password": "marine_dev",
-}
+from pipeline.config import DB_CONFIG
 
 # Approximate conversion for lat/lon → km at mid-US latitudes (~37°N)
 # 1° latitude ≈ 111 km everywhere

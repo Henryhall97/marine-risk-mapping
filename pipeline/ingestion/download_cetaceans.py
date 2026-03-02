@@ -20,14 +20,18 @@ from pathlib import Path
 
 import duckdb
 
-# ── Input / Output paths ─────────────────────────────────
-RAW_PARQUET_GLOB = "data/raw/occurrence/*.parquet"
-OUTPUT_DIR = Path("data/raw/cetacean")
-OUTPUT_FILE = OUTPUT_DIR / "us_cetacean_sightings.parquet"
+from pipeline.config import CETACEAN_FILE, OBIS_PARQUET_GLOB, US_BBOX
 
-# ── Bounding box for US Coast ────────────────────────────
-LAT_MIN, LAT_MAX = 24.0, 49.0
-LON_MIN, LON_MAX = -130.0, -65.0
+# ── Derived paths ────────────────────────────────────────────
+OUTPUT_DIR = CETACEAN_FILE.parent
+OUTPUT_FILE = CETACEAN_FILE
+RAW_PARQUET_GLOB = OBIS_PARQUET_GLOB
+
+# ── Bounding box (from centralised config) ───────────────────
+LAT_MIN = US_BBOX["lat_min"]
+LAT_MAX = US_BBOX["lat_max"]
+LON_MIN = US_BBOX["lon_min"]
+LON_MAX = US_BBOX["lon_max"]
 
 # ── Taxonomic filter ─────────────────────────────────────
 # OBIS classifies whales/dolphins under Cetartiodactyla

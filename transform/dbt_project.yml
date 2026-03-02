@@ -30,6 +30,25 @@ models:
     marts:
       +materialized: table
 
+# Domain thresholds used across SQL models.
+# Keep in sync with pipeline/config.py for values shared
+# between Python and dbt (e.g. proximity decay, bathymetry).
+vars:
+  # Bathymetry classification (metres, negative = below sea level)
+  shelf_depth_m: -200
+  slope_depth_m: -1000
+  # Cetacean analysis
+  cetacean_recent_year: 2019
+  # Proximity decay (λ = ln(2) / half-life-km)
+  proximity_whale_lambda: 0.0693
+  proximity_strike_lambda: 0.0277
+  proximity_protection_lambda: 0.01386
+  proximity_distance_cap_km: 700
+  proximity_protection_cap_km: 1000
+  # Spatial join tolerances (degrees)
+  ocean_covariate_match_degrees: 0.3
+  nisi_match_degrees: 1.0
+
 seeds:
   marine_risk:
     species_crosswalk:

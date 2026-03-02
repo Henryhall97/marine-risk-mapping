@@ -24,30 +24,30 @@ select
     round(dist_to_nearest_strike_km::numeric, 2)      as dist_to_nearest_strike_km,
     round(dist_to_nearest_protection_km::numeric, 2)  as dist_to_nearest_protection_km,
 
-    -- Whale proximity (half-life = 10km: ln(2)/10 ≈ 0.0693)
+    -- Whale proximity (half-life = 10km: λ ≈ {{ var('proximity_whale_lambda') }})
     case
-        when dist_to_nearest_whale_km > 700 then 0.0
-        else exp(-0.0693 * dist_to_nearest_whale_km)
+        when dist_to_nearest_whale_km > {{ var('proximity_distance_cap_km') }} then 0.0
+        else exp(-{{ var('proximity_whale_lambda') }} * dist_to_nearest_whale_km)
     end as whale_proximity_score,
 
     -- Ship proximity (half-life = 10km)
     case
-        when dist_to_nearest_ship_km > 700 then 0.0
-        else exp(-0.0693 * dist_to_nearest_ship_km)
+        when dist_to_nearest_ship_km > {{ var('proximity_distance_cap_km') }} then 0.0
+        else exp(-{{ var('proximity_whale_lambda') }} * dist_to_nearest_ship_km)
     end as ship_proximity_score,
 
-    -- Strike proximity (half-life = 25km: ln(2)/25 ≈ 0.0277)
+    -- Strike proximity (half-life = 25km: λ ≈ {{ var('proximity_strike_lambda') }})
     -- Broader half-life because 67 cells is sparse coverage
     case
-        when dist_to_nearest_strike_km > 700 then 0.0
-        else exp(-0.0277 * dist_to_nearest_strike_km)
+        when dist_to_nearest_strike_km > {{ var('proximity_distance_cap_km') }} then 0.0
+        else exp(-{{ var('proximity_strike_lambda') }} * dist_to_nearest_strike_km)
     end as strike_proximity_score,
 
-    -- Protection proximity (half-life = 50km: ln(2)/50 ≈ 0.01386)
+    -- Protection proximity (half-life = 50km: λ ≈ {{ var('proximity_protection_lambda') }})
     -- Broad radius — zones have wide spatial influence
     case
-        when dist_to_nearest_protection_km > 1000 then 0.0
-        else exp(-0.01386 * dist_to_nearest_protection_km)
+        when dist_to_nearest_protection_km > {{ var('proximity_protection_cap_km') }} then 0.0
+        else exp(-{{ var('proximity_protection_lambda') }} * dist_to_nearest_protection_km)
     end as protection_proximity_score
 
 from {{ source('marine_risk', 'cell_proximity') }}

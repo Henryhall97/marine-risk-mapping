@@ -13,18 +13,24 @@ from pathlib import Path
 import geopandas as gpd
 import httpx
 
+from pipeline.config import MPA_FILE, US_BBOX
+
 # NOAA MPA Inventory 2023 — downloadable GIS data (zipped shapefile)
 MPA_URL = (
     "https://marineprotectedareas.noaa.gov/media/data/"
     "NOAA_Marine_Protected_Areas_Inventory_2023.zip"
 )
-OUTPUT_DIR = Path("data/raw/mpa")
-OUTPUT_FILE = OUTPUT_DIR / "mpa_inventory.parquet"
+OUTPUT_DIR = MPA_FILE.parent
+OUTPUT_FILE = MPA_FILE
 CHUNK_SIZE = 65536  # 64KB chunks for download
 
-# Bounding box for US Coast (approximate)
-# lon_min, lat_min, lon_max, lat_max
-US_COAST_BBOX = (-130.0, 24.0, -65.0, 49.0)
+# Bounding box tuple: (lon_min, lat_min, lon_max, lat_max)
+US_COAST_BBOX = (
+    US_BBOX["lon_min"],
+    US_BBOX["lat_min"],
+    US_BBOX["lon_max"],
+    US_BBOX["lat_max"],
+)
 
 logging.basicConfig(
     level=logging.INFO,

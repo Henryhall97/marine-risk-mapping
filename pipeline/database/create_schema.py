@@ -12,14 +12,7 @@ import logging
 
 import psycopg2
 
-# Database connection settings (match docker-compose.yml)
-DB_CONFIG = {
-    "host": "localhost",
-    "port": 5433,
-    "dbname": "marine_risk",
-    "user": "marine",
-    "password": "marine_dev",
-}
+from pipeline.config import DB_CONFIG
 
 logging.basicConfig(
     level=logging.INFO,

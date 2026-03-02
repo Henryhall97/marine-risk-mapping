@@ -27,18 +27,18 @@ select
 
     -- Continental shelf: primary whale feeding habitat
     -- GEBCO uses negative values for below sea level
-    -- Must exclude land (depth_m >= 0) which also passes >= -200
-    (depth_m >= -200 and depth_m < 0) as is_continental_shelf,
+    -- Must exclude land (depth_m >= 0) which also passes >= {{ var('shelf_depth_m') }}
+    (depth_m >= {{ var('shelf_depth_m') }} and depth_m < 0) as is_continental_shelf,
 
-    -- Shelf edge: depth range crosses the -200m contour
+    -- Shelf edge: depth range crosses the {{ var('shelf_depth_m') }}m contour
     -- These are upwelling zones where whales concentrate
-    (min_depth_m < -200 and max_depth_m >= -200) as is_shelf_edge,
+    (min_depth_m < {{ var('shelf_depth_m') }} and max_depth_m >= {{ var('shelf_depth_m') }}) as is_shelf_edge,
 
     -- Depth zone classification
     case
         when depth_m >= 0     then 'land'
-        when depth_m >= -200  then 'shelf'
-        when depth_m >= -1000 then 'slope'
+        when depth_m >= {{ var('shelf_depth_m') }}  then 'shelf'
+        when depth_m >= {{ var('slope_depth_m') }} then 'slope'
         else 'abyssal'
     end as depth_zone
 

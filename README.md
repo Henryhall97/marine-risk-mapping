@@ -74,7 +74,8 @@ Next.js (React) frontend with Deck.gl for map rendering. Users see an interactiv
 | **Data Quality** | Pandera | Schema validation and data contracts |
 | **Orchestration** | Dagster | Pipeline scheduling, monitoring, and dependency management |
 | **Analysis** | Pandas, GeoPandas | Tabular and spatial data manipulation |
-| **Risk Model** | GeoPandas, scikit-learn | Spatial feature engineering and risk scoring |
+| **Risk Model** | XGBoost, scikit-learn | Binary classification for collision risk prediction |
+| **ML Experiment Tracking** | MLflow | Experiment logging, model registry, artifact storage |
 | **Backend API** | FastAPI, Pydantic | REST API with automatic validation and documentation |
 | **Frontend** | Next.js (React), TypeScript | Modern web application framework |
 | **Mapping** | Deck.gl (react-map-gl) | High-performance geospatial map rendering |
@@ -94,8 +95,25 @@ Next.js (React) frontend with Deck.gl for map rendering. Users see an interactiv
 | Whale Sightings | OBIS (obis.org) | API/CSV | Marine species observation records |
 | Ocean Bathymetry | GEBCO / ETOPO | NetCDF/GeoTIFF | Ocean depth and seafloor topography |
 | Marine Protected Areas | NOAA MPA Inventory | Shapefile | Protection zone boundaries and regulations |
+| Marine Animal Incidents | NOAA GARFO (InPort 46789) | PDF → CSV | 261 ship strike/entanglement records parsed and geocoded (67 with coords) |
+| Right Whale Speed Zones | NOAA Fisheries | Shapefile | Proposed seasonal vessel speed restriction polygons |
+| Nisi et al. 2024 Risk Grid | [GitHub: annanisi/Global_Whale_Ship](https://github.com/annanisi/Global_Whale_Ship) | CSV | 1° global grid — whale risk (V×D), hotspots, management gaps for 4 species |
+| Nisi et al. 2024 Shipping Density | [GitHub: annanisi/Global_Whale_Ship](https://github.com/annanisi/Global_Whale_Ship) | CSV | 1° global shipping density index (64,800 cells) |
+| Nisi et al. 2024 ISDM Training | [GitHub: annanisi/Global_Whale_Ship](https://github.com/annanisi/Global_Whale_Ship) | CSV | 548K presence/absence records for 4 whale species + 7 environmental covariates |
 
-## 🚀 Getting Started
+## � Manual Data Prerequisites
+
+Most data is downloaded automatically by the ingestion scripts, but **three datasets must be acquired manually** before running the pipeline:
+
+| Dataset | Source | Expected Path | Why Manual |
+|---------|--------|---------------|------------|
+| GEBCO Bathymetry | [gebco.net](https://www.gebco.net/data_and_products/gridded_bathymetry_data/) | `data/raw/bathymetry/gebco_2025_n49.0_s24.0_w-130.0_e-65.0.tif` | Requires licence acceptance; large extract emailed |
+| Ship Strike PDF | [NOAA InPort 23127](https://www.fisheries.noaa.gov/inport/item/23127) | `data/raw/cetacean/noaa_23127_DS1.pdf` | No stable direct-download URL |
+| OBIS Occurrences | `s3://obis-open-data/occurrence/` | `data/raw/occurrence/*.parquet` (~6,800 files) | 180 GB bulk export via AWS CLI |
+
+See [docs/manual_data_acquisition.md](docs/manual_data_acquisition.md) for step-by-step instructions.
+
+## �🚀 Getting Started
 
 ### Prerequisites
 
@@ -176,13 +194,17 @@ marine_risk_mapping/
 | 2.5 | Write MPA download script | ✅ |
 | 2.6 | Store raw data as Parquet | ✅ |
 | 2.7 | Upload to S3 | ✅ |
+| 2.8 | Download Marine Animal Incident Database (ship strikes + entanglements) | ✅ |
+| 2.9 | Download Nisi et al. 2024 data (risk grid, shipping density, ISDM training) | ✅ |
+| 2.10 | Download Proposed Right Whale Speed Zone polygons | ✅ |
+| 2.11 | Load ship strikes + Nisi data + speed zones into PostGIS (5 new tables) | ✅ |
 
 ### Phase 3: Database Setup
 
 | Step | Task | Status |
 |------|------|--------|
 | 3.1 | Set up PostGIS locally with Docker | ✅ |
-| 3.2 | Design schema for spatial data | ✅ |
+| 3.2 | Design schema for spatial data (8 tables + spatial indexes) | ✅ |
 | 3.3 | Load raw data into PostGIS | ✅ |
 | 3.4 | Set up DuckDB for analytical queries | ✅ |
 
@@ -202,24 +224,34 @@ marine_risk_mapping/
 | 5.2 | Build staging models (12/12 tests passing) | ✅ |
 | 5.3a | AIS H3 aggregation pipeline (two-pass) | ✅ |
 | 5.3b | Build intermediate spatial join models | ✅ |
-| 5.4 | Build mart models (risk scores) | ⬜ |
-| 5.5 | Add dbt tests | ⬜ |
+| 5.4 | Build mart models (risk scores) | ✅ |
+| 5.5 | Add dbt tests | ✅ |
+| 5.6 | Staging + intermediate models for incident data (ship strikes) | ✅ |
+| 5.7 | Staging + intermediate models for Nisi risk & shipping density | ✅ |
+| 5.8 | Staging + intermediate models for right whale speed zones | ✅ |
+| 5.9 | Update fct_collision_risk with speed zone sub-score | ✅ |
 
 ### Phase 6: Pipeline Orchestration
 
 | Step | Task | Status |
 |------|------|--------|
-| 6.1 | Define Dagster assets | ⬜ |
-| 6.2 | Create schedules and sensors | ⬜ |
-| 6.3 | Add monitoring and alerting | ⬜ |
+| 6.1 | Dagster project scaffold (constants, definitions) | ✅ |
+| 6.2 | Define Dagster assets for ingestion + dbt | ⬜ |
+| 6.3 | Create schedules and sensors | ⬜ |
+| 6.4 | Add monitoring and alerting | ⬜ |
 
-### Phase 7: Risk Model
+### Phase 7: Risk Model & MLOps
 
 | Step | Task | Status |
 |------|------|--------|
-| 7.1 | Exploratory spatial analysis in notebooks | ⬜ |
-| 7.2 | Build risk scoring model | ⬜ |
-| 7.3 | Validate and iterate | ⬜ |
+| 7.1 | EDA: join incident locations to H3 grid, analyse feature distributions | ⬜ |
+| 7.2 | Feature engineering: build training matrix from mart features + incident labels | ⬜ |
+| 7.3 | Train binary classifier (XGBoost/LightGBM) with class-imbalance handling | ⬜ |
+| 7.4 | Set up MLflow experiment tracking (params, metrics, artifacts) | ⬜ |
+| 7.5 | Hyperparameter tuning with cross-validation, log to MLflow | ⬜ |
+| 7.6 | Register best model in MLflow Model Registry (staging → production) | ⬜ |
+| 7.7 | Add model_training Dagster asset (orchestrated retraining) | ⬜ |
+| 7.8 | Compare learned feature importances vs hand-tuned weights | ⬜ |
 
 ### Phase 8: FastAPI Backend
 
@@ -230,6 +262,7 @@ marine_risk_mapping/
 | 8.3 | Build spatial query endpoints | ⬜ |
 | 8.4 | Add authentication and rate limiting | ⬜ |
 | 8.5 | Write API documentation | ⬜ |
+| 8.6 | Whale sighting submission endpoint (POST /api/sightings) | ⬜ |
 
 ### Phase 9: Frontend Dashboard
 
@@ -240,6 +273,7 @@ marine_risk_mapping/
 | 9.3 | Add risk layer visualisation | ⬜ |
 | 9.4 | Add filtering and controls | ⬜ |
 | 9.5 | Style and polish UI | ⬜ |
+| 9.6 | Crowdsourced whale sighting reporting (user submissions via map) | ⬜ |
 
 ### Phase 10: Testing
 

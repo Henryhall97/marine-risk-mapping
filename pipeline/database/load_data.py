@@ -13,49 +13,30 @@ pre-aggregated results will land in PostGIS later (via dbt).
 """
 
 import logging
-from pathlib import Path
 
 import geopandas as gpd
 import pandas as pd
 import psycopg2
 from psycopg2.extras import execute_values
 
+from pipeline.config import (
+    CETACEAN_FILE,
+    DB_CONFIG,
+    MPA_FILE,
+    NISI_ISDM_FILES,
+    NISI_RISK_FILE,
+    NISI_SHIPPING_FILE,
+    OCEAN_COVARIATES_FILE,
+    SHIP_STRIKES_FILE,
+    SMA_FILE,
+    SPEED_ZONES_FILE,
+)
+from pipeline.utils import bulk_insert, to_python
 from pipeline.validation.schemas import (
     cetacean_schema,
     mpa_schema,
     validate_dataframe,
 )
-
-# Database connection settings (match docker-compose.yml)
-DB_CONFIG = {
-    "host": "localhost",
-    "port": 5433,
-    "dbname": "marine_risk",
-    "user": "marine",
-    "password": "marine_dev",
-}
-
-# Data file paths
-CETACEAN_FILE = Path("data/raw/cetacean/us_cetacean_sightings.parquet")
-MPA_FILE = Path("data/raw/mpa/mpa_inventory.parquet")
-SHIP_STRIKES_FILE = Path("data/processed/ship_strikes/ship_strikes.csv")
-NISI_RISK_FILE = Path("data/raw/nisi_2024/global_whale_ship_risk.csv")
-NISI_SHIPPING_FILE = Path("data/raw/nisi_2024/shipping_density.csv")
-SPEED_ZONES_FILE = Path(
-    "data/raw/mpa/Proposed-Right-Whale-Seasonal-Speed-Zones"
-    "/Proposed_Right_Whale_Seasonal_Speed_Zones.shp"
-)
-OCEAN_COVARIATES_FILE = Path("data/raw/ocean/ocean_covariates.parquet")
-SMA_FILE = Path(
-    "data/raw/mpa/seasonal_management_areas/seasonal_management_areas.geojson"
-)
-NISI_ISDM_DIR = Path("data/raw/nisi_2024")
-NISI_ISDM_FILES = {
-    "blue_whale": NISI_ISDM_DIR / "blue_whale_isdm_data.csv",
-    "fin_whale": NISI_ISDM_DIR / "fin_whale_isdm_data.csv",
-    "humpback_whale": NISI_ISDM_DIR / "humpback_whale_isdm_data.csv",
-    "sperm_whale": NISI_ISDM_DIR / "sperm_whale_isdm_data.csv",
-}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -199,50 +180,6 @@ def load_cetacean_data(cur) -> None:
     logger.info("Loaded %d cetacean sightings", len(records))
 
 
-def _to_python(v):
-    """Convert pandas/numpy types to native Python for psycopg2."""
-    if pd.isna(v):
-        return None
-    if hasattr(v, "item"):
-        return v.item()
-    return v
-
-
-def _bulk_insert(cur, table: str, df: pd.DataFrame, batch_size: int = 10_000) -> int:
-    """Insert a DataFrame into a table using execute_values.
-
-    Returns:
-        Number of rows inserted.
-    """
-    cols = list(df.columns)
-    col_str = ", ".join(cols)
-    template = "(" + ", ".join(["%s"] * len(cols)) + ")"
-
-    records = [
-        tuple(_to_python(v) for v in row)
-        for row in df.itertuples(index=False, name=None)
-    ]
-
-    total = len(records)
-    for i in range(0, total, batch_size):
-        batch = records[i : i + batch_size]
-        execute_values(
-            cur,
-            f"INSERT INTO {table} ({col_str}) VALUES %s",
-            batch,
-            template=template,
-        )
-        if (i + batch_size) % 50_000 == 0 or i + batch_size >= total:
-            logger.info(
-                "  %s: inserted %s / %s rows",
-                table,
-                f"{min(i + batch_size, total):,}",
-                f"{total:,}",
-            )
-
-    return total
-
-
 def load_ship_strikes(cur) -> None:
     """Load ship strike incident records into PostGIS.
 
@@ -265,16 +202,16 @@ def load_ship_strikes(cur) -> None:
     for _, row in df.iterrows():
         records.append(
             {
-                "date": _to_python(row["date"]),
-                "species": _to_python(row["species"]),
-                "sex": _to_python(row["sex"]),
-                "length_m": _to_python(row["length_m"]),
-                "location": _to_python(row["location"]),
-                "lat": _to_python(row["latitude"]),
-                "lon": _to_python(row["longitude"]),
-                "region": _to_python(row["region"]),
-                "mortality_injury": _to_python(row["mortality_injury"]),
-                "raw_text": _to_python(row["raw_text"]),
+                "date": to_python(row["date"]),
+                "species": to_python(row["species"]),
+                "sex": to_python(row["sex"]),
+                "length_m": to_python(row["length_m"]),
+                "location": to_python(row["location"]),
+                "lat": to_python(row["latitude"]),
+                "lon": to_python(row["longitude"]),
+                "region": to_python(row["region"]),
+                "mortality_injury": to_python(row["mortality_injury"]),
+                "raw_text": to_python(row["raw_text"]),
             }
         )
 
@@ -330,7 +267,7 @@ def load_nisi_risk_grid(cur) -> None:
     for col in bool_cols:
         df[col] = df[col].astype(bool)
 
-    n = _bulk_insert(cur, "nisi_risk_grid", df)
+    n = bulk_insert(cur, "nisi_risk_grid", df)
 
     # Set geometry from x/y
     cur.execute("""
@@ -353,7 +290,7 @@ def load_nisi_shipping_density(cur) -> None:
     df = pd.read_csv(NISI_SHIPPING_FILE)
     logger.info("Read %s shipping density rows", f"{len(df):,}")
 
-    n = _bulk_insert(cur, "nisi_shipping_density", df)
+    n = bulk_insert(cur, "nisi_shipping_density", df)
 
     # Set geometry from x/y
     cur.execute("""
@@ -419,7 +356,7 @@ def load_nisi_isdm_training(cur) -> None:
     keep_cols = [c for c in keep_cols if c in combined.columns]
     combined = combined[keep_cols]
 
-    n = _bulk_insert(cur, "nisi_isdm_training", combined)
+    n = bulk_insert(cur, "nisi_isdm_training", combined)
     logger.info(
         "Loaded %s ISDM training rows (%d presences, %d absences)",
         f"{n:,}",
@@ -484,7 +421,7 @@ def load_ocean_covariates(cur) -> None:
     df = pd.read_parquet(OCEAN_COVARIATES_FILE)
     logger.info("Read %s ocean covariate records", f"{len(df):,}")
 
-    n = _bulk_insert(cur, "ocean_covariates", df)
+    n = bulk_insert(cur, "ocean_covariates", df)
 
     # Set geometry from lat/lon
     cur.execute("""
