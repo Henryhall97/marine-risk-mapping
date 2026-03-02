@@ -103,3 +103,128 @@ sources:
             description: "Haversine distance to nearest cetacean sighting cell (km)"
           - name: dist_to_nearest_ship_km
             description: "Haversine distance to nearest vessel traffic cell (km)"
+          - name: dist_to_nearest_strike_km
+            description: "Haversine distance to nearest historical ship strike cell (km)"
+          - name: dist_to_nearest_protection_km
+            description: "Haversine distance to nearest speed zone / SMA boundary (km)"
+
+      - name: ship_strikes
+        description: >
+          Whale–vessel strike incident records parsed from NOAA
+          Ship Strike Database PDFs. 261 records total, 67 geocoded.
+        columns:
+          - name: id
+            description: "Auto-generated primary key"
+          - name: incident_date
+            description: "Date of the strike (text, may be partial)"
+          - name: species
+            description: "Whale species involved"
+          - name: latitude
+            description: "Latitude WGS-84 (nullable — 194 records ungeocoded)"
+          - name: longitude
+            description: "Longitude WGS-84 (nullable)"
+          - name: region
+            description: "Geographic region (e.g. US East Coast)"
+          - name: mortality_injury
+            description: "Outcome — mortality, serious injury, etc."
+          - name: geom
+            description: "PostGIS POINT geometry (SRID 4326, nullable)"
+
+      - name: ship_strike_h3
+        description: >
+          Mapping of geocoded ship strikes to H3 resolution-7 cells.
+          Produced by pipeline/aggregation/assign_ship_strike_h3.py.
+          67 strikes with coordinates → 67 unique cells.
+        columns:
+          - name: strike_id
+            description: "Foreign key to ship_strikes.id"
+          - name: h3_cell
+            description: "H3 cell index (resolution 7, BIGINT)"
+          - name: cell_lat
+            description: "Centroid latitude of the H3 cell"
+          - name: cell_lon
+            description: "Centroid longitude of the H3 cell"
+
+      - name: right_whale_speed_zones
+        description: >
+          PROPOSED right whale seasonal speed zone polygons
+          (5 zones). These are NOT the current active SMAs.
+        columns:
+          - name: id
+            description: "Auto-generated primary key"
+          - name: zone_name
+            description: "Zone name"
+          - name: start_month
+            description: "Season start month (1-12)"
+          - name: start_day
+            description: "Season start day"
+          - name: end_month
+            description: "Season end month (1-12)"
+          - name: end_day
+            description: "Season end day"
+          - name: geom
+            description: "PostGIS POLYGON geometry (SRID 4326)"
+
+      - name: seasonal_management_areas
+        description: >
+          Current active NARW Seasonal Management Areas from
+          50 CFR § 224.105. 10 zones where vessels ≥65 ft must
+          travel ≤10 knots during specified seasons. Downloaded
+          from NOAA ArcGIS feature service.
+        columns:
+          - name: id
+            description: "Auto-generated primary key"
+          - name: zone_name
+            description: "SMA zone name (e.g. Block Island, Cape Cod Bay)"
+          - name: zone_abbr
+            description: "Short abbreviation (e.g. BI, CCB, GSC)"
+          - name: start_month
+            description: "Season start month (1-12)"
+          - name: start_day
+            description: "Season start day"
+          - name: end_month
+            description: "Season end month (1-12)"
+          - name: end_day
+            description: "Season end day"
+          - name: geom
+            description: "PostGIS POLYGON geometry (SRID 4326)"
+
+      - name: nisi_risk_grid
+        description: >
+          Nisi et al. (2024) global whale–ship collision risk grid.
+          47,040 rows of 1-degree cells with risk scores for 4 species,
+          management indicators, and hotspot classifications.
+        columns:
+          - name: x
+            description: "Longitude of grid cell centre"
+          - name: y
+            description: "Latitude of grid cell centre"
+          - name: all_risk
+            description: "Combined risk score across all 4 species"
+          - name: region
+            description: "Ocean region classification"
+          - name: geom
+            description: "PostGIS POINT geometry (SRID 4326)"
+
+      - name: ocean_covariates
+        description: >
+          Monthly ocean environmental covariates for US coastal
+          waters. SST, MLD, SLA, primary productivity.
+          Resolution: ~0.08° (SST) to 0.25° (PP).
+        columns:
+          - name: lat
+            description: "Latitude WGS-84"
+          - name: lon
+            description: "Longitude WGS-84"
+          - name: sst
+            description: "Sea surface temperature (°C)"
+          - name: sst_sd
+            description: "SST standard deviation (°C)"
+          - name: mld
+            description: "Mixed layer depth (m)"
+          - name: sla
+            description: "Sea level anomaly (m)"
+          - name: pp_upper_200m
+            description: "Primary productivity upper 200m (mg C/m²/day)"
+          - name: geom
+            description: "PostGIS POINT geometry (SRID 4326)"

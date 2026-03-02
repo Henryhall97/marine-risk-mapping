@@ -27,16 +27,28 @@ models:
           - not_null
 
       - name: species_label
-        description: "Species or higher-level taxon name (never null after backfill)"
+        description: "Species or higher-level taxon name (never null after backfill from scientific_name)"
         tests:
           - not_null
 
       - name: taxonomic_level
-        description: "Precision of identification: species, family, or higher"
+        description: >
+          Precision of identification: species (binomial), genus (single
+          name with known family), family (family-level only), or higher
+          (order/infraorder like Cetacea). ~11% of records are sub-species
+          precision. Use this to filter for species-level analysis.
         tests:
           - accepted_values:
               arguments:
-                values: ["species", "family", "higher"]
+                values: ["species", "genus", "family", "higher"]
+
+      - name: is_baleen
+        description: >
+          True if the sighting is a baleen whale (Mysticeti), derived from
+          taxonomic family (Balaenopteridae, Balaenidae, Eschrichtiidae).
+          Works even for genus-level records.
+        tests:
+          - not_null
 
   - name: stg_marine_protected_areas
     description: "Cleaned MPAs with valid geometries, filtered to marine areas"
@@ -60,5 +72,97 @@ models:
 
       - name: marine_percent
         description: "Percentage of area that is marine (always > 0 after filter)"
+        tests:
+          - not_null
+
+  # ── Ship Strikes ────────────────────────────────────────
+  - name: stg_ship_strikes
+    description: >
+      Cleaned ship strike records with species classification,
+      outcome severity, and geocoding status. 261 records from
+      NOAA/NMFS ship strike database.
+    columns:
+      - name: id
+        description: "Primary key"
+        tests:
+          - unique
+          - not_null
+
+      - name: species_group
+        description: "Classified species group (right_whale, humpback, fin_whale, etc.)"
+        tests:
+          - not_null
+
+      - name: outcome_severity
+        description: "Outcome classification: fatal, serious_injury, injury, or unknown"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["fatal", "serious_injury", "injury", "unknown"]
+
+  # ── Speed Zones ─────────────────────────────────────────
+  - name: stg_speed_zones
+    description: >
+      UNIONed proposed NARW speed zones (5) and current active
+      SMAs (10) into a single regulatory layer with source type,
+      season labels, and valid geometries.
+    columns:
+      - name: zone_name
+        description: "Name of the speed management zone"
+        tests:
+          - not_null
+
+      - name: source_type
+        description: "Whether zone is 'proposed' or 'current_sma'"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["proposed", "current_sma"]
+
+      - name: geom
+        description: "Polygon geometry (SRID 4326)"
+        tests:
+          - not_null
+
+  # ── Nisi Risk Grid ─────────────────────────────────────
+  - name: stg_nisi_risk_grid
+    description: >
+      Nisi et al. (2024) 1-degree risk grid filtered to US coastal
+      waters. Contains published collision risk scores as external
+      benchmark.
+    columns:
+      - name: lat
+        description: "Grid cell latitude"
+        tests:
+          - not_null
+
+      - name: lon
+        description: "Grid cell longitude"
+        tests:
+          - not_null
+
+      - name: all_risk
+        description: "Overall collision risk score from Nisi et al."
+
+  # ── Ocean Covariates ───────────────────────────────────
+  - name: stg_ocean_covariates
+    description: >
+      Cleaned ocean environmental covariates (SST, SST SD, MLD,
+      SLA, primary production). Land cells filtered out.
+    columns:
+      - name: lat
+        description: "Grid cell latitude"
+        tests:
+          - not_null
+
+      - name: lon
+        description: "Grid cell longitude"
+        tests:
+          - not_null
+
+      - name: geom
+        description: "PostGIS POINT geometry (SRID 4326)"
         tests:
           - not_null

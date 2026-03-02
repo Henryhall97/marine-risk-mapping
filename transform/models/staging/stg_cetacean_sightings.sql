@@ -3,13 +3,39 @@
 --
 -- What this does:
 --   1. Selects only the columns we need downstream
---   2. Backfills species from scientific_name when null
---   3. Casts date_year from float to integer
---   4. Adds a readable label for taxonomic precision
+--   2. Normalises 'NaN' string values to NULL
+--   3. Backfills species_label from scientific_name when species is null
+--   4. Casts date_year from float to integer
+--   5. Classifies taxonomic precision (species/genus/family/higher)
+--   6. Derives is_baleen from taxonomic family
+--
+-- Taxonomic precision note:
+--   ~11% of records have species='NaN' and are only identified to
+--   genus (e.g. Balaenoptera), family (e.g. Delphinidae), or order
+--   (e.g. Cetacea). These are valuable for density estimation but
+--   should not be used for species-specific analysis.
 
 with source as (
 
     select * from {{ source('marine_risk', 'cetacean_sightings') }}
+
+),
+
+normalised as (
+
+    -- Treat 'NaN' strings (from pandas) as NULL
+    select
+        id,
+        scientific_name,
+        decimal_latitude,
+        decimal_longitude,
+        event_date,
+        date_year,
+        "order",
+        nullif(family, 'NaN')   as family_clean,
+        nullif(species, 'NaN')  as species_clean,
+        geom
+    from source
 
 ),
 
@@ -23,23 +49,39 @@ cleaned as (
         event_date,
         date_year::integer as observation_year,
 
-        -- Backfill: if species is null, use scientific_name
-        -- (these are genus/family-level IDs, still useful)
-        coalesce(species, scientific_name) as species_label,
+        -- Best available name: species if identified, else scientific_name
+        -- (scientific_name is always populated — may be genus or family)
+        coalesce(species_clean, scientific_name) as species_label,
 
-        -- Flag the taxonomic precision so we can filter later
+        -- Taxonomic precision based on actual identification level.
+        -- A binomial scientific_name (two words) = species-level ID.
+        -- Single word = genus or higher.
         case
-            when species is not null then 'species'
-            when family is not null  then 'family'
+            when species_clean is not null
+                then 'species'
+            when family_clean is not null
+                 and array_length(string_to_array(scientific_name, ' '), 1) = 1
+                then 'genus'
+            when family_clean is not null
+                then 'family'
             else 'higher'
         end as taxonomic_level,
 
-        "order"  as taxonomic_order,
-        family   as taxonomic_family,
-        species  as species_raw,
+        "order"        as taxonomic_order,
+        family_clean   as taxonomic_family,
+        species_clean  as species_raw,
+
+        -- Baleen whale flag from taxonomic family
+        -- Balaenopteridae = rorquals (blue, fin, humpback, sei, minke, Bryde's)
+        -- Balaenidae = right whales, bowhead
+        -- Eschrichtiidae = gray whale
+        coalesce(family_clean, '') in (
+            'Balaenopteridae', 'Balaenidae', 'Eschrichtiidae'
+        ) as is_baleen,
+
         geom
 
-    from source
+    from normalised
 
 )
 

@@ -29,3 +29,9 @@ models:
       +materialized: table
     marts:
       +materialized: table
+
+seeds:
+  marine_risk:
+    species_crosswalk:
+      +column_types:
+        is_baleen: boolean

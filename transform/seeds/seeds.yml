@@ -1,0 +1,78 @@
+# Seed documentation and tests.
+
+version: 2
+
+seeds:
+  - name: species_crosswalk
+    description: >
+      Canonical species crosswalk mapping scientific names to a consistent
+      species_group identifier across three data sources:
+        1. OBIS cetacean sightings (scientific_name / species columns)
+        2. Nisi et al. ISDM training data (common name: Humpback, Fin, Blue, Sperm)
+        3. NOAA ship strike database (common name: right, finback, humpback, etc.)
+
+      Handles taxonomic uncertainty: genus/family/order-level identifications
+      are mapped to appropriate groups (e.g. Balaenoptera genus → unid_rorqual,
+      Cetacea order → unid_cetacean).
+
+      Join to stg_cetacean_sightings on scientific_name to get consistent
+      species_group labels. Join to Nisi ISDM on nisi_species to bridge
+      between datasets.
+    columns:
+      - name: scientific_name
+        description: "Scientific name as it appears in our OBIS sighting data (join key)"
+        tests:
+          - unique
+          - not_null
+
+      - name: common_name
+        description: "Human-readable common name"
+        tests:
+          - not_null
+
+      - name: species_group
+        description: >
+          Canonical species group identifier used across all models.
+          Species-level records get specific groups (e.g. right_whale,
+          humpback). Genus/family-level records get 'unid_' prefixed
+          groups (e.g. unid_rorqual, unid_cetacean).
+        tests:
+          - not_null
+
+      - name: nisi_species
+        description: >
+          Species name as it appears in Nisi et al. ISDM data
+          (Humpback, Fin, Blue, Sperm). NULL for species not in Nisi.
+
+      - name: strike_species
+        description: >
+          Species name as it appears in NOAA ship strike database
+          (right, finback, humpback, etc.). NULL for species not in strikes.
+
+      - name: taxonomic_rank
+        description: "Taxonomic rank of this entry: species, genus, family, suborder, order"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["species", "genus", "family", "suborder", "order"]
+
+      - name: family
+        description: "Taxonomic family (e.g. Balaenopteridae, Delphinidae)"
+
+      - name: is_baleen
+        description: "True for Mysticeti (baleen whales): Balaenidae, Balaenopteridae, Eschrichtiidae"
+        tests:
+          - not_null
+
+      - name: conservation_priority
+        description: >
+          Relative conservation priority for ship strike risk:
+          critical (right whale, vaquita), high (fin, blue, sei, sperm,
+          bowhead, any unidentified baleen), moderate (minke, gray,
+          harbor porpoise, orca, beluga), low (dolphins, beaked whales)
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["critical", "high", "moderate", "low", "unknown"]

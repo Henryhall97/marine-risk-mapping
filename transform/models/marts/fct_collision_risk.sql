@@ -5,17 +5,20 @@
 --
 -- Methodology:
 --   1. Aggregate monthly vessel traffic to per-cell summaries
---   2. LEFT JOIN traffic, cetacean, bathymetry, MPA, proximity
+--   2. LEFT JOIN traffic, cetacean, bathymetry, MPA, proximity,
+--      strike history, speed zones, Nisi reference, ocean covariates
 --   3. Percentile-rank each risk-relevant feature (0–1)
---   4. Combine into five sub-scores via weighted average
+--   4. Combine into seven sub-scores via weighted average
 --   5. Final score = weighted sum of sub-scores
 --
--- Sub-score weights:
---   - Traffic threat      30%  (vessel density, speed, size)
---   - Cetacean exposure   30%  (sighting density, vulnerability)
---   - Proximity           20%  (co-location of whales and ships)
---   - Habitat suitability 10%  (shelf, shelf edge, depth)
---   - Protection gap      10%  (inverse of MPA coverage)
+-- Sub-score weights (updated):
+--   - Traffic threat      25%  (vessel density, speed, size)
+--   - Cetacean exposure   25%  (sighting density, vulnerability)
+--   - Proximity           15%  (co-location of whales and ships)
+--   - Strike history      10%  (historical collision record)
+--   - Habitat suitability 10%  (shelf, shelf edge, depth, ocean env)
+--   - Protection gap      10%  (inverse of MPA/speed zone coverage)
+--   - Reference risk       5%  (Nisi et al. 2024 benchmark)
 --
 -- Land cells are excluded. Cells with no data for a domain
 -- get zero/null for those features and rank at the bottom.
@@ -129,16 +132,53 @@ features as (
         m.has_strict_protection,
         m.has_no_take_zone,
 
-        -- Proximity features (distance to nearest whale / ship)
+        -- Proximity features (distance to nearest whale / ship / strike / protection)
         p.dist_to_nearest_whale_km,
         p.dist_to_nearest_ship_km,
+        p.dist_to_nearest_strike_km,
+        p.dist_to_nearest_protection_km,
         p.whale_proximity_score,
         p.ship_proximity_score,
+        p.strike_proximity_score,
+        p.protection_proximity_score,
+
+        -- Ship strike history features (null = no strikes in this cell)
+        ss.total_strikes,
+        ss.fatal_strikes,
+        ss.serious_injury_strikes,
+        ss.baleen_strikes,
+        ss.right_whale_strikes,
+        ss.unique_species_groups   as strike_species_groups,
+        ss.species_list            as strike_species_list,
+
+        -- Speed zone coverage (null = not in any speed zone)
+        coalesce(sz.in_speed_zone, false)    as in_speed_zone,
+        coalesce(sz.in_current_sma, false)   as in_current_sma,
+        coalesce(sz.in_proposed_zone, false) as in_proposed_zone,
+        sz.zone_count,
+        sz.max_season_days,
+        sz.zone_names,
+
+        -- Nisi et al. (2024) reference risk (null = outside Nisi coverage)
+        nr.nisi_all_risk,
+        nr.nisi_shipping_index,
+        nr.nisi_whale_space_use,
+        nr.nisi_hotspot_overlap,
+        nr.nisi_dist_km,
+
+        -- Ocean environmental covariates (null = outside coverage)
+        oc.sst,
+        oc.sst_sd,
+        oc.mld,
+        oc.sla,
+        oc.pp_upper_200m,
 
         -- Convenience booleans
         t.h3_cell is not null      as has_traffic,
         c.h3_cell is not null      as has_whale_sightings,
-        m.h3_cell is not null      as in_mpa
+        m.h3_cell is not null      as in_mpa,
+        ss.h3_cell is not null     as has_strike_history,
+        nr.h3_cell is not null     as has_nisi_reference
 
     from {{ ref('int_hex_grid') }} g
     left join traffic_agg t
@@ -151,6 +191,14 @@ features as (
         on g.h3_cell = m.h3_cell
     left join {{ ref('int_proximity') }} p
         on g.h3_cell = p.h3_cell
+    left join {{ ref('int_ship_strike_density') }} ss
+        on g.h3_cell = ss.h3_cell
+    left join {{ ref('int_speed_zone_coverage') }} sz
+        on g.h3_cell = sz.h3_cell
+    left join {{ ref('int_nisi_reference_risk') }} nr
+        on g.h3_cell = nr.h3_cell
+    left join {{ ref('int_ocean_covariates') }} oc
+        on g.h3_cell = oc.h3_cell
 
     -- Exclude land cells (GEBCO positive = above sea level)
     where coalesce(b.is_land, false) = false
@@ -183,7 +231,19 @@ ranked as (
         percent_rank() over (order by coalesce(baleen_whale_sightings, 0))
             as pctl_baleen,
         percent_rank() over (order by coalesce(recent_sightings, 0))
-            as pctl_recent_sightings
+            as pctl_recent_sightings,
+
+        -- Strike history percentiles
+        percent_rank() over (order by coalesce(total_strikes, 0))
+            as pctl_strikes,
+        percent_rank() over (order by coalesce(fatal_strikes, 0))
+            as pctl_fatal_strikes,
+        percent_rank() over (order by coalesce(baleen_strikes, 0))
+            as pctl_baleen_strikes,
+
+        -- Nisi reference risk percentile
+        percent_rank() over (order by coalesce(nisi_all_risk, 0))
+            as pctl_nisi_risk
 
     from features
 
@@ -212,6 +272,15 @@ scored as (
           + 0.30 * pctl_recent_sightings
         ) as cetacean_score,
 
+        -- ── Strike history sub-score (0–1) ────────────
+        -- Historical collision record in this cell
+        -- Fatal and baleen strikes get extra weight
+        (
+            0.40 * pctl_strikes
+          + 0.35 * pctl_fatal_strikes
+          + 0.25 * pctl_baleen_strikes
+        ) as strike_score,
+
         -- ── Habitat suitability sub-score (0–1) ───────
         -- Continental shelf and shelf-edge are prime whale habitat
         (
@@ -227,25 +296,42 @@ scored as (
 
         -- ── Protection gap sub-score (0–1) ────────────
         -- Higher = less protected = more risk
-        -- MPA presence mitigates collision risk via speed restrictions
+        -- MPA and speed zone coverage mitigate collision risk
         case
-            when coalesce(has_no_take_zone, false)     then 0.2
-            when coalesce(has_strict_protection, false) then 0.4
-            when in_mpa                                then 0.7
-            else 1.0
+            when coalesce(in_current_sma, false) and coalesce(has_no_take_zone, false)
+                then 0.1   -- Best: SMA + no-take MPA
+            when coalesce(in_current_sma, false)
+                then 0.2   -- Active speed restriction
+            when coalesce(in_proposed_zone, false) and in_mpa
+                then 0.3   -- Proposed speed zone + MPA
+            when coalesce(has_no_take_zone, false)
+                then 0.3   -- No-take MPA
+            when coalesce(in_proposed_zone, false)
+                then 0.4   -- Proposed speed zone (not yet active)
+            when coalesce(has_strict_protection, false)
+                then 0.5   -- Strict MPA
+            when in_mpa
+                then 0.7   -- Some MPA coverage
+            else 1.0       -- No protection at all
         end as protection_gap,
 
         -- ── Proximity sub-score (0–1) ─────────────────
-        -- High when whales and ships are close together.
-        -- Uses exponential decay scores (10km half-life):
-        --   whale_proximity_score = how close is nearest whale?
-        --   ship_proximity_score  = how close is nearest ship?
-        -- Geometric mean captures the co-location signal:
-        -- both must be close for the score to be high.
-        sqrt(
-            coalesce(whale_proximity_score, 0)
-          * coalesce(ship_proximity_score, 0)
-        ) as proximity_score
+        -- Blends co-location of whales/ships with proximity
+        -- to known strike sites and distance from protection.
+        -- Whale-ship overlap is the primary signal; strike
+        -- proximity and protection gap add spatial context.
+        (
+            0.45 * sqrt(
+                coalesce(whale_proximity_score, 0)
+              * coalesce(ship_proximity_score, 0)
+            )
+          + 0.30 * coalesce(strike_proximity_score, 0)
+          + 0.25 * (1.0 - coalesce(protection_proximity_score, 0))
+        ) as proximity_score,
+
+        -- ── Reference risk sub-score (0–1) ────────────
+        -- Nisi et al. 2024 published risk as external benchmark
+        pctl_nisi_risk as reference_risk_score
 
     from ranked
 
@@ -258,58 +344,76 @@ select
     geom,
 
     -- ── Composite risk score ────────────────────────
+    -- 7 sub-scores weighted to 1.0
     round((
-        0.30 * traffic_score
-      + 0.30 * cetacean_score
-      + 0.20 * proximity_score
+        0.25 * traffic_score
+      + 0.25 * cetacean_score
+      + 0.15 * proximity_score
+      + 0.10 * strike_score
       + 0.10 * habitat_score
       + 0.10 * protection_gap
+      + 0.05 * reference_risk_score
     )::numeric, 4) as risk_score,
 
     -- ── Risk category ───────────────────────────────
     case
         when (
-            0.30 * traffic_score
-          + 0.30 * cetacean_score
-          + 0.20 * proximity_score
+            0.25 * traffic_score
+          + 0.25 * cetacean_score
+          + 0.15 * proximity_score
+          + 0.10 * strike_score
           + 0.10 * habitat_score
           + 0.10 * protection_gap
+          + 0.05 * reference_risk_score
         ) >= 0.7  then 'critical'
         when (
-            0.30 * traffic_score
-          + 0.30 * cetacean_score
-          + 0.20 * proximity_score
+            0.25 * traffic_score
+          + 0.25 * cetacean_score
+          + 0.15 * proximity_score
+          + 0.10 * strike_score
           + 0.10 * habitat_score
           + 0.10 * protection_gap
+          + 0.05 * reference_risk_score
         ) >= 0.5  then 'high'
         when (
-            0.30 * traffic_score
-          + 0.30 * cetacean_score
-          + 0.20 * proximity_score
+            0.25 * traffic_score
+          + 0.25 * cetacean_score
+          + 0.15 * proximity_score
+          + 0.10 * strike_score
           + 0.10 * habitat_score
           + 0.10 * protection_gap
+          + 0.05 * reference_risk_score
         ) >= 0.35 then 'medium'
         when (
-            0.30 * traffic_score
-          + 0.30 * cetacean_score
-          + 0.20 * proximity_score
+            0.25 * traffic_score
+          + 0.25 * cetacean_score
+          + 0.15 * proximity_score
+          + 0.10 * strike_score
           + 0.10 * habitat_score
           + 0.10 * protection_gap
+          + 0.05 * reference_risk_score
         ) >= 0.2  then 'low'
         else 'minimal'
     end as risk_category,
 
     -- ── Sub-scores (for interpretability) ───────────
-    round(traffic_score::numeric, 4)    as traffic_score,
-    round(cetacean_score::numeric, 4)   as cetacean_score,
-    round(proximity_score::numeric, 4)  as proximity_score,
-    round(habitat_score::numeric, 4)    as habitat_score,
-    round(protection_gap::numeric, 4)   as protection_gap,
+    round(traffic_score::numeric, 4)         as traffic_score,
+    round(cetacean_score::numeric, 4)        as cetacean_score,
+    round(proximity_score::numeric, 4)       as proximity_score,
+    round(strike_score::numeric, 4)          as strike_score,
+    round(habitat_score::numeric, 4)         as habitat_score,
+    round(protection_gap::numeric, 4)        as protection_gap,
+    round(reference_risk_score::numeric, 4)  as reference_risk_score,
 
     -- ── Feature flags ───────────────────────────────
     has_traffic,
     has_whale_sightings,
     in_mpa,
+    has_strike_history,
+    in_speed_zone,
+    in_current_sma,
+    in_proposed_zone,
+    has_nisi_reference,
 
     -- ── Traffic features ────────────────────────────
     months_active,
@@ -340,6 +444,34 @@ select
     sighting_earliest_year,
     sighting_latest_year,
 
+    -- ── Strike history features ─────────────────────
+    total_strikes,
+    fatal_strikes,
+    serious_injury_strikes,
+    baleen_strikes,
+    right_whale_strikes,
+    strike_species_groups,
+    strike_species_list,
+
+    -- ── Speed zone features ─────────────────────────
+    zone_count,
+    max_season_days,
+    zone_names,
+
+    -- ── Nisi reference features ─────────────────────
+    nisi_all_risk,
+    nisi_shipping_index,
+    nisi_whale_space_use,
+    nisi_hotspot_overlap,
+    nisi_dist_km,
+
+    -- ── Ocean covariate features ────────────────────
+    sst,
+    sst_sd,
+    mld,
+    sla,
+    pp_upper_200m,
+
     -- ── Bathymetry features ─────────────────────────
     depth_m,
     depth_range_m,
@@ -354,6 +486,8 @@ select
 
     -- ── Proximity features ──────────────────────────
     dist_to_nearest_whale_km,
-    dist_to_nearest_ship_km
+    dist_to_nearest_ship_km,
+    dist_to_nearest_strike_km,
+    dist_to_nearest_protection_km
 
 from scored

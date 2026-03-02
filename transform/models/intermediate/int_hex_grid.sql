@@ -4,13 +4,13 @@
 -- UNIONs cells from all data sources so the grid covers:
 --   1. AIS vessel traffic cells (~1.9M)
 --   2. Cetacean sighting cells (some outside shipping lanes)
+--   3. Ship strike cells (historically dangerous locations)
 --
 -- This ensures the mart-layer risk model can LEFT JOIN
--- both traffic and cetacean data without losing sightings
--- in whale-only areas.
+-- all data domains without losing any spatially-relevant cells.
 --
 -- Creates a PostGIS POINT geometry from the cell centroid
--- for downstream spatial joins (MPA overlay).
+-- for downstream spatial joins (MPA overlay, speed zones, etc.).
 
 with ais_cells as (
 
@@ -32,11 +32,23 @@ cetacean_cells as (
 
 ),
 
+strike_cells as (
+
+    select distinct
+        h3_cell,
+        cell_lat,
+        cell_lon
+    from {{ source('marine_risk', 'ship_strike_h3') }}
+
+),
+
 all_cells as (
 
     select * from ais_cells
     union
     select * from cetacean_cells
+    union
+    select * from strike_cells
 
 )
 

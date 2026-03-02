@@ -14,11 +14,13 @@ models:
     description: >
       Whale–vessel collision risk per H3 cell. Joins vessel traffic
       (time-aggregated), cetacean sighting density, ocean depth,
-      MPA coverage, and whale–ship proximity into a single feature
+      MPA coverage, whale–ship proximity, strike history, speed zones,
+      Nisi reference risk, and ocean covariates into a single feature
       matrix. A composite risk score (0–1) is computed from
-      percentile-ranked features weighted across five sub-scores:
-      traffic threat (30%), cetacean exposure (30%), proximity (20%),
-      habitat suitability (10%), and protection gap (10%).
+      percentile-ranked features weighted across seven sub-scores:
+      traffic threat (25%), cetacean exposure (25%), proximity (15%),
+      strike history (10%), habitat suitability (10%), protection
+      gap (10%), and reference risk (5%).
       Land cells are excluded. One row per h3_cell.
     config:
       indexes:
@@ -53,9 +55,9 @@ models:
       - name: risk_score
         description: >
           Composite collision risk on a 0–1 scale (higher = more dangerous).
-          Weighted sum of five sub-scores: traffic_score (30%),
-          cetacean_score (30%), proximity_score (20%),
-          habitat_score (10%), protection_gap (10%).
+          Weighted sum of seven sub-scores: traffic_score (25%),
+          cetacean_score (25%), proximity_score (15%), strike_score (10%),
+          habitat_score (10%), protection_gap (10%), reference_risk_score (5%).
         tests:
           - not_null
 
@@ -67,7 +69,8 @@ models:
         tests:
           - not_null
           - accepted_values:
-              values: ['critical', 'high', 'medium', 'low', 'minimal']
+              arguments:
+                values: ['critical', 'high', 'medium', 'low', 'minimal']
 
       # ── Sub-scores ─────────────────────────────────
       - name: traffic_score
@@ -330,3 +333,125 @@ models:
 
       - name: in_mpa
         description: "True if cell is within any MPA"
+
+  # ── Whale SDM Training ─────────────────────────────────
+  - name: fct_whale_sdm_training
+    description: >
+      Species distribution model training set. One row per H3 cell
+      with a binary whale_present target (1/0) plus environmental
+      and spatial features for training presence/absence classifiers
+      or MaxEnt-style models. Land cells excluded.
+    config:
+      indexes:
+        - columns: ['h3_cell']
+        - columns: ['geom']
+          type: gist
+    columns:
+      - name: h3_cell
+        description: "H3 cell index (resolution 7)"
+        tests:
+          - unique
+          - not_null
+
+      - name: whale_present
+        description: "Binary target: 1 = cetacean sighted in cell, 0 = no sightings"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [0, 1]
+
+      - name: total_sightings
+        description: "Total cetacean sightings in this cell (0 for absence cells)"
+
+      - name: sst
+        description: "Sea surface temperature (°C)"
+
+      - name: mld
+        description: "Mixed layer depth (m)"
+
+      - name: depth_m
+        description: "Mean ocean depth (m)"
+
+      - name: is_continental_shelf
+        description: "True if cell is on the continental shelf"
+
+  # ── Strike Risk Training ────────────────────────────────
+  - name: fct_strike_risk_training
+    description: >
+      Ship strike prediction training set. One row per H3 cell with
+      strike count targets (has_strike, total_strikes) plus all
+      spatial, traffic, cetacean, and environmental features. Suitable
+      for binary classification, count regression, or zero-inflated
+      models. Land cells excluded.
+    config:
+      indexes:
+        - columns: ['h3_cell']
+        - columns: ['geom']
+          type: gist
+    columns:
+      - name: h3_cell
+        description: "H3 cell index (resolution 7)"
+        tests:
+          - unique
+          - not_null
+
+      - name: has_strike
+        description: "Binary target: 1 = at least one historical strike, 0 = none"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [0, 1]
+
+      - name: total_strikes
+        description: "Count target: total historical strikes in this cell"
+        tests:
+          - not_null
+
+      - name: avg_monthly_vessels
+        description: "Average monthly vessel count (key predictor)"
+
+      - name: avg_speed_knots
+        description: "Average vessel speed in knots"
+
+      - name: in_speed_zone
+        description: "True if cell is within a speed management zone"
+
+  # ── Species Risk ────────────────────────────────────────
+  - name: fct_species_risk
+    description: >
+      Species-level collision risk assessment. One row per
+      (h3_cell, species_group) combination where that species
+      has been sighted. Includes traffic exposure, strike history,
+      protection status, and species-specific Nisi reference risk.
+      Useful for species-specific risk maps and ESA consultations.
+    config:
+      indexes:
+        - columns: ['h3_cell']
+        - columns: ['species_group']
+        - columns: ['geom']
+          type: gist
+    columns:
+      - name: h3_cell
+        description: "H3 cell index (resolution 7)"
+        tests:
+          - not_null
+
+      - name: species_group
+        description: "Classified species group (right_whale, humpback, fin_whale, etc.)"
+        tests:
+          - not_null
+
+      - name: species
+        description: "Original species name from sighting record"
+        tests:
+          - not_null
+
+      - name: sighting_count
+        description: "Number of sightings of this species in this cell"
+        tests:
+          - not_null
+
+      - name: species_risk_score
+        description: "Simple species-level risk indicator (0–1) combining sighting density, traffic exposure, and protection status"

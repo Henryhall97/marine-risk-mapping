@@ -330,16 +330,18 @@ models:
         tests:
           - not_null
           - accepted_values:
-              values: ['land', 'shelf', 'slope', 'abyssal']
+              arguments:
+                values: ['land', 'shelf', 'slope', 'abyssal']
 
   # ── Proximity ──────────────────────────────────────────
   - name: int_proximity
     description: >
-      Nearest-neighbour distances from each grid cell to the
-      nearest cetacean sighting cell and nearest vessel traffic
-      cell. Pre-computed via scipy KDTree with haversine
-      post-correction. Includes exponential decay proximity
-      scores (10km half-life) for the risk model.
+      Nearest-neighbour distances from each grid cell to key
+      spatial features: cetacean sightings, vessel traffic,
+      historical ship strikes, and speed management zones.
+      Pre-computed via scipy KDTree (compute_proximity.py)
+      with haversine post-correction. Includes exponential
+      decay proximity scores for the risk model.
       One row per h3_cell.
     columns:
       - name: h3_cell
@@ -358,12 +360,155 @@ models:
         tests:
           - not_null
 
+      - name: dist_to_nearest_strike_km
+        description: "Haversine distance to nearest historical ship strike cell (km)"
+        tests:
+          - not_null
+
+      - name: dist_to_nearest_protection_km
+        description: "Haversine distance to nearest SMA / speed zone boundary (km)"
+        tests:
+          - not_null
+
       - name: whale_proximity_score
-        description: "Exponential decay score (0–1) for whale proximity. 1.0 = whale cell, 0.5 at 10km, → 0."
+        description: "Exponential decay score (0–1) for whale proximity. Half-life = 10km."
         tests:
           - not_null
 
       - name: ship_proximity_score
-        description: "Exponential decay score (0–1) for ship proximity. 1.0 = traffic cell, 0.5 at 10km, → 0."
+        description: "Exponential decay score (0–1) for ship proximity. Half-life = 10km."
         tests:
           - not_null
+
+      - name: strike_proximity_score
+        description: "Exponential decay score (0–1) for strike proximity. Half-life = 25km."
+        tests:
+          - not_null
+
+      - name: protection_proximity_score
+        description: "Exponential decay score (0–1) for protection zone proximity. Half-life = 50km."
+        tests:
+          - not_null
+
+  # ── Ship Strike Density ─────────────────────────────────
+  - name: int_ship_strike_density
+    description: >
+      Ship strike counts per H3 cell, aggregated from the 67
+      geocoded ship strike records. Includes breakdowns by
+      outcome severity and species group.
+      One row per h3_cell (only cells with strikes).
+    columns:
+      - name: h3_cell
+        description: "H3 cell index (resolution 7)"
+        tests:
+          - unique
+          - not_null
+
+      - name: total_strikes
+        description: "Total ship strikes recorded in this cell"
+        tests:
+          - not_null
+
+      - name: fatal_strikes
+        description: "Number of fatal strikes in this cell"
+
+      - name: baleen_strikes
+        description: "Number of strikes involving baleen whales"
+
+      - name: right_whale_strikes
+        description: "Number of strikes involving North Atlantic right whales"
+
+  # ── Speed Zone Coverage ─────────────────────────────────
+  - name: int_speed_zone_coverage
+    description: >
+      Speed management zone coverage per H3 cell. Identifies which
+      cells overlap current SMAs vs proposed NARW speed zones.
+      Only cells inside at least one zone are included.
+    columns:
+      - name: h3_cell
+        description: "H3 cell index (resolution 7)"
+        tests:
+          - unique
+          - not_null
+
+      - name: in_speed_zone
+        description: "Always true (only zone-overlapping cells are in this table)"
+        tests:
+          - not_null
+
+      - name: in_current_sma
+        description: "True if cell overlaps an active Seasonal Management Area"
+        tests:
+          - not_null
+
+      - name: in_proposed_zone
+        description: "True if cell overlaps a proposed NARW speed zone"
+        tests:
+          - not_null
+
+      - name: zone_count
+        description: "Number of overlapping speed management zones"
+
+      - name: max_season_days
+        description: "Maximum duration of speed restriction (days)"
+
+  # ── Nisi Reference Risk ─────────────────────────────────
+  - name: int_nisi_reference_risk
+    description: >
+      Nisi et al. (2024) published risk scores spatially joined
+      to H3 cells via nearest-neighbour matching (within 1°).
+      Serves as an external benchmark for our risk model.
+      One row per h3_cell.
+    columns:
+      - name: h3_cell
+        description: "H3 cell index (resolution 7)"
+        tests:
+          - unique
+          - not_null
+
+      - name: nisi_all_risk
+        description: "Nisi overall collision risk score"
+
+      - name: nisi_shipping_index
+        description: "Nisi shipping intensity index (threat proxy)"
+
+      - name: nisi_whale_space_use
+        description: "Nisi whale space-use metric (vulnerability proxy)"
+
+      - name: nisi_hotspot_overlap
+        description: "Count of species-level hotspots overlapping this Nisi cell"
+
+      - name: nisi_dist_km
+        description: "Distance (km) from H3 centroid to nearest Nisi grid centre"
+
+  # ── Ocean Covariates ────────────────────────────────────
+  - name: int_ocean_covariates
+    description: >
+      Ocean environmental covariates spatially joined to H3 cells
+      via nearest-neighbour matching (within 0.3°). Includes SST,
+      mixed layer depth, sea level anomaly, and primary production.
+      One row per h3_cell.
+    columns:
+      - name: h3_cell
+        description: "H3 cell index (resolution 7)"
+        tests:
+          - unique
+          - not_null
+
+      - name: sst
+        description: "Sea surface temperature (°C)"
+
+      - name: sst_sd
+        description: "Sea surface temperature standard deviation (°C)"
+
+      - name: mld
+        description: "Mixed layer depth (m)"
+
+      - name: sla
+        description: "Sea level anomaly (m)"
+
+      - name: pp_upper_200m
+        description: "Primary production in upper 200m (mg C m⁻² day⁻¹)"
+
+      - name: covariate_dist_km
+        description: "Distance (km) from H3 centroid to nearest covariate grid point"
