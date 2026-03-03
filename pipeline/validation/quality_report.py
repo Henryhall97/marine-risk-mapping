@@ -124,7 +124,7 @@ def categorical_summary(
     Returns:
         DataFrame with column, n_unique, top_value, top_count.
     """
-    str_cols = df.select_dtypes(include=["object", "str"]).columns
+    str_cols = df.select_dtypes(include=["object", "string"]).columns
     records = []
     for col in str_cols:
         n_unique = df[col].nunique()

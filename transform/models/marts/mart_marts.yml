@@ -109,11 +109,25 @@ models:
         tests:
           - not_null
 
+      - name: strike_score
+        description: >
+          Strike history sub-score (0–1). Effectively binary: only 67 of
+          1.8M cells have non-zero values. Weight in composite: 10%.
+        tests:
+          - not_null
+
       - name: protection_gap
         description: >
           Protection gap sub-score (0–1). Higher = less protected.
           No-take MPA = 0.2, strict IUCN MPA = 0.4, any MPA = 0.7,
           no MPA = 1.0. Weight in composite: 10%.
+        tests:
+          - not_null
+
+      - name: reference_risk_score
+        description: >
+          Nisi et al. (2024) reference risk sub-score (0–1). External
+          benchmark from published global risk assessment. Weight: 5%.
         tests:
           - not_null
 
@@ -334,6 +348,10 @@ models:
       - name: in_mpa
         description: "True if cell is within any MPA"
 
+    tests:
+      - unique:
+          column_name: "h3_cell || '-' || month"
+
   # ── Whale SDM Training ─────────────────────────────────
   - name: fct_whale_sdm_training
     description: >
@@ -473,6 +491,10 @@ models:
 
       - name: species_risk_score
         description: "Simple species-level risk indicator (0–1) combining sighting density, traffic exposure, and protection status"
+
+    tests:
+      - unique:
+          column_name: "h3_cell || '-' || species"
 
   # ── Collision Risk Seasonal ─────────────────────────────
   - name: fct_collision_risk_seasonal
@@ -758,9 +780,10 @@ models:
 
       - name: risk_score
         description: >
-          ML-enhanced composite collision risk (0–1). Interaction-first:
-          P(whale) × traffic threat (25%), residual traffic (15%), whale (10%),
-          plus proximity, strike, habitat, protection, reference.
+          ML-enhanced composite collision risk (0–1). 7 sub-scores:
+          interaction (30%), traffic (15%), whale_ml (15%), proximity (15%),
+          strike (10%), protection_gap (10%), reference (5%). No habitat
+          sub-score — ISDM already encodes env covariates in P(whale).
         tests:
           - not_null
 
@@ -774,7 +797,7 @@ models:
 
       - name: interaction_score
         description: >
-          Whale×traffic interaction sub-score (0–1), weight 25%. Percentile-ranked
+          Whale×traffic interaction sub-score (0–1), weight 30%. Percentile-ranked
           P(any whale) × traffic_threat. Primary co-occurrence metric following
           Rockwood et al. (2021) encounter rate model.
         tests:
@@ -789,7 +812,7 @@ models:
 
       - name: whale_ml_score
         description: >
-          Residual ML whale exposure sub-score (0–1), weight 10%. ISDM-predicted
+          ML whale exposure sub-score (0–1), weight 15%. ISDM-predicted
           whale presence independent of traffic co-occurrence.
         tests:
           - not_null
@@ -801,11 +824,6 @@ models:
 
       - name: strike_score
         description: "Strike history sub-score (0–1), weight 10%"
-        tests:
-          - not_null
-
-      - name: habitat_score
-        description: "Habitat suitability sub-score (0–1), weight 10%"
         tests:
           - not_null
 

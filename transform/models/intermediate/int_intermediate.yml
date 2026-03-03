@@ -234,6 +234,10 @@ models:
           True if draft_imputed_m was estimated from length regression
           rather than directly reported. ~6% of cell-months.
 
+    tests:
+      - unique:
+          column_name: "h3_cell || '-' || month"
+
   # ── Cetacean Density ────────────────────────────────────
   - name: int_cetacean_density
     description: >
@@ -515,7 +519,7 @@ models:
           - not_null
 
       - name: nisi_all_risk
-        description: "Nisi overall collision risk score"
+        description: "Nisi overall collision risk score (nullable — not all matched grid points have risk data)"
 
       - name: nisi_shipping_index
         description: "Nisi shipping intensity index (threat proxy)"
