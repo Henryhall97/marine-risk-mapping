@@ -58,6 +58,12 @@ with traffic_agg as (
         avg(vw_avg_length_m)                      as avg_vessel_length_m,
         avg(deep_draft_count)                     as avg_deep_draft_vessels,
 
+        -- Literature-based risk metrics (V&T lethality, fractions)
+        avg(speed_lethality_index)                as avg_speed_lethality,
+        avg(high_speed_fraction)                  as avg_high_speed_fraction,
+        avg(draft_risk_fraction)                  as avg_draft_risk_fraction,
+        avg(draft_imputed_m)                      as avg_draft_imputed_m,
+
         -- Course diversity (maneuvering complexity)
         avg(cross_vessel_circ_cog_stddev)         as avg_cog_diversity,
 
@@ -103,6 +109,10 @@ features as (
         t.avg_large_vessels,
         t.avg_vessel_length_m,
         t.avg_deep_draft_vessels,
+        t.avg_speed_lethality,
+        t.avg_high_speed_fraction,
+        t.avg_draft_risk_fraction,
+        t.avg_draft_imputed_m,
         t.avg_cog_diversity,
         t.avg_night_vessels,
         t.avg_night_high_speed,
@@ -216,10 +226,16 @@ ranked as (
         -- Traffic percentiles
         percent_rank() over (order by coalesce(avg_monthly_vessels, 0))
             as pctl_vessels,
-        percent_rank() over (order by coalesce(avg_high_speed_vessels, 0))
-            as pctl_high_speed,
+        percent_rank() over (order by coalesce(avg_speed_lethality, 0))
+            as pctl_speed_lethality,
         percent_rank() over (order by coalesce(avg_large_vessels, 0))
             as pctl_large_vessels,
+        percent_rank() over (order by coalesce(avg_draft_imputed_m, 0))
+            as pctl_draft_risk,
+        percent_rank() over (order by coalesce(avg_high_speed_fraction, 0))
+            as pctl_high_speed_fraction,
+        percent_rank() over (order by coalesce(avg_draft_risk_fraction, 0))
+            as pctl_draft_risk_fraction,
         percent_rank() over (order by coalesce(avg_commercial_vessels, 0))
             as pctl_commercial,
         percent_rank() over (order by coalesce(avg_night_vessels, 0))
@@ -255,13 +271,18 @@ scored as (
         *,
 
         -- ── Traffic threat sub-score (0–1) ────────────
-        -- Captures how much vessel activity threatens whales
+        -- V&T speed-lethality + high-speed fraction (speed risk),
+        -- vessel volume, size, draft (continuous + fraction),
+        -- commercial vessel type, and night traffic.
         (
-            0.35 * pctl_vessels
-          + 0.25 * pctl_high_speed
-          + 0.20 * pctl_large_vessels
+            0.20 * pctl_speed_lethality
+          + 0.10 * pctl_high_speed_fraction
+          + 0.20 * pctl_vessels
+          + 0.10 * pctl_large_vessels
+          + 0.10 * pctl_draft_risk
+          + 0.05 * pctl_draft_risk_fraction
           + 0.10 * pctl_commercial
-          + 0.10 * pctl_night_traffic
+          + 0.15 * pctl_night_traffic
         ) as traffic_score,
 
         -- ── Cetacean exposure sub-score (0–1) ─────────
@@ -427,6 +448,9 @@ select
     avg_large_vessels,
     avg_vessel_length_m,
     avg_deep_draft_vessels,
+    avg_speed_lethality,
+    avg_high_speed_fraction,
+    avg_draft_risk_fraction,
     avg_cog_diversity,
     avg_night_vessels,
     avg_night_high_speed,

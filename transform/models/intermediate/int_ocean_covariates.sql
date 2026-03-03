@@ -1,10 +1,13 @@
--- Intermediate model: ocean covariates per hex cell
+-- Intermediate model: ocean covariates per hex cell (annual mean)
 -- Spatially joins ocean environmental data to the H3 hex grid
 -- using nearest-neighbour matching.
 --
--- Ocean covariate grid (~0.08–0.25°) is coarser than H3 res-7
--- (~1.2km), so multiple H3 cells map to the same covariate point.
--- We pick the nearest covariate point within 0.3 degrees.
+-- The source data is now seasonal (4 seasons per grid point).
+-- This model averages across all 4 seasons to produce a single
+-- annual-mean row per H3 cell, preserving backward compatibility
+-- with static (non-seasonal) downstream models.
+--
+-- For seasonal ocean covariates, use int_ocean_covariates_seasonal.
 --
 -- Grain: one row per h3_cell.
 
@@ -24,6 +27,7 @@ covariates as (
     select
         lat,
         lon,
+        season,
         sst,
         sst_sd,
         mld,
@@ -31,6 +35,24 @@ covariates as (
         pp_upper_200m,
         geom
     from {{ ref('stg_ocean_covariates') }}
+
+),
+
+-- Average seasonal values back to annual mean per grid point
+annual_covariates as (
+
+    select
+        lat,
+        lon,
+        avg(sst)           as sst,
+        avg(sst_sd)        as sst_sd,
+        avg(mld)           as mld,
+        avg(sla)           as sla,
+        avg(pp_upper_200m) as pp_upper_200m,
+        -- All 4 season rows share the same geom; pick any via first_value
+        (array_agg(geom))[1] as geom
+    from covariates
+    group by lat, lon
 
 ),
 
@@ -48,7 +70,7 @@ nearest_cov as (
                              as covariate_dist_km
 
     from grid g
-    inner join covariates c
+    inner join annual_covariates c
         on ST_DWithin(g.geom, c.geom, {{ var('ocean_covariate_match_degrees') }})  -- degree threshold
     order by g.h3_cell, ST_Distance(g.geom, c.geom)
 

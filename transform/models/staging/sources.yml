@@ -208,14 +208,17 @@ sources:
 
       - name: ocean_covariates
         description: >
-          Monthly ocean environmental covariates for US coastal
-          waters. SST, MLD, SLA, primary productivity.
-          Resolution: ~0.08° (SST) to 0.25° (PP).
+          Seasonal ocean environmental covariates for US coastal
+          waters. SST, MLD, SLA, primary productivity — climatological
+          means computed per season from 2019–2024 monthly data.
+          Resolution: 0.25°, grain: (lat, lon, season).
         columns:
           - name: lat
             description: "Latitude WGS-84"
           - name: lon
             description: "Longitude WGS-84"
+          - name: season
+            description: "Season name: winter, spring, summer, fall"
           - name: sst
             description: "Sea surface temperature (°C)"
           - name: sst_sd
@@ -228,3 +231,25 @@ sources:
             description: "Primary productivity upper 200m (mg C/m²/day)"
           - name: geom
             description: "PostGIS POINT geometry (SRID 4326)"
+
+      - name: ml_whale_predictions
+        description: >
+          ML-predicted whale presence probabilities per H3 cell per season.
+          Produced by ISDM (Integrated Species Distribution Models) trained
+          on Nisi et al. risk grid data and scored across the full H3 grid.
+          Loaded by pipeline/database/load_ml_predictions.py from parquet
+          files in data/processed/ml/isdm_predictions/.
+          Grain: one row per (h3_cell, season). ~7.3M rows.
+        columns:
+          - name: h3_cell
+            description: "H3 cell index (resolution 7, BIGINT)"
+          - name: season
+            description: "Season name: winter, spring, summer, fall"
+          - name: isdm_blue_whale
+            description: "Predicted P(blue whale present) from ISDM model (0–1)"
+          - name: isdm_fin_whale
+            description: "Predicted P(fin whale present) from ISDM model (0–1)"
+          - name: isdm_humpback_whale
+            description: "Predicted P(humpback whale present) from ISDM model (0–1)"
+          - name: isdm_sperm_whale
+            description: "Predicted P(sperm whale present) from ISDM model (0–1)"

@@ -45,9 +45,18 @@ vars:
   proximity_protection_lambda: 0.01386
   proximity_distance_cap_km: 700
   proximity_protection_cap_km: 1000
+  # Vanderlaan & Taggart (2007) speed-lethality logistic
+  vt_lethality_beta0: -4.89
+  vt_lethality_beta1: 0.41
   # Spatial join tolerances (degrees)
   ocean_covariate_match_degrees: 0.3
   nisi_match_degrees: 1.0
+  # Season definitions (meteorological, North Atlantic whale ecology)
+  # Month lists for each season — used by seasonal intermediate models
+  season_winter_months: [12, 1, 2]
+  season_spring_months: [3, 4, 5]
+  season_summer_months: [6, 7, 8]
+  season_fall_months: [9, 10, 11]
 
 seeds:
   marine_risk:

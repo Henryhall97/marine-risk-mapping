@@ -1,14 +1,11 @@
--- Intermediate model: cetacean sighting density per hex cell
--- Uses pre-computed H3 cell assignments from the Python h3
--- library (pipeline/aggregation/assign_cetacean_h3.py) rather
--- than expensive PostGIS spatial joins.
+-- Intermediate model: cetacean sighting density per hex cell per season
+-- Aggregates OBIS sighting records into seasonal summaries by
+-- extracting the observation month from event_date.
 --
--- Each sighting gets an exact H3 cell via h3.latlng_to_cell(),
--- so cells are correct even when no vessel traffic exists nearby.
--- The mart layer LEFT JOINs this with vessel traffic to produce
--- risk scores — cells with whales but no ships get null traffic.
+-- Only sightings with valid ISO dates (YYYY-MM-DD pattern) are
+-- included — about 95% of records.
 --
--- Grain: one row per h3_cell (time-aggregated).
+-- Grain: one row per (h3_cell, season).
 
 with sighting_cells as (
 
@@ -18,17 +15,32 @@ with sighting_cells as (
         s.species_label,
         s.taxonomic_level,
         s.taxonomic_family,
-        s.observation_year
+        s.observation_year,
+        s.event_date,
+        -- Extract month from ISO date string (first 10 chars → date)
+        extract(month from left(s.event_date, 10)::date)::int as obs_month
     from {{ source('marine_risk', 'cetacean_sighting_h3') }} m
     inner join {{ ref('stg_cetacean_sightings') }} s
         on m.sighting_id = s.id
+    -- Only records with parseable ISO dates
+    where s.event_date ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}'
 
 ),
 
-cell_sightings as (
+with_season as (
+
+    select
+        *,
+        {{ season_from_month('obs_month') }} as season
+    from sighting_cells
+
+),
+
+cell_season_sightings as (
 
     select
         h3_cell,
+        season,
 
         -- Total sighting count
         count(*)                              as total_sightings,
@@ -45,9 +57,6 @@ cell_sightings as (
         )                                     as recent_sightings,
 
         -- Baleen whales (highest collision risk)
-        -- Balaenopteridae = rorquals (blue, fin, humpback, minke)
-        -- Balaenidae = right whales (North Atlantic right whale)
-        -- Eschrichtiidae = gray whale
         count(*) filter (
             where taxonomic_family in (
                 'Balaenopteridae',
@@ -80,9 +89,10 @@ cell_sightings as (
         min(observation_year)                 as earliest_year,
         max(observation_year)                 as latest_year
 
-    from sighting_cells
-    group by h3_cell
+    from with_season
+    where season is not null
+    group by h3_cell, season
 
 )
 
-select * from cell_sightings
+select * from cell_season_sightings

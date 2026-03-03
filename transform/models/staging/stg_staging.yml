@@ -149,8 +149,10 @@ models:
   # ── Ocean Covariates ───────────────────────────────────
   - name: stg_ocean_covariates
     description: >
-      Cleaned ocean environmental covariates (SST, SST SD, MLD,
-      SLA, primary production). Land cells filtered out.
+      Cleaned seasonal ocean environmental covariates (SST, SST SD,
+      MLD, SLA, primary production). Climatological seasonal means
+      from 2019–2024. Land cells filtered out.
+      Grain: one row per (lat, lon, season).
     columns:
       - name: lat
         description: "Grid cell latitude"
@@ -161,6 +163,14 @@ models:
         description: "Grid cell longitude"
         tests:
           - not_null
+
+      - name: season
+        description: "Season name: winter, spring, summer, fall"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['winter', 'spring', 'summer', 'fall']
 
       - name: geom
         description: "PostGIS POINT geometry (SRID 4326)"

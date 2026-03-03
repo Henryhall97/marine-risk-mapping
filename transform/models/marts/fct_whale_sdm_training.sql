@@ -44,6 +44,20 @@ with base as (
         coalesce(c.baleen_whale_sightings, 0)      as baleen_whale_sightings,
         coalesce(c.recent_sightings, 0)            as recent_sightings,
 
+        -- Per-species presence (alternative binary targets)
+        case when coalesce(c.right_whale_sightings, 0) > 0 then 1 else 0 end
+            as right_whale_present,
+        case when coalesce(c.humpback_sightings, 0) > 0 then 1 else 0 end
+            as humpback_present,
+        case when coalesce(c.fin_whale_sightings, 0) > 0 then 1 else 0 end
+            as fin_whale_present,
+        case when coalesce(c.blue_whale_sightings, 0) > 0 then 1 else 0 end
+            as blue_whale_present,
+        case when coalesce(c.sperm_whale_sightings, 0) > 0 then 1 else 0 end
+            as sperm_whale_present,
+        case when coalesce(c.minke_whale_sightings, 0) > 0 then 1 else 0 end
+            as minke_whale_present,
+
         -- ── Ocean environment features ───────────────
         oc.sst,
         oc.sst_sd,

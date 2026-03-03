@@ -20,6 +20,7 @@ cleaned as (
         id,
         lat,
         lon,
+        season,
 
         -- Environmental covariates
         sst,

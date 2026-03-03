@@ -204,6 +204,36 @@ models:
           Vessels reporting restricted maneuverability (nav status 2 or 3).
           These vessels cannot avoid whale strikes even if detected.
 
+      # ── Literature-based risk metrics ─────────────────
+      - name: speed_lethality_index
+        description: >
+          Vanderlaan & Taggart (2007) speed-lethality logistic applied to
+          vessel-weighted average speed: P(lethal|speed) = 1/(1+exp(-(β₀+β₁×v))).
+          Continuous 0–1 metric replacing binary >10kn threshold. Approximation
+          from cell-average speed; future AIS re-runs compute per-vessel.
+
+      - name: high_speed_fraction
+        description: >
+          Fraction of unique vessels exceeding 10 knots (lethal speed threshold).
+          Continuous 0–1 proportion vs. the raw count in high_speed_vessel_count.
+
+      - name: draft_risk_fraction
+        description: >
+          Fraction of unique vessels with draft > 8m (deep-draft).
+          Captures the vertical strike zone dimension from Rockwood et al. (2021).
+
+      - name: draft_imputed_m
+        description: >
+          Cell-average draft with OLS imputation: where vw_avg_draft_m is NULL,
+          estimated from vw_avg_length_m via regression (R²≈0.63, r=0.79).
+          Clamped to [0.5, 25.0] metres. Provides continuous draft signal for
+          cells where no vessel reported draft. Used for pctl_draft_risk scoring.
+
+      - name: draft_was_imputed
+        description: >
+          True if draft_imputed_m was estimated from length regression
+          rather than directly reported. ~6% of cell-months.
+
   # ── Cetacean Density ────────────────────────────────────
   - name: int_cetacean_density
     description: >
@@ -241,6 +271,24 @@ models:
           Eschrichtiidae (gray whale). These species are most vulnerable
           to vessel strikes due to their size, surface behaviour,
           and overlap with shipping lanes.
+
+      - name: right_whale_sightings
+        description: "Sightings of Eubalaena glacialis (North Atlantic right whale)"
+
+      - name: humpback_sightings
+        description: "Sightings of Megaptera novaeangliae (humpback whale)"
+
+      - name: fin_whale_sightings
+        description: "Sightings of Balaenoptera physalus (fin whale)"
+
+      - name: blue_whale_sightings
+        description: "Sightings of Balaenoptera musculus (blue whale)"
+
+      - name: sperm_whale_sightings
+        description: "Sightings of Physeter macrocephalus (sperm whale)"
+
+      - name: minke_whale_sightings
+        description: "Sightings of Balaenoptera acutorostrata (minke whale)"
 
       - name: earliest_year
         description: "Earliest observation year in this cell"
@@ -512,3 +560,329 @@ models:
 
       - name: covariate_dist_km
         description: "Distance (km) from H3 centroid to nearest covariate grid point"
+
+  # ── Ocean Covariates Seasonal ───────────────────────────
+  - name: int_ocean_covariates_seasonal
+    description: >
+      Seasonal ocean environmental covariates spatially joined to H3
+      cells via nearest-neighbour matching (within 0.3°). Each cell
+      gets 4 rows — one per season — with climatological seasonal
+      means of SST, MLD, SLA, and primary production (2019–2024).
+      Grain: one row per (h3_cell, season).
+    config:
+      indexes:
+        - columns: ['h3_cell', 'season']
+    columns:
+      - name: h3_cell
+        description: "H3 cell index (resolution 7)"
+        tests:
+          - not_null
+
+      - name: season
+        description: "Season name: winter, spring, summer, fall"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['winter', 'spring', 'summer', 'fall']
+
+      - name: sst
+        description: "Seasonal mean sea surface temperature (°C)"
+
+      - name: sst_sd
+        description: "Seasonal mean SST standard deviation (°C)"
+
+      - name: mld
+        description: "Seasonal mean mixed layer depth (m)"
+
+      - name: sla
+        description: "Seasonal mean sea level anomaly (m)"
+
+      - name: pp_upper_200m
+        description: "Seasonal mean primary production in upper 200m (mg C m⁻² day⁻¹)"
+
+      - name: covariate_dist_km
+        description: "Distance (km) from H3 centroid to nearest covariate grid point"
+
+    tests:
+      - unique:
+          column_name: "h3_cell || '-' || season"
+
+  # ── Vessel Traffic Seasonal ─────────────────────────────
+  - name: int_vessel_traffic_seasonal
+    description: >
+      Vessel traffic metrics per H3 cell per season, aggregated from
+      the monthly int_vessel_traffic. Same metrics but at (h3_cell, season)
+      grain instead of (h3_cell, month).
+    config:
+      indexes:
+        - columns: ['h3_cell', 'season']
+    columns:
+      - name: h3_cell
+        description: "H3 cell index (resolution 7)"
+        tests:
+          - not_null
+
+      - name: season
+        description: "Season name: winter, spring, summer, fall"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['winter', 'spring', 'summer', 'fall']
+
+      - name: months_active
+        description: "Number of distinct months with traffic in this season (max 3)"
+
+      - name: total_pings
+        description: "Total AIS pings in this cell-season"
+
+      - name: avg_monthly_vessels
+        description: "Average unique vessels per month within this season"
+
+      - name: peak_monthly_vessels
+        description: "Peak monthly vessel count within this season"
+
+      - name: avg_speed_knots
+        description: "Vessel-weighted average speed across this season (knots)"
+
+      - name: peak_speed_knots
+        description: "Maximum observed speed in this season (knots)"
+
+      - name: avg_high_speed_vessels
+        description: "Average high-speed vessels per month in this season"
+
+      - name: total_high_speed_pings
+        description: "Total pings above 10 knots across this season"
+
+      - name: avg_large_vessels
+        description: "Average large vessels (>100m) per month in this season"
+
+      - name: avg_vessel_length_m
+        description: "Average vessel-weighted length across this season (metres)"
+
+      - name: avg_deep_draft_vessels
+        description: "Average deep-draft vessels per month in this season"
+
+      - name: avg_cog_diversity
+        description: "Average cross-vessel COG stddev across this season"
+
+      - name: avg_night_vessels
+        description: "Average night-time vessels per month in this season"
+
+      - name: avg_night_high_speed
+        description: "Average night high-speed vessels per month in this season"
+
+      - name: night_traffic_ratio
+        description: "Average proportion of night traffic in this season"
+
+      - name: avg_commercial_vessels
+        description: "Average cargo + tanker vessels per month in this season"
+
+      - name: avg_fishing_vessels
+        description: "Average fishing vessels per month in this season"
+
+      - name: avg_passenger_vessels
+        description: "Average passenger vessels per month in this season"
+
+      - name: avg_speed_lethality
+        description: >
+          Average Vanderlaan & Taggart (2007) speed-lethality index across
+          months in this season. Continuous 0–1 metric replacing binary >10kn.
+
+      - name: avg_high_speed_fraction
+        description: >
+          Average fraction of vessels at lethal speeds (≥10 kn) per month
+          in this season.
+
+      - name: avg_draft_risk_fraction
+        description: >
+          Average fraction of deep-draft vessels (>8m) per month
+          in this season. Captures vertical strike zone dimension.
+
+      - name: avg_draft_imputed_m
+        description: >
+          Average imputed cell-level draft across months in this season.
+          Uses OLS regression from length where original draft was missing.
+          Provides continuous draft signal for downstream risk scoring.
+
+    tests:
+      - unique:
+          column_name: "h3_cell || '-' || season"
+
+  # ── Cetacean Density Seasonal ───────────────────────────
+  - name: int_cetacean_density_seasonal
+    description: >
+      Cetacean sighting counts per H3 cell per season. Sightings
+      are assigned to seasons based on the observation month
+      extracted from event_date. Only sightings with valid ISO
+      dates are included (~95% of records).
+    config:
+      indexes:
+        - columns: ['h3_cell', 'season']
+    columns:
+      - name: h3_cell
+        description: "H3 cell index (resolution 7)"
+        tests:
+          - not_null
+
+      - name: season
+        description: "Season name: winter, spring, summer, fall"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['winter', 'spring', 'summer', 'fall']
+
+      - name: total_sightings
+        description: "Total cetacean sightings in this cell-season"
+        tests:
+          - not_null
+
+      - name: unique_species
+        description: "Distinct species/taxon labels in this cell-season"
+        tests:
+          - not_null
+
+      - name: species_level_sightings
+        description: "Sightings identified to species level"
+
+      - name: recent_sightings
+        description: "Sightings from 2019 onward"
+
+      - name: baleen_whale_sightings
+        description: "Sightings of baleen whales (Balaenopteridae, Balaenidae, Eschrichtiidae)"
+
+      - name: right_whale_sightings
+        description: "Sightings of Eubalaena glacialis (North Atlantic right whale) in this cell-season"
+
+      - name: humpback_sightings
+        description: "Sightings of Megaptera novaeangliae (humpback whale) in this cell-season"
+
+      - name: fin_whale_sightings
+        description: "Sightings of Balaenoptera physalus (fin whale) in this cell-season"
+
+      - name: blue_whale_sightings
+        description: "Sightings of Balaenoptera musculus (blue whale) in this cell-season"
+
+      - name: sperm_whale_sightings
+        description: "Sightings of Physeter macrocephalus (sperm whale) in this cell-season"
+
+      - name: minke_whale_sightings
+        description: "Sightings of Balaenoptera acutorostrata (minke whale) in this cell-season"
+
+      - name: earliest_year
+        description: "Earliest observation year in this cell-season"
+
+      - name: latest_year
+        description: "Most recent observation year in this cell-season"
+
+    tests:
+      - unique:
+          column_name: "h3_cell || '-' || season"
+
+  # ── Speed Zone Coverage Seasonal ────────────────────────
+  - name: int_speed_zone_coverage_seasonal
+    description: >
+      Speed zone coverage per H3 cell per season. Determines which
+      zones are ACTIVE during each season based on start/end month
+      ranges. Handles year-wrapping zones (e.g., Nov–Apr).
+      Only cell-seasons with at least one active zone are included.
+    config:
+      indexes:
+        - columns: ['h3_cell', 'season']
+    columns:
+      - name: h3_cell
+        description: "H3 cell index (resolution 7)"
+        tests:
+          - not_null
+
+      - name: season
+        description: "Season name: winter, spring, summer, fall"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['winter', 'spring', 'summer', 'fall']
+
+      - name: in_speed_zone
+        description: "Always true (only active cell-seasons are included)"
+        tests:
+          - not_null
+
+      - name: in_current_sma
+        description: "True if an active SMA overlaps this cell in this season"
+        tests:
+          - not_null
+
+      - name: in_proposed_zone
+        description: "True if a proposed zone overlaps this cell in this season"
+        tests:
+          - not_null
+
+      - name: zone_count
+        description: "Number of active speed zones in this cell-season"
+
+      - name: current_sma_count
+        description: "Number of active SMAs in this cell-season"
+
+      - name: max_season_days
+        description: "Maximum speed restriction duration among active zones (days)"
+
+      - name: zone_names
+        description: "Semicolon-separated list of active zone names and types"
+
+    tests:
+      - unique:
+          column_name: "h3_cell || '-' || season"
+  # ── ML Whale Predictions ────────────────────────────────
+  - name: int_ml_whale_predictions
+    description: >
+      ISDM (Integrated Species Distribution Model) predictions of whale
+      presence probability per H3 cell per season. Four species models
+      (blue, fin, humpback, sperm whale) trained on Nisi et al. risk grid
+      data, scored across the full H3 grid. Includes composite probabilities:
+      max (highest single species), mean (average across species), and
+      any (probability at least one species present via independence assumption).
+      Grain: one row per (h3_cell, season). ~7.3M rows.
+    config:
+      indexes:
+        - columns: ['h3_cell', 'season']
+    columns:
+      - name: h3_cell
+        description: "H3 cell index (resolution 7)"
+        tests:
+          - not_null
+
+      - name: season
+        description: "Season name: winter, spring, summer, fall"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['winter', 'spring', 'summer', 'fall']
+
+      - name: isdm_blue_whale
+        description: "Predicted P(blue whale present) from ISDM model (0–1)"
+
+      - name: isdm_fin_whale
+        description: "Predicted P(fin whale present) from ISDM model (0–1)"
+
+      - name: isdm_humpback_whale
+        description: "Predicted P(humpback whale present) from ISDM model (0–1)"
+
+      - name: isdm_sperm_whale
+        description: "Predicted P(sperm whale present) from ISDM model (0–1)"
+
+      - name: max_whale_prob
+        description: "Highest P(present) across all 4 species"
+
+      - name: mean_whale_prob
+        description: "Average P(present) across all 4 species"
+
+      - name: any_whale_prob
+        description: "P(any whale present) = 1 - ∏(1 - P_i), independence assumption"
+
+    tests:
+      - unique:
+          column_name: "h3_cell || '-' || season"

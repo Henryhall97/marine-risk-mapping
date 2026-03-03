@@ -364,6 +364,24 @@ models:
       - name: total_sightings
         description: "Total cetacean sightings in this cell (0 for absence cells)"
 
+      - name: right_whale_present
+        description: "Binary target: 1 = North Atlantic right whale sighted, 0 = not sighted"
+
+      - name: humpback_present
+        description: "Binary target: 1 = humpback whale sighted, 0 = not sighted"
+
+      - name: fin_whale_present
+        description: "Binary target: 1 = fin whale sighted, 0 = not sighted"
+
+      - name: blue_whale_present
+        description: "Binary target: 1 = blue whale sighted, 0 = not sighted"
+
+      - name: sperm_whale_present
+        description: "Binary target: 1 = sperm whale sighted, 0 = not sighted"
+
+      - name: minke_whale_present
+        description: "Binary target: 1 = minke whale sighted, 0 = not sighted"
+
       - name: sst
         description: "Sea surface temperature (°C)"
 
@@ -455,3 +473,403 @@ models:
 
       - name: species_risk_score
         description: "Simple species-level risk indicator (0–1) combining sighting density, traffic exposure, and protection status"
+
+  # ── Collision Risk Seasonal ─────────────────────────────
+  - name: fct_collision_risk_seasonal
+    description: >
+      Seasonal whale–vessel collision risk per H3 cell. Same 7-sub-score
+      architecture as fct_collision_risk but at (h3_cell, season) grain.
+      Seasonal inputs: traffic (int_vessel_traffic_seasonal), cetacean
+      density (int_cetacean_density_seasonal), speed zones
+      (int_speed_zone_coverage_seasonal). Static inputs reused across
+      seasons: bathymetry, proximity, strike history, MPA, Nisi, ocean
+      covariates. Percentile ranking is done WITHIN each season.
+      Land cells excluded. ~7.2M rows.
+    config:
+      indexes:
+        - columns: ['h3_cell', 'season']
+        - columns: ['risk_score']
+        - columns: ['geom']
+          type: gist
+    columns:
+      - name: h3_cell
+        description: "H3 cell index (resolution 7)"
+        tests:
+          - not_null
+
+      - name: season
+        description: "Season name: winter, spring, summer, fall"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['winter', 'spring', 'summer', 'fall']
+
+      - name: cell_lat
+        description: "Centroid latitude"
+        tests:
+          - not_null
+
+      - name: cell_lon
+        description: "Centroid longitude"
+        tests:
+          - not_null
+
+      - name: geom
+        description: "PostGIS POINT geometry (SRID 4326)"
+        tests:
+          - not_null
+
+      - name: risk_score
+        description: >
+          Seasonal composite collision risk (0–1). Same 7-sub-score
+          formula as fct_collision_risk with percentile ranks computed
+          within each season.
+        tests:
+          - not_null
+
+      - name: risk_category
+        description: "Risk bucket: critical/high/medium/low/minimal"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['critical', 'high', 'medium', 'low', 'minimal']
+
+      - name: traffic_score
+        description: "Seasonal traffic threat sub-score (0–1), weight 25%"
+        tests:
+          - not_null
+
+      - name: cetacean_score
+        description: "Seasonal cetacean exposure sub-score (0–1), weight 25%"
+        tests:
+          - not_null
+
+      - name: proximity_score
+        description: "Proximity sub-score (0–1), weight 15% — static across seasons"
+        tests:
+          - not_null
+
+      - name: strike_score
+        description: "Strike history sub-score (0–1), weight 10% — static across seasons"
+        tests:
+          - not_null
+
+      - name: habitat_score
+        description: "Habitat suitability sub-score (0–1), weight 10% — static across seasons"
+        tests:
+          - not_null
+
+      - name: protection_gap
+        description: "Protection gap sub-score (0–1), weight 10% — seasonal speed zones"
+        tests:
+          - not_null
+
+      - name: reference_risk_score
+        description: "Nisi reference risk sub-score (0–1), weight 5% — static"
+
+      - name: has_traffic
+        description: "True if vessel traffic exists in this cell-season"
+
+      - name: has_whale_sightings
+        description: "True if cetacean sightings exist in this cell-season"
+
+      - name: in_mpa
+        description: "True if cell is within any MPA"
+
+      - name: has_strike_history
+        description: "True if historical strikes in this cell"
+
+      - name: in_speed_zone
+        description: "True if an active speed zone covers this cell in this season"
+
+      - name: in_current_sma
+        description: "True if an active SMA covers this cell in this season"
+
+      - name: in_proposed_zone
+        description: "True if a proposed zone covers this cell in this season"
+
+      - name: has_nisi_reference
+        description: "True if Nisi reference data matched to this cell"
+
+    tests:
+      - unique:
+          column_name: "h3_cell || '-' || season"
+
+  # ── Whale SDM Seasonal ──────────────────────────────────
+  - name: fct_whale_sdm_seasonal
+    description: >
+      Seasonal species distribution model training set. One row per
+      (h3_cell, season) with a binary whale_present target that varies
+      by season, plus per-species presence targets for 6 key taxa
+      (right whale, humpback, fin, blue, sperm, minke). Includes
+      environmental and spatial features. Traffic features are
+      intentionally EXCLUDED to avoid detection bias. Ocean covariates
+      are seasonal (climatological means). Nisi per-species risk scores
+      included for 4 species (validation benchmarks). Land cells excluded.
+      ~7.3M rows.
+    config:
+      indexes:
+        - columns: ['h3_cell', 'season']
+        - columns: ['geom']
+          type: gist
+    columns:
+      - name: h3_cell
+        description: "H3 cell index (resolution 7)"
+        tests:
+          - not_null
+
+      - name: season
+        description: "Season name: winter, spring, summer, fall"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['winter', 'spring', 'summer', 'fall']
+
+      - name: whale_present
+        description: "Binary target: 1 = cetacean sighted in this cell-season, 0 = no sightings"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [0, 1]
+
+      - name: total_sightings
+        description: "Total sightings in this cell-season (0 for absence cells)"
+
+      - name: unique_species
+        description: "Distinct species observed in this cell-season"
+
+      - name: baleen_whale_sightings
+        description: "Baleen whale sightings in this cell-season"
+
+      - name: recent_sightings
+        description: "Sightings from 2019+ in this cell-season"
+
+      - name: right_whale_present
+        description: "Binary target: 1 = North Atlantic right whale sighted in this cell-season"
+
+      - name: humpback_present
+        description: "Binary target: 1 = humpback whale sighted in this cell-season"
+
+      - name: fin_whale_present
+        description: "Binary target: 1 = fin whale sighted in this cell-season"
+
+      - name: blue_whale_present
+        description: "Binary target: 1 = blue whale sighted in this cell-season"
+
+      - name: sperm_whale_present
+        description: "Binary target: 1 = sperm whale sighted in this cell-season"
+
+      - name: minke_whale_present
+        description: "Binary target: 1 = minke whale sighted in this cell-season"
+
+      - name: nisi_blue_risk
+        description: "Nisi et al. blue whale species-specific risk score (validation benchmark)"
+
+      - name: nisi_fin_risk
+        description: "Nisi et al. fin whale species-specific risk score (validation benchmark)"
+
+      - name: nisi_humpback_risk
+        description: "Nisi et al. humpback whale species-specific risk score (validation benchmark)"
+
+      - name: nisi_sperm_risk
+        description: "Nisi et al. sperm whale species-specific risk score (validation benchmark)"
+
+      - name: sst
+        description: "Sea surface temperature (°C) — static across seasons"
+
+      - name: sst_sd
+        description: "SST standard deviation (°C)"
+
+      - name: mld
+        description: "Mixed layer depth (m)"
+
+      - name: sla
+        description: "Sea level anomaly (m)"
+
+      - name: pp_upper_200m
+        description: "Primary production in upper 200m (mg C m⁻² day⁻¹)"
+
+      - name: depth_m
+        description: "Mean ocean depth (m)"
+
+      - name: is_continental_shelf
+        description: "True if cell is on the continental shelf"
+
+      - name: depth_zone
+        description: "Categorical: shelf / slope / abyssal"
+
+      - name: in_speed_zone
+        description: "True if an active speed zone covers this cell in this season"
+
+      - name: in_current_sma
+        description: "True if an active SMA covers this cell in this season"
+
+    tests:
+      - unique:
+          column_name: "h3_cell || '-' || season"
+  # ── ML-Enhanced Collision Risk ──────────────────────────
+  - name: fct_collision_risk_ml
+    description: >
+      ML-enhanced seasonal collision risk per H3 cell. Same 7-sub-score
+      architecture as fct_collision_risk_seasonal but replaces the raw-sighting
+      cetacean sub-score with ML-predicted whale presence probabilities from
+      ISDM models (int_ml_whale_predictions). The whale_ml_score uses three
+      composites: any_whale_prob (50%), max_whale_prob (30%), mean_whale_prob
+      (20%). Also computes a whale×traffic interaction metric. Percentile
+      ranking is done WITHIN each season. Land cells excluded. ~7.3M rows.
+    config:
+      indexes:
+        - columns: ['h3_cell', 'season']
+        - columns: ['risk_score']
+        - columns: ['geom']
+          type: gist
+    columns:
+      - name: h3_cell
+        description: "H3 cell index (resolution 7)"
+        tests:
+          - not_null
+
+      - name: season
+        description: "Season name: winter, spring, summer, fall"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['winter', 'spring', 'summer', 'fall']
+
+      - name: cell_lat
+        description: "Centroid latitude"
+        tests:
+          - not_null
+
+      - name: cell_lon
+        description: "Centroid longitude"
+        tests:
+          - not_null
+
+      - name: geom
+        description: "PostGIS POINT geometry (SRID 4326)"
+        tests:
+          - not_null
+
+      - name: risk_score
+        description: >
+          ML-enhanced composite collision risk (0–1). Interaction-first:
+          P(whale) × traffic threat (25%), residual traffic (15%), whale (10%),
+          plus proximity, strike, habitat, protection, reference.
+        tests:
+          - not_null
+
+      - name: risk_category
+        description: "Risk bucket: critical/high/medium/low/minimal"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['critical', 'high', 'medium', 'low', 'minimal']
+
+      - name: interaction_score
+        description: >
+          Whale×traffic interaction sub-score (0–1), weight 25%. Percentile-ranked
+          P(any whale) × traffic_threat. Primary co-occurrence metric following
+          Rockwood et al. (2021) encounter rate model.
+        tests:
+          - not_null
+
+      - name: traffic_score
+        description: >
+          Traffic threat sub-score (0–1), weight 15%. Uses V&T (2007) speed-lethality
+          logistic and vessel draft instead of binary >10kn threshold.
+        tests:
+          - not_null
+
+      - name: whale_ml_score
+        description: >
+          Residual ML whale exposure sub-score (0–1), weight 10%. ISDM-predicted
+          whale presence independent of traffic co-occurrence.
+        tests:
+          - not_null
+
+      - name: proximity_score
+        description: "Proximity sub-score (0–1), weight 15%"
+        tests:
+          - not_null
+
+      - name: strike_score
+        description: "Strike history sub-score (0–1), weight 10%"
+        tests:
+          - not_null
+
+      - name: habitat_score
+        description: "Habitat suitability sub-score (0–1), weight 10%"
+        tests:
+          - not_null
+
+      - name: protection_gap
+        description: "Protection gap sub-score (0–1), weight 10%"
+        tests:
+          - not_null
+
+      - name: reference_risk_score
+        description: "Nisi reference risk sub-score (0–1), weight 5%"
+        tests:
+          - not_null
+
+      - name: isdm_blue_whale
+        description: "ISDM predicted P(blue whale present) (0–1)"
+
+      - name: isdm_fin_whale
+        description: "ISDM predicted P(fin whale present) (0–1)"
+
+      - name: isdm_humpback_whale
+        description: "ISDM predicted P(humpback whale present) (0–1)"
+
+      - name: isdm_sperm_whale
+        description: "ISDM predicted P(sperm whale present) (0–1)"
+
+      - name: any_whale_prob
+        description: "P(any whale present) = 1 - ∏(1 - P_i)"
+
+      - name: max_whale_prob
+        description: "Highest P(present) across 4 species"
+
+      - name: mean_whale_prob
+        description: "Average P(present) across 4 species"
+
+      - name: whale_traffic_interaction
+        description: >
+          Diagnostic: P(any whale) × traffic_score. Key co-occurrence
+          metric — high values indicate cells where whales and heavy
+          traffic overlap. Not part of the composite weights.
+
+      - name: has_traffic
+        description: "True if seasonal vessel traffic data exists for this cell"
+
+      - name: has_ml_predictions
+        description: "True if ISDM predictions exist for this cell"
+
+      - name: in_mpa
+        description: "True if any MPA polygon overlaps this cell"
+
+      - name: has_strike_history
+        description: "True if a historical ship strike occurred in this cell"
+
+      - name: in_speed_zone
+        description: "True if a speed zone is active in this cell-season"
+
+      - name: in_current_sma
+        description: "True if an active SMA covers this cell in this season"
+
+      - name: in_proposed_zone
+        description: "True if a proposed speed zone covers this cell"
+
+      - name: has_nisi_reference
+        description: "True if Nisi reference risk data exists for this cell"
+
+    tests:
+      - unique:
+          column_name: "h3_cell || '-' || season"
