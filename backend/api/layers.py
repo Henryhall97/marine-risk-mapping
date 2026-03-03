@@ -1,0 +1,437 @@
+"""Spatial layer overlay endpoints.
+
+9 layer endpoints exposing intermediate dbt tables as map overlays.
+All endpoints follow the same pattern: bbox + optional filters + pagination.
+"""
+
+from __future__ import annotations
+
+from fastapi import APIRouter, HTTPException, Query
+
+from backend.config import DEFAULT_PAGE_SIZE, MAX_BBOX_AREA_DEG2, MAX_PAGE_SIZE
+from backend.models.layers import (
+    BathymetryCell,
+    BathymetryListResponse,
+    CetaceanDensityCell,
+    CetaceanDensityListResponse,
+    MPACell,
+    MPAListResponse,
+    NisiRiskCell,
+    NisiRiskListResponse,
+    OceanCovariateCell,
+    OceanCovariateListResponse,
+    ProximityCell,
+    ProximityListResponse,
+    SpeedZoneCell,
+    SpeedZoneListResponse,
+    StrikeDensityCell,
+    StrikeDensityListResponse,
+    WhalePredictionCell,
+    WhalePredictionListResponse,
+)
+from backend.services import layers as layer_svc
+
+router = APIRouter(prefix="/layers", tags=["layers"])
+
+_VALID_SEASONS = {"winter", "spring", "summer", "fall"}
+_VALID_DEPTH_ZONES = {
+    "shallow",
+    "continental_shelf",
+    "shelf_edge",
+    "slope",
+    "deep_ocean",
+    "land",
+}
+_VALID_ISDM_SPECIES = {
+    "blue_whale",
+    "fin_whale",
+    "humpback_whale",
+    "sperm_whale",
+}
+
+
+def _validate_bbox(
+    lat_min: float,
+    lat_max: float,
+    lon_min: float,
+    lon_max: float,
+) -> None:
+    """Shared bbox validation — raises HTTPException on failure."""
+    if lat_min >= lat_max:
+        raise HTTPException(400, "lat_min must be less than lat_max")
+    if lon_min >= lon_max:
+        raise HTTPException(400, "lon_min must be less than lon_max")
+    area = (lat_max - lat_min) * (lon_max - lon_min)
+    if area > MAX_BBOX_AREA_DEG2:
+        raise HTTPException(
+            400,
+            f"Bounding box area ({area:.1f} deg²) exceeds "
+            f"maximum ({MAX_BBOX_AREA_DEG2} deg²). "
+            "Narrow your query region.",
+        )
+
+
+# ── Bathymetry ──────────────────────────────────────────────
+
+
+@router.get("/bathymetry", response_model=BathymetryListResponse)
+def list_bathymetry(
+    lat_min: float = Query(..., ge=-90, le=90),
+    lat_max: float = Query(..., ge=-90, le=90),
+    lon_min: float = Query(..., ge=-180, le=180),
+    lon_max: float = Query(..., ge=-180, le=180),
+    depth_zone: str | None = Query(None),
+    limit: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+    offset: int = Query(0, ge=0),
+):
+    """Bathymetry layer — depth, depth zone, shelf flags.
+
+    Optional filter by depth_zone (shallow, continental_shelf,
+    shelf_edge, slope, deep_ocean, land).
+    """
+    _validate_bbox(lat_min, lat_max, lon_min, lon_max)
+    if depth_zone and depth_zone not in _VALID_DEPTH_ZONES:
+        raise HTTPException(
+            400,
+            f"Invalid depth_zone. Must be one of: {sorted(_VALID_DEPTH_ZONES)}",
+        )
+    total = layer_svc.count_bathymetry(
+        lat_min, lat_max, lon_min, lon_max, depth_zone=depth_zone
+    )
+    rows = layer_svc.get_bathymetry(
+        lat_min,
+        lat_max,
+        lon_min,
+        lon_max,
+        depth_zone=depth_zone,
+        limit=limit,
+        offset=offset,
+    )
+    data = [BathymetryCell(**r) for r in rows]
+    return BathymetryListResponse(total=total, offset=offset, limit=limit, data=data)
+
+
+# ── Ocean covariates ────────────────────────────────────────
+
+
+@router.get("/ocean", response_model=OceanCovariateListResponse)
+def list_ocean_covariates(
+    lat_min: float = Query(..., ge=-90, le=90),
+    lat_max: float = Query(..., ge=-90, le=90),
+    lon_min: float = Query(..., ge=-180, le=180),
+    lon_max: float = Query(..., ge=-180, le=180),
+    season: str | None = Query(
+        None,
+        description=("Filter by season for seasonal data. Omit for annual mean."),
+    ),
+    limit: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+    offset: int = Query(0, ge=0),
+):
+    """Ocean covariates — SST, MLD, SLA, primary productivity.
+
+    Without season: returns annual mean from int_ocean_covariates.
+    With season: returns seasonal values from
+    int_ocean_covariates_seasonal.
+    """
+    _validate_bbox(lat_min, lat_max, lon_min, lon_max)
+    if season and season not in _VALID_SEASONS:
+        raise HTTPException(
+            400,
+            f"Invalid season. Must be one of: {sorted(_VALID_SEASONS)}",
+        )
+    total = layer_svc.count_ocean_covariates(
+        lat_min, lat_max, lon_min, lon_max, season=season
+    )
+    rows = layer_svc.get_ocean_covariates(
+        lat_min,
+        lat_max,
+        lon_min,
+        lon_max,
+        season=season,
+        limit=limit,
+        offset=offset,
+    )
+    data = [OceanCovariateCell(**r) for r in rows]
+    return OceanCovariateListResponse(
+        total=total, offset=offset, limit=limit, data=data
+    )
+
+
+# ── Whale predictions (ISDM) ───────────────────────────────
+
+
+@router.get(
+    "/whale-predictions",
+    response_model=WhalePredictionListResponse,
+)
+def list_whale_predictions(
+    lat_min: float = Query(..., ge=-90, le=90),
+    lat_max: float = Query(..., ge=-90, le=90),
+    lon_min: float = Query(..., ge=-180, le=180),
+    lon_max: float = Query(..., ge=-180, le=180),
+    season: str | None = Query(None),
+    species: str | None = Query(
+        None,
+        description=(
+            "ISDM species to filter by probability "
+            "(blue_whale, fin_whale, humpback_whale, "
+            "sperm_whale)"
+        ),
+    ),
+    min_probability: float | None = Query(
+        None,
+        ge=0,
+        le=1,
+        description="Minimum probability threshold",
+    ),
+    limit: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+    offset: int = Query(0, ge=0),
+):
+    """ISDM whale predictions — per-species and aggregate probs.
+
+    Filter by season, species, and/or minimum probability.
+    """
+    _validate_bbox(lat_min, lat_max, lon_min, lon_max)
+    if season and season not in _VALID_SEASONS:
+        raise HTTPException(
+            400,
+            f"Invalid season. Must be one of: {sorted(_VALID_SEASONS)}",
+        )
+    if species and species not in _VALID_ISDM_SPECIES:
+        raise HTTPException(
+            400,
+            f"Invalid species. Must be one of: {sorted(_VALID_ISDM_SPECIES)}",
+        )
+    total = layer_svc.count_whale_predictions(
+        lat_min,
+        lat_max,
+        lon_min,
+        lon_max,
+        season=season,
+        species=species,
+        min_probability=min_probability,
+    )
+    rows = layer_svc.get_whale_predictions(
+        lat_min,
+        lat_max,
+        lon_min,
+        lon_max,
+        season=season,
+        species=species,
+        min_probability=min_probability,
+        limit=limit,
+        offset=offset,
+    )
+    data = [WhalePredictionCell(**r) for r in rows]
+    return WhalePredictionListResponse(
+        total=total, offset=offset, limit=limit, data=data
+    )
+
+
+# ── MPA coverage ────────────────────────────────────────────
+
+
+@router.get("/mpa", response_model=MPAListResponse)
+def list_mpa_coverage(
+    lat_min: float = Query(..., ge=-90, le=90),
+    lat_max: float = Query(..., ge=-90, le=90),
+    lon_min: float = Query(..., ge=-180, le=180),
+    lon_max: float = Query(..., ge=-180, le=180),
+    limit: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+    offset: int = Query(0, ge=0),
+):
+    """Marine Protected Area coverage — count, names, protection level."""
+    _validate_bbox(lat_min, lat_max, lon_min, lon_max)
+    total = layer_svc.count_mpa_coverage(lat_min, lat_max, lon_min, lon_max)
+    rows = layer_svc.get_mpa_coverage(
+        lat_min,
+        lat_max,
+        lon_min,
+        lon_max,
+        limit=limit,
+        offset=offset,
+    )
+    data = [MPACell(**r) for r in rows]
+    return MPAListResponse(total=total, offset=offset, limit=limit, data=data)
+
+
+# ── Speed zones ─────────────────────────────────────────────
+
+
+@router.get("/speed-zones", response_model=SpeedZoneListResponse)
+def list_speed_zones(
+    lat_min: float = Query(..., ge=-90, le=90),
+    lat_max: float = Query(..., ge=-90, le=90),
+    lon_min: float = Query(..., ge=-180, le=180),
+    lon_max: float = Query(..., ge=-180, le=180),
+    season: str | None = Query(
+        None,
+        description="Filter by season for seasonal zone activity",
+    ),
+    limit: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+    offset: int = Query(0, ge=0),
+):
+    """Speed zone coverage — SMA + proposed zones.
+
+    Without season: static zone coverage.
+    With season: seasonal variant showing active zones per season.
+    """
+    _validate_bbox(lat_min, lat_max, lon_min, lon_max)
+    if season and season not in _VALID_SEASONS:
+        raise HTTPException(
+            400,
+            f"Invalid season. Must be one of: {sorted(_VALID_SEASONS)}",
+        )
+    total = layer_svc.count_speed_zones(
+        lat_min, lat_max, lon_min, lon_max, season=season
+    )
+    rows = layer_svc.get_speed_zones(
+        lat_min,
+        lat_max,
+        lon_min,
+        lon_max,
+        season=season,
+        limit=limit,
+        offset=offset,
+    )
+    data = [SpeedZoneCell(**r) for r in rows]
+    return SpeedZoneListResponse(total=total, offset=offset, limit=limit, data=data)
+
+
+# ── Proximity ───────────────────────────────────────────────
+
+
+@router.get("/proximity", response_model=ProximityListResponse)
+def list_proximity(
+    lat_min: float = Query(..., ge=-90, le=90),
+    lat_max: float = Query(..., ge=-90, le=90),
+    lon_min: float = Query(..., ge=-180, le=180),
+    lon_max: float = Query(..., ge=-180, le=180),
+    limit: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+    offset: int = Query(0, ge=0),
+):
+    """Proximity distances and exponential decay scores.
+
+    4 distance features (whale, ship, strike, protection) and
+    4 corresponding decay scores.
+    """
+    _validate_bbox(lat_min, lat_max, lon_min, lon_max)
+    total = layer_svc.count_proximity(lat_min, lat_max, lon_min, lon_max)
+    rows = layer_svc.get_proximity(
+        lat_min,
+        lat_max,
+        lon_min,
+        lon_max,
+        limit=limit,
+        offset=offset,
+    )
+    data = [ProximityCell(**r) for r in rows]
+    return ProximityListResponse(total=total, offset=offset, limit=limit, data=data)
+
+
+# ── Nisi reference risk ─────────────────────────────────────
+
+
+@router.get("/nisi-risk", response_model=NisiRiskListResponse)
+def list_nisi_risk(
+    lat_min: float = Query(..., ge=-90, le=90),
+    lat_max: float = Query(..., ge=-90, le=90),
+    lon_min: float = Query(..., ge=-180, le=180),
+    lon_max: float = Query(..., ge=-180, le=180),
+    limit: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+    offset: int = Query(0, ge=0),
+):
+    """Nisi et al. 2024 reference risk — shipping, whale use, per-species."""
+    _validate_bbox(lat_min, lat_max, lon_min, lon_max)
+    total = layer_svc.count_nisi_risk(lat_min, lat_max, lon_min, lon_max)
+    rows = layer_svc.get_nisi_risk(
+        lat_min,
+        lat_max,
+        lon_min,
+        lon_max,
+        limit=limit,
+        offset=offset,
+    )
+    data = [NisiRiskCell(**r) for r in rows]
+    return NisiRiskListResponse(total=total, offset=offset, limit=limit, data=data)
+
+
+# ── Cetacean density ────────────────────────────────────────
+
+
+@router.get(
+    "/cetacean-density",
+    response_model=CetaceanDensityListResponse,
+)
+def list_cetacean_density(
+    lat_min: float = Query(..., ge=-90, le=90),
+    lat_max: float = Query(..., ge=-90, le=90),
+    lon_min: float = Query(..., ge=-180, le=180),
+    lon_max: float = Query(..., ge=-180, le=180),
+    min_sightings: int | None = Query(
+        None,
+        ge=1,
+        description="Minimum total_sightings filter",
+    ),
+    limit: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+    offset: int = Query(0, ge=0),
+):
+    """Cetacean sighting density — total, per-species, baleen, recent.
+
+    Uses the static int_cetacean_density table.
+    """
+    _validate_bbox(lat_min, lat_max, lon_min, lon_max)
+    total = layer_svc.count_cetacean_density(
+        lat_min,
+        lat_max,
+        lon_min,
+        lon_max,
+        min_sightings=min_sightings,
+    )
+    rows = layer_svc.get_cetacean_density(
+        lat_min,
+        lat_max,
+        lon_min,
+        lon_max,
+        min_sightings=min_sightings,
+        limit=limit,
+        offset=offset,
+    )
+    data = [CetaceanDensityCell(**r) for r in rows]
+    return CetaceanDensityListResponse(
+        total=total, offset=offset, limit=limit, data=data
+    )
+
+
+# ── Ship strike density ─────────────────────────────────────
+
+
+@router.get(
+    "/strike-density",
+    response_model=StrikeDensityListResponse,
+)
+def list_strike_density(
+    lat_min: float = Query(..., ge=-90, le=90),
+    lat_max: float = Query(..., ge=-90, le=90),
+    lon_min: float = Query(..., ge=-180, le=180),
+    lon_max: float = Query(..., ge=-180, le=180),
+    limit: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+    offset: int = Query(0, ge=0),
+):
+    """Ship strike density — only ~67 cells with non-zero strikes.
+
+    Includes total, fatal, serious injury, baleen strikes, and
+    species list per cell.
+    """
+    _validate_bbox(lat_min, lat_max, lon_min, lon_max)
+    total = layer_svc.count_strike_density(lat_min, lat_max, lon_min, lon_max)
+    rows = layer_svc.get_strike_density(
+        lat_min,
+        lat_max,
+        lon_min,
+        lon_max,
+        limit=limit,
+        offset=offset,
+    )
+    data = [StrikeDensityCell(**r) for r in rows]
+    return StrikeDensityListResponse(total=total, offset=offset, limit=limit, data=data)
