@@ -35,6 +35,8 @@ from pipeline.config import (
     NIGHT_END_HOUR,
     NIGHT_START_HOUR,
     VESSEL_TYPE_CODES,
+    VT_LETHALITY_BETA0,
+    VT_LETHALITY_BETA1,
     WIDE_VESSEL_WIDTH_M,
 )
 from pipeline.utils import to_python
@@ -267,6 +269,109 @@ def build_aggregation_query(*, test_mode: bool = False) -> str:
         from with_time_of_day
         group by h3_cell, month, mmsi
 
+    ),
+
+    -- ================================================================
+    -- CTE 4: Categorise vessel type for stratified draft imputation
+    -- ================================================================
+    vessel_typed as (
+
+        select
+            *,
+            case
+                when vessel_type between 70 and 79
+                    or vessel_type in ({cargo})           then 'cargo'
+                when vessel_type between 80 and 89
+                    or vessel_type in ({tanker})           then 'tanker'
+                when vessel_type between 60 and 69
+                    or vessel_type in ({passenger})        then 'passenger'
+                when vessel_type = 30
+                    or vessel_type in ({fishing})          then 'fishing'
+                when vessel_type in ({tug})                then 'tug'
+                when vessel_type in ({pleasure})           then 'pleasure'
+                else 'other'
+            end as vessel_category
+        from vessel_summaries
+
+    ),
+
+    -- ================================================================
+    -- CTE 5: Per-type regression coefficients + medians for draft
+    -- Fitted from vessels that report both draft and length.
+    -- Types with R²<0.05 (tugs, fishing) use median-only fallback.
+    -- ================================================================
+    draft_regression as (
+
+        select
+            vessel_category,
+            regr_slope(vessel_draft, vessel_length)     as slope,
+            regr_intercept(vessel_draft, vessel_length)  as intercept,
+            regr_r2(vessel_draft, vessel_length)          as r2,
+            count(vessel_draft)                           as n_with_draft,
+            median(vessel_draft)                          as type_median_draft
+        from vessel_typed
+        where vessel_draft is not null
+        group by vessel_category
+
+    ),
+
+    -- Global fallback median for vessels with no type match
+    draft_global as (
+
+        select median(vessel_draft) as global_median_draft
+        from vessel_typed
+        where vessel_draft is not null
+
+    ),
+
+    -- ================================================================
+    -- CTE 6: Impute missing drafts per vessel
+    -- Priority: (1) reported draft, (2) type regression from length
+    -- if R²≥0.05 and n≥20, (3) type median, (4) global median.
+    -- Clamped to [0.5, 25.0] metres.
+    -- ================================================================
+    vessel_with_draft as (
+
+        select
+            v.*,
+            coalesce(
+                v.vessel_draft,
+                -- Regression imputation (only if the type regression is useful)
+                case when v.vessel_length is not null
+                          and dr.r2 >= 0.05
+                          and dr.n_with_draft >= 20
+                     then greatest(0.5, least(25.0,
+                          dr.intercept + dr.slope * v.vessel_length))
+                end,
+                -- Type median fallback (tugs, fishing, etc.)
+                dr.type_median_draft,
+                -- Last resort: global median
+                gs.global_median_draft
+            ) as vessel_draft_imputed,
+            v.vessel_draft is null as draft_was_imputed
+        from vessel_typed v
+        left join draft_regression dr
+            on v.vessel_category = dr.vessel_category
+        cross join draft_global gs
+
+    ),
+
+    -- ================================================================
+    -- CTE 7: Add Vanderlaan & Taggart (2007) speed-lethality per vessel
+    -- P(lethal|speed) = 1 / (1 + exp(-(β₀ + β₁ × speed_knots)))
+    -- Applied per-vessel BEFORE aggregation to avoid Jensen's inequality
+    -- bias from averaging speeds then applying the non-linear function.
+    -- ================================================================
+    vessel_with_lethality as (
+
+        select
+            *,
+            1.0 / (1.0 + exp(-({VT_LETHALITY_BETA0}
+                + {VT_LETHALITY_BETA1}
+                * coalesce(vessel_median_speed, 0))))
+                as vessel_lethality_prob
+        from vessel_with_draft
+
     )
 
     -- ================================================================
@@ -303,6 +408,27 @@ def build_aggregation_query(*, test_mode: bool = False) -> str:
         avg(vessel_median_speed)              as vw_avg_speed_knots,
         percentile_cont(0.5) within group
             (order by vessel_median_speed)    as vw_median_speed_knots,
+
+        -- ── Speed-lethality (Vanderlaan & Taggart 2007) ─
+        -- Per-vessel lethality averaged (exact, no Jensen's bias)
+        avg(vessel_lethality_prob)            as vw_avg_lethality,
+        sum(vessel_ping_count * vessel_lethality_prob)
+            / nullif(sum(vessel_ping_count), 0)
+                                              as pw_avg_lethality,
+        max(vessel_lethality_prob)            as max_lethality,
+
+        -- ── Risk fractions ──────────────────────────────
+        count(*) filter (
+            where vessel_high_speed_pings > 0
+        )::double precision
+            / nullif(count(*)::double precision, 0)
+                                              as high_speed_fraction,
+        -- Uses imputed draft (regression from length where missing)
+        count(*) filter (
+            where vessel_draft_imputed > {DEEP_DRAFT_M}
+        )::double precision
+            / nullif(count(*)::double precision, 0)
+                                              as draft_risk_fraction,
 
         -- ── Vessel size: length ─────────────────────────
         -- Ping-weighted average
@@ -350,6 +476,13 @@ def build_aggregation_query(*, test_mode: bool = False) -> str:
         count(*) filter (
             where vessel_draft > {DEEP_DRAFT_M}
         )                                     as deep_draft_count,
+
+        -- ── Draft imputation stats ──────────────────────
+        -- Imputed average draft (uses regression from length where missing)
+        avg(vessel_draft_imputed)             as vw_avg_draft_imputed_m,
+        count(*) filter (
+            where draft_was_imputed
+        )                                     as draft_imputed_count,
 
         -- ── Course diversity (circular statistics) ──────
         -- Uses Yamartino method: σ = √(−2·ln(R)) in degrees
@@ -480,7 +613,7 @@ def build_aggregation_query(*, test_mode: bool = False) -> str:
             where vessel_type in ({military})
         )                                     as military_pings
 
-    from vessel_summaries
+    from vessel_with_lethality
     group by h3_cell, month
     """
 
@@ -666,6 +799,17 @@ def load_to_postgis(parquet_path: Path = OUTPUT_FILE) -> None:
                 tanker_pings       BIGINT,
                 pleasure_pings     BIGINT,
                 military_pings     BIGINT,
+
+                -- Speed-lethality (Vanderlaan & Taggart 2007)
+                vw_avg_lethality       DOUBLE PRECISION,
+                pw_avg_lethality       DOUBLE PRECISION,
+                max_lethality          DOUBLE PRECISION,
+                high_speed_fraction    DOUBLE PRECISION,
+                draft_risk_fraction    DOUBLE PRECISION,
+
+                -- Draft imputation
+                vw_avg_draft_imputed_m DOUBLE PRECISION,
+                draft_imputed_count    INTEGER,
 
                 PRIMARY KEY (h3_cell, month)
             );

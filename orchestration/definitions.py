@@ -15,12 +15,12 @@ This wires together:
 from dagster import Definitions, define_asset_job, load_assets_from_modules
 from dagster_dbt import DbtCliResource
 
-from orchestration.assets import aggregation, database, dbt_assets, ingestion
+from orchestration.assets import aggregation, database, dbt_assets, ingestion, ml
 from orchestration.assets.dbt_assets import TRANSFORM_DIR
 
 # ── Assets ──────────────────────────────────────────────────
 all_assets = load_assets_from_modules(
-    [ingestion, database, aggregation, dbt_assets],
+    [ingestion, database, aggregation, dbt_assets, ml],
 )
 
 # ── Resources ───────────────────────────────────────────────

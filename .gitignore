@@ -29,6 +29,12 @@ data/
 
 # dbt
 target/
+dbt_packages/
+transform/logs/
+
+# MLflow
+mlruns/
+mlartifacts/
 
 # Jupyter Notebook
 .ipynb_checkpoints/

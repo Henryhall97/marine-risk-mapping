@@ -75,6 +75,7 @@ Next.js (React) frontend with Deck.gl for map rendering. Users see an interactiv
 | **Orchestration** | Dagster | Pipeline scheduling, monitoring, and dependency management |
 | **Analysis** | Pandas, GeoPandas | Tabular and spatial data manipulation |
 | **Risk Model** | XGBoost, scikit-learn | Binary classification for collision risk prediction |
+| **Audio Classification** | librosa, soundfile, PyTorch | Whale species ID from underwater recordings (XGBoost + CNN) |
 | **ML Experiment Tracking** | MLflow | Experiment logging, model registry, artifact storage |
 | **Backend API** | FastAPI, Pydantic | REST API with automatic validation and documentation |
 | **Frontend** | Next.js (React), TypeScript | Modern web application framework |
@@ -86,6 +87,85 @@ Next.js (React) frontend with Deck.gl for map rendering. Users see an interactiv
 | **Linting** | Ruff, ESLint | Code quality enforcement (Python and JavaScript) |
 | **Testing** | pytest, Vitest | Unit and integration testing (Python and JavaScript) |
 
+
+## 🤖 Machine Learning Models
+
+Twelve XGBoost binary classifiers predict whale presence and collision risk across all US coastal waters, using spatial block cross-validation (H3 resolution 2, ~158 km blocks, 5 folds) and MLflow experiment tracking.
+
+### Model Suite
+
+| Model | Rows | Positives | AUC-ROC | Avg Precision | Purpose |
+|-------|------|-----------|---------|---------------|---------|
+| **Static SDM** | 1.8M | 76K (4.1%) | 0.952 ± 0.008 | 0.498 ± 0.118 | All-species cetacean presence (annual) |
+| **Seasonal SDM** | 7.3M | 104K (1.4%) | 0.956 ± 0.009 | 0.257 ± 0.086 | All-species with seasonal environment |
+| **Strike Risk** ⚠️ | 1.8M | 67 (0.004%) | 0.934 ± 0.012 | 0.002 ± 0.001 | Experimental — too few positives for production use |
+| Right whale | 7.3M | 3,207 (0.04%) | 0.991 ± 0.003 | 0.068 ± 0.063 | Per-species seasonal SDM |
+| Humpback | 7.3M | 20,618 (0.28%) | 0.987 ± 0.002 | 0.199 ± 0.080 | Per-species seasonal SDM |
+| Fin whale | 7.3M | 9,948 (0.14%) | 0.982 ± 0.004 | 0.087 ± 0.043 | Per-species seasonal SDM |
+| Blue whale | 7.3M | 3,529 (0.05%) | 0.980 ± 0.015 | 0.081 ± 0.059 | Per-species seasonal SDM |
+| Sperm whale | 7.3M | 6,744 (0.09%) | 0.954 ± 0.016 | 0.034 ± 0.014 | Per-species seasonal SDM |
+| Minke whale | 7.3M | 4,291 (0.06%) | 0.985 ± 0.005 | 0.081 ± 0.075 | Per-species seasonal SDM |
+| ISDM Blue | 49K | 50/50 | 0.945 ± 0.001 | 0.945 ± 0.001 | Nisi et al. cross-validation |
+| ISDM Fin | 180K | 50/50 | 0.934 ± 0.001 | 0.927 ± 0.001 | Nisi et al. cross-validation |
+| ISDM Humpback | 272K | 50/50 | 0.971 ± 0.001 | 0.971 ± 0.000 | Nisi et al. cross-validation |
+| ISDM Sperm | 47K | 50/50 | 0.940 ± 0.002 | 0.942 ± 0.002 | Nisi et al. cross-validation |
+
+### Key Design Decisions
+
+- **Spatial block CV:** H3 parent cells at resolution 2 (~158 km edge) prevent spatial autocorrelation leakage. All 4 seasons for a given cell always land in the same fold.
+- **No traffic in SDMs:** Traffic features excluded from whale SDMs to avoid detection bias (survey effort correlates with shipping lanes).
+- **SHAP explainability:** TreeExplainer with XGBoost 3.x compatibility patch generates per-feature importance and interaction effects.
+- **ISDM grid scoring:** Nisi et al. models scored across our full H3 grid (7.3M cell-seasons) for independent validation.
+
+### ML Scripts
+
+```bash
+# Feature extraction from dbt marts → parquet
+uv run python pipeline/analysis/extract_features.py --dataset all
+
+# Training (each includes 5-fold CV, SHAP, MLflow logging)
+uv run python pipeline/analysis/train_sdm_model.py           # Static SDM
+uv run python pipeline/analysis/train_sdm_seasonal.py        # Seasonal all-species
+uv run python pipeline/analysis/train_sdm_seasonal.py \
+    --target right_whale_present                              # Per-species
+uv run python pipeline/analysis/train_strike_model.py        # Strike risk
+uv run python pipeline/analysis/train_isdm_model.py          # ISDM + grid scoring
+
+# Comparison and registry
+uv run python pipeline/analysis/compare_importances.py       # ML vs hand-tuned weights
+uv run python pipeline/analysis/register_model.py \
+    --experiment whale_sdm --model-name whale_sdm_xgboost    # MLflow registry
+```
+
+### Audio Classification
+
+Two complementary classifiers identify 8 cetacean species from underwater audio recordings, using a three-stage class balancing strategy (segment cap, augmentation, inverse-frequency weights) applied consistently across both backends.
+
+| Model | Accuracy | Macro F1 | Method | Training Time |
+|-------|----------|----------|--------|---------------|
+| **XGBoost** | 97.9% | 98.2% | 5-fold stratified CV on 64 acoustic features | 213.7 s |
+| **CNN (ResNet18)** | 99.3% | 99.4% | 80/20 split, mel spectrograms, early stopping | 279.7 s |
+
+- **Training data:** 452 audio files from 4 public databases (Watkins, 3x Zenodo) across 8 species
+- **Segments:** 10,185 after preprocessing (4s windows, 2s hop, capped at 2,000/species)
+- **CNN detail:** Fine-tuned pretrained ResNet18, Apple MPS accelerated, early stopping (patience=7) at epoch 12 (best at epoch 5)
+- **Key finding:** CNN resolves blue/fin whale confusion that limits XGBoost (both >= 0.99 F1 vs 0.95/0.94)
+
+### Audio Classification Scripts
+
+```bash
+# Download training audio (Watkins + Zenodo + SanctSound catalogue)
+uv run python pipeline/ingestion/download_whale_audio.py --source all
+
+# Train species classifier (XGBoost on acoustic features, default)
+uv run python pipeline/analysis/train_audio_classifier.py
+
+# With hyperparameter tuning
+uv run python pipeline/analysis/train_audio_classifier.py --tune
+
+# CNN backend (requires torch + torchvision)
+uv run python pipeline/analysis/train_audio_classifier.py --backend cnn --epochs 30
+```
 
 ## 📊 Data Sources
 
@@ -100,6 +180,8 @@ Next.js (React) frontend with Deck.gl for map rendering. Users see an interactiv
 | Nisi et al. 2024 Risk Grid | [GitHub: annanisi/Global_Whale_Ship](https://github.com/annanisi/Global_Whale_Ship) | CSV | 1° global grid — whale risk (V×D), hotspots, management gaps for 4 species |
 | Nisi et al. 2024 Shipping Density | [GitHub: annanisi/Global_Whale_Ship](https://github.com/annanisi/Global_Whale_Ship) | CSV | 1° global shipping density index (64,800 cells) |
 | Nisi et al. 2024 ISDM Training | [GitHub: annanisi/Global_Whale_Ship](https://github.com/annanisi/Global_Whale_Ship) | CSV | 548K presence/absence records for 4 whale species + 7 environmental covariates |
+| Watkins Sound Database | [WHOI](https://whoicf2.whoi.edu/science/B/whalesounds/) | WAV/AIF | ~15K whale vocalisation clips across 8 target species |
+| Zenodo Whale Audio | [Zenodo](https://zenodo.org/) | WAV | Annotated recordings: blue (3624145), humpback (4293955), fin (8147524) |
 
 ## � Manual Data Prerequisites
 
@@ -144,9 +226,11 @@ uv run ruff format .
 ```
 marine_risk_mapping/
 ├── pipeline/              # Python ingestion & validation code
-│   ├── ingestion/         # Download scripts (AIS, cetaceans, MPA, bathymetry)
+│   ├── ingestion/         # Download scripts (AIS, cetaceans, MPA, bathymetry, whale audio)
 │   ├── database/          # PostGIS schema & data loading, DuckDB views
 │   ├── aggregation/       # AIS H3 aggregation (DuckDB two-pass pipeline)
+│   ├── audio/             # Whale audio classification (preprocessing + classifier)
+│   ├── analysis/          # ML training, evaluation, validation scripts
 │   └── validation/        # Pandera schemas & data quality reports
 ├── transform/             # dbt project (SQL transformations)
 │   ├── models/
@@ -236,7 +320,7 @@ marine_risk_mapping/
 | Step | Task | Status |
 |------|------|--------|
 | 6.1 | Dagster project scaffold (constants, definitions) | ✅ |
-| 6.2 | Define Dagster assets for ingestion + dbt | ⬜ |
+| 6.2 | Define Dagster assets for ingestion + dbt | ✅ |
 | 6.3 | Create schedules and sensors | ⬜ |
 | 6.4 | Add monitoring and alerting | ⬜ |
 
@@ -244,14 +328,29 @@ marine_risk_mapping/
 
 | Step | Task | Status |
 |------|------|--------|
-| 7.1 | EDA: join incident locations to H3 grid, analyse feature distributions | ⬜ |
-| 7.2 | Feature engineering: build training matrix from mart features + incident labels | ⬜ |
-| 7.3 | Train binary classifier (XGBoost/LightGBM) with class-imbalance handling | ⬜ |
-| 7.4 | Set up MLflow experiment tracking (params, metrics, artifacts) | ⬜ |
-| 7.5 | Hyperparameter tuning with cross-validation, log to MLflow | ⬜ |
-| 7.6 | Register best model in MLflow Model Registry (staging → production) | ⬜ |
-| 7.7 | Add model_training Dagster asset (orchestrated retraining) | ⬜ |
-| 7.8 | Compare learned feature importances vs hand-tuned weights | ⬜ |
+| 7.1 | Feature engineering: extract SDM + strike training matrices from dbt marts | ✅ |
+| 7.2 | Build evaluation harness (spatial block CV, SHAP, calibration, MLflow) | ✅ |
+| 7.3 | Train static whale SDM (XGBoost, 1.8M rows, 47 features) | ✅ |
+| 7.4 | Train seasonal all-species SDM (7.3M rows × 4 seasons) | ✅ |
+| 7.5 | Train 6 per-species seasonal SDMs (right, humpback, fin, blue, sperm, minke) | ✅ |
+| 7.6 | Train 4 ISDM cross-validation models (Nisi et al. data) + score H3 grid | ✅ |
+| 7.7 | Train strike-risk classifier (67 positives / 1.8M cells) — experimental, parked | ✅ |
+| 7.8 | Compare ML feature importance vs hand-tuned collision risk weights — limited utility (SDMs predict presence, not risk) | ⚠️ |
+| 7.9 | MLflow model registry tooling (register, promote staging → production) | ✅ |
+| 7.10 | Phase 7 PDF report (64 pages, diagnostic diagrams, critical assessment) | ✅ |
+
+### Phase 7b: Audio Classification
+
+| Step | Task | Status |
+|------|------|--------|
+| 7b.1 | Audio preprocessing pipeline (librosa: resample, segment, mel/PCEN, 64 features) | ✅ |
+| 7b.2 | Classifier framework (XGBoost + CNN backends, H3 risk enrichment) | ✅ |
+| 7b.3 | Training data download scripts (Watkins, Zenodo, SanctSound) | ✅ |
+| 7b.4 | Training pipeline (stratified CV, Optuna, MLflow) | ✅ |
+| 7b.5 | Download training data and train XGBoost model (97.9% accuracy, 98.2% F1) | ✅ |
+| 7b.6 | Traffic risk V&T lethality methodology + validation | ✅ |
+| 7b.7 | Train CNN classifier (99.3% accuracy, 99.4% F1, early stopping) | ✅ |
+| 7b.8 | Audio classification PDF report (17 pages, 7 diagrams) | ✅ |
 
 ### Phase 8: FastAPI Backend
 
