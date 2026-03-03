@@ -48,6 +48,12 @@ LARGE_VESSEL_LENGTH_M = 100  # Ocean-going commercial
 WIDE_VESSEL_WIDTH_M = 20  # Wide-beam commercial
 DEEP_DRAFT_M = 8  # Deep-draft vessel
 
+# ── Vanderlaan & Taggart (2007) speed-lethality logistic ─────
+# P(lethal | speed) = 1 / (1 + exp(-(β₀ + β₁ × speed_knots)))
+# Fitted to 40 observed whale-vessel collisions with known outcomes.
+VT_LETHALITY_BETA0 = -4.89  # Intercept
+VT_LETHALITY_BETA1 = 0.41  # Speed coefficient (per knot)
+
 # ── Day/night boundaries (local solar hour) ──────────────────
 NIGHT_START_HOUR = 20  # 8 PM local
 NIGHT_END_HOUR = 6  # 6 AM local
@@ -146,3 +152,102 @@ DUCKDB_PATH = DATA_DIR / "marine_risk.duckdb"
 # ── dbt ─────────────────────────────────────────────────────
 DBT_PROJECT_DIR = PROJECT_ROOT / "transform"
 DBT_PROFILES_DIR = PROJECT_ROOT / "transform"
+
+# ── ML / MLflow ─────────────────────────────────────────────
+ML_DIR = PROCESSED_DIR / "ml"
+STRIKE_FEATURES_FILE = ML_DIR / "strike_risk_features.parquet"
+SDM_FEATURES_FILE = ML_DIR / "whale_sdm_features.parquet"
+SDM_SEASONAL_FEATURES_FILE = ML_DIR / "whale_sdm_seasonal_features.parquet"
+MLRUNS_DIR = PROJECT_ROOT / "mlruns"
+MLFLOW_TRACKING_URI = f"file://{MLRUNS_DIR}"
+
+# ── Seasons (meteorological, aligned with North Atlantic whale ecology) ──
+SEASONS: dict[str, list[int]] = {
+    "winter": [12, 1, 2],  # Right whale calving (SE US), low survey effort
+    "spring": [3, 4, 5],  # Northward migration, SMAs activate
+    "summer": [6, 7, 8],  # Feeding season (Gulf of Maine), peak surveys
+    "fall": [9, 10, 11],  # Southward migration, SMAs deactivate
+}
+SEASON_ORDER: list[str] = ["winter", "spring", "summer", "fall"]
+
+# ── Spatial cross-validation ────────────────────────────────
+H3_CV_RESOLUTION = 2  # ~158 km edge — parent cells for CV fold grouping
+N_CV_FOLDS = 5
+
+# ── Collision risk sub-score weights ────────────────────────
+# Must stay in sync with fct_collision_risk.sql
+COLLISION_RISK_WEIGHTS: dict[str, float] = {
+    "traffic_score": 0.25,
+    "cetacean_score": 0.25,
+    "proximity_score": 0.15,
+    "strike_score": 0.10,
+    "habitat_score": 0.10,
+    "protection_gap": 0.10,
+    "reference_risk_score": 0.05,
+}
+
+# ── ML-enhanced collision risk weights ──────────────────────
+# Promotes whale×traffic interaction as primary co-occurrence metric.
+# Must stay in sync with fct_collision_risk_ml.sql.
+COLLISION_RISK_ML_WEIGHTS: dict[str, float] = {
+    "interaction_score": 0.25,
+    "traffic_score": 0.15,
+    "whale_ml_score": 0.10,
+    "proximity_score": 0.15,
+    "strike_score": 0.10,
+    "habitat_score": 0.10,
+    "protection_gap": 0.10,
+    "reference_risk_score": 0.05,
+}
+
+# ── Audio classification ────────────────────────────────────
+WHALE_AUDIO_RAW_DIR = RAW_DIR / "whale_audio"
+WHALE_AUDIO_PROCESSED_DIR = PROCESSED_DIR / "whale_audio"
+AUDIO_MODEL_DIR = ML_DIR / "audio_classifier"
+
+# Preprocessing parameters
+AUDIO_SAMPLE_RATE = 16_000  # Hz — standard for marine bioacoustics
+AUDIO_SEGMENT_DURATION = 4.0  # seconds per classification window
+AUDIO_SEGMENT_HOP = 2.0  # seconds hop (50 % overlap)
+AUDIO_N_MELS = 128  # mel frequency bins
+AUDIO_N_FFT = 2048  # FFT window size
+AUDIO_HOP_LENGTH = 512  # STFT hop length
+AUDIO_N_MFCC = 20  # MFCC coefficients
+AUDIO_FMIN = 10  # Hz — captures blue whale infrasonic
+AUDIO_FMAX = 8000  # Hz — upper bound for most cetacean calls
+
+# Target species labels (order matters for model output indices)
+WHALE_AUDIO_SPECIES: list[str] = [
+    "right_whale",
+    "humpback_whale",
+    "fin_whale",
+    "blue_whale",
+    "sperm_whale",
+    "minke_whale",
+    "sei_whale",
+    "killer_whale",
+    "unknown_whale",
+]
+
+# Species-specific frequency bands (Hz) for bandpass pre-filtering
+WHALE_FREQ_BANDS: dict[str, tuple[float, float]] = {
+    "right_whale": (50, 500),  # upcalls
+    "humpback_whale": (80, 4000),  # song units (4 kHz captures most)
+    "fin_whale": (15, 30),  # 20 Hz pulses
+    "blue_whale": (10, 100),  # infrasonic calls
+    "sperm_whale": (2000, 8000),  # clicks (broadband, peak energy 2–8 kHz)
+    "minke_whale": (50, 300),  # boing / bioduck calls
+    "sei_whale": (20, 100),  # downsweep calls
+    "killer_whale": (500, 8000),  # pulsed calls + whistles
+}
+
+# ── Audio training / balancing constants ─────────────────────
+AUDIO_MAX_SEGMENTS_PER_SPECIES = 2000  # cap to prevent class domination
+AUDIO_AUGMENT_TARGET = 500  # floor for underrepresented species
+AUDIO_CNN_EARLY_STOP_PATIENCE = 7  # stop if val F1 doesn't improve for N epochs
+
+# Augmentation hyper-parameters
+AUDIO_AUG_TIME_STRETCH_RANGE = (0.9, 1.1)  # rate multiplier
+AUDIO_AUG_PITCH_SHIFT_RANGE = (-2.0, 2.0)  # semitones
+AUDIO_AUG_NOISE_SNR_RANGE = (15.0, 30.0)  # dB
+AUDIO_AUG_TIME_SHIFT_FRACTION = 0.25  # ±25 % of segment length

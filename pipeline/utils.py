@@ -220,3 +220,44 @@ def table_row_count(table: str) -> int:
     finally:
         conn.close()
     return count
+
+
+# ── SHAP / XGBoost compatibility ────────────────────────────
+
+
+def patch_shap_for_xgboost3():
+    """Fix SHAP 0.49 + XGBoost 3.x base_score format incompatibility.
+
+    XGBoost ≥3.0 stores learner_model_param values (including
+    base_score) as bracket-wrapped strings like '[5E-1]' in the raw
+    UBJSON model dump.  SHAP < 0.50 reads the model via
+    ``save_raw(raw_format="ubj")`` → ``decode_ubjson_buffer()`` and
+    calls ``float()`` on base_score, which fails on the brackets.
+
+    This patches ``shap.explainers._tree.decode_ubjson_buffer`` to
+    strip brackets from all ``learner_model_param`` string values
+    before SHAP parses them.  Safe to call multiple times (no-op if
+    already patched).
+    """
+    import shap.explainers._tree as _tree_mod
+
+    _orig_decode = _tree_mod.decode_ubjson_buffer
+
+    # Guard against double-patching
+    if getattr(_orig_decode, "_xgb3_patched", False):
+        return
+
+    def _fixed_decode(fd):
+        result = _orig_decode(fd)
+        try:
+            lmp = result["learner"]["learner_model_param"]
+            for key, val in lmp.items():
+                if isinstance(val, str) and val.startswith("[") and val.endswith("]"):
+                    lmp[key] = val.strip("[]")
+        except (KeyError, TypeError, AttributeError):
+            pass
+        return result
+
+    _fixed_decode._xgb3_patched = True
+    _tree_mod.decode_ubjson_buffer = _fixed_decode
+    logger.debug("Patched shap.explainers._tree.decode_ubjson_buffer for XGBoost 3.x")
