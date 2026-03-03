@@ -409,7 +409,11 @@ def load_speed_zones(cur) -> None:
 
 
 def load_ocean_covariates(cur) -> None:
-    """Load ocean covariates (SST, MLD, SLA, PP) into PostGIS.
+    """Load seasonal ocean covariates (SST, MLD, SLA, PP) into PostGIS.
+
+    The parquet file contains (lat, lon, season, sst, sst_sd, mld, sla,
+    pp_upper_200m) — climatological seasonal means from 2019–2024.
+    Geometry is set from lat/lon after bulk insert.
 
     Args:
         cur: psycopg2 cursor.
@@ -421,6 +425,14 @@ def load_ocean_covariates(cur) -> None:
     df = pd.read_parquet(OCEAN_COVARIATES_FILE)
     logger.info("Read %s ocean covariate records", f"{len(df):,}")
 
+    # Ensure season column is present (seasonal parquet)
+    if "season" not in df.columns:
+        logger.error(
+            "Ocean covariates parquet missing 'season' column. "
+            "Re-run merge_to_parquet(force=True) to regenerate."
+        )
+        return
+
     n = bulk_insert(cur, "ocean_covariates", df)
 
     # Set geometry from lat/lon
@@ -429,7 +441,15 @@ def load_ocean_covariates(cur) -> None:
         SET geom = ST_SetSRID(ST_MakePoint(lon, lat), 4326)
         WHERE geom IS NULL;
     """)
-    logger.info("Loaded %s ocean covariate records with geometry", f"{n:,}")
+
+    # Log seasonal breakdown
+    cur.execute(
+        "SELECT season, count(*) FROM ocean_covariates GROUP BY season ORDER BY season;"
+    )
+    for season, count in cur.fetchall():
+        logger.info("  %s: %s rows", season, f"{count:,}")
+
+    logger.info("Loaded %s seasonal ocean covariate records with geometry", f"{n:,}")
 
 
 def load_sma_data(cur) -> None:

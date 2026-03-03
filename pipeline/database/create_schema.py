@@ -187,6 +187,7 @@ CREATE TABLE IF NOT EXISTS ocean_covariates (
     id              SERIAL PRIMARY KEY,
     lat             DOUBLE PRECISION NOT NULL,
     lon             DOUBLE PRECISION NOT NULL,
+    season          VARCHAR(10) NOT NULL,
     sst             DOUBLE PRECISION,
     sst_sd          DOUBLE PRECISION,
     mld             DOUBLE PRECISION,
