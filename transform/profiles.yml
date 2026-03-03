@@ -16,10 +16,10 @@ marine_risk:
   outputs:
     dev:
       type: postgres
-      host: localhost
-      port: 5433
-      user: marine
-      password: marine_dev
-      dbname: marine_risk
+      host: "{{ env_var('MR_DB_HOST', 'localhost') }}"
+      port: "{{ env_var('MR_DB_PORT', '5433') | int }}"
+      user: "{{ env_var('MR_DB_USER', 'marine') }}"
+      password: "{{ env_var('MR_DB_PASSWORD', 'marine_dev') }}"
+      dbname: "{{ env_var('MR_DB_NAME', 'marine_risk') }}"
       schema: public
       threads: 4

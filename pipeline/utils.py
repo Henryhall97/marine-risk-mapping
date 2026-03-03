@@ -6,6 +6,7 @@ assignment that were previously duplicated across multiple scripts.
 
 import logging
 import time
+from contextlib import contextmanager
 
 import h3
 import pandas as pd
@@ -117,77 +118,75 @@ def assign_h3_cells(
     """
     t0 = time.time()
 
-    conn = psycopg2.connect(**DB_CONFIG)
-    cur = conn.cursor()
+    with get_db_connection() as conn:
+        cur = conn.cursor()
 
-    # ── Read source points ────────────────────────────────
-    logger.info("Reading %s from PostGIS...", source_table)
-    cur.execute(f"""
-        SELECT {id_column}, {lat_column}, {lon_column}
-        FROM {source_table}
-        WHERE {lat_column} IS NOT NULL
-          AND {lon_column} IS NOT NULL
-    """)
-    rows = cur.fetchall()
-    logger.info("Read %s records", f"{len(rows):,}")
+        # ── Read source points ────────────────────────────────
+        logger.info("Reading %s from PostGIS...", source_table)
+        cur.execute(f"""
+            SELECT {id_column}, {lat_column}, {lon_column}
+            FROM {source_table}
+            WHERE {lat_column} IS NOT NULL
+              AND {lon_column} IS NOT NULL
+        """)
+        rows = cur.fetchall()
+        logger.info("Read %s records", f"{len(rows):,}")
 
-    # ── Assign H3 cells ──────────────────────────────────
-    logger.info("Assigning H3 resolution-%d cells...", H3_RESOLUTION)
-    records = []
-    for row_id, lat, lon in rows:
-        cell_hex = h3.latlng_to_cell(lat, lon, H3_RESOLUTION)
-        cell_int = int(cell_hex, 16)
-        cell_lat, cell_lon = h3.cell_to_latlng(cell_hex)
-        records.append((row_id, cell_int, cell_lat, cell_lon))
+        # ── Assign H3 cells ──────────────────────────────────
+        logger.info("Assigning H3 resolution-%d cells...", H3_RESOLUTION)
+        records = []
+        for row_id, lat, lon in rows:
+            cell_hex = h3.latlng_to_cell(lat, lon, H3_RESOLUTION)
+            cell_int = int(cell_hex, 16)
+            cell_lat, cell_lon = h3.cell_to_latlng(cell_hex)
+            records.append((row_id, cell_int, cell_lat, cell_lon))
 
-    unique_cells = len({r[1] for r in records})
-    logger.info(
-        "Assigned %s cells (%d unique)",
-        f"{len(records):,}",
-        unique_cells,
-    )
-
-    # ── Write to PostGIS ──────────────────────────────────
-    logger.info("Writing %s table...", target_table)
-
-    cur.execute(f"DROP TABLE IF EXISTS {target_table} CASCADE;")
-    cur.execute(f"""
-        CREATE TABLE {target_table} (
-            {fk_column}  INTEGER          NOT NULL
-                         REFERENCES {fk_reference},
-            h3_cell      BIGINT           NOT NULL,
-            cell_lat     DOUBLE PRECISION NOT NULL,
-            cell_lon     DOUBLE PRECISION NOT NULL,
-            PRIMARY KEY ({fk_column})
-        );
-    """)
-
-    batch_size = 10_000
-    total = len(records)
-    for i in range(0, total, batch_size):
-        batch = records[i : i + batch_size]
-        execute_values(
-            cur,
-            f"INSERT INTO {target_table} "
-            f"({fk_column}, h3_cell, cell_lat, cell_lon) "
-            "VALUES %s",
-            batch,
+        unique_cells = len({r[1] for r in records})
+        logger.info(
+            "Assigned %s cells (%d unique)",
+            f"{len(records):,}",
+            unique_cells,
         )
-        if (i + batch_size) % 100_000 == 0 or i + batch_size >= total:
-            logger.info(
-                "  Inserted %s / %s",
-                f"{min(i + batch_size, total):,}",
-                f"{total:,}",
+
+        # ── Write to PostGIS ──────────────────────────────────
+        logger.info("Writing %s table...", target_table)
+
+        cur.execute(f"DROP TABLE IF EXISTS {target_table} CASCADE;")
+        cur.execute(f"""
+            CREATE TABLE {target_table} (
+                {fk_column}  INTEGER          NOT NULL
+                             REFERENCES {fk_reference},
+                h3_cell      BIGINT           NOT NULL,
+                cell_lat     DOUBLE PRECISION NOT NULL,
+                cell_lon     DOUBLE PRECISION NOT NULL,
+                PRIMARY KEY ({fk_column})
+            );
+        """)
+
+        batch_size = 10_000
+        total = len(records)
+        for i in range(0, total, batch_size):
+            batch = records[i : i + batch_size]
+            execute_values(
+                cur,
+                f"INSERT INTO {target_table} "
+                f"({fk_column}, h3_cell, cell_lat, cell_lon) "
+                "VALUES %s",
+                batch,
             )
+            if (i + batch_size) % 100_000 == 0 or (i + batch_size >= total):
+                logger.info(
+                    "  Inserted %s / %s",
+                    f"{min(i + batch_size, total):,}",
+                    f"{total:,}",
+                )
 
-    cur.execute(f"""
-        CREATE INDEX {index_name}
-            ON {target_table} (h3_cell);
-    """)
+        cur.execute(f"""
+            CREATE INDEX {index_name}
+                ON {target_table} (h3_cell);
+        """)
 
-    conn.commit()
-    cur.close()
-    conn.close()
+        cur.close()
 
     elapsed = time.time() - t0
     logger.info(
@@ -204,21 +203,52 @@ def assign_h3_cells(
 # ── Database helpers ────────────────────────────────────────
 
 
+@contextmanager
+def get_db_connection(*, autocommit=False):
+    """Context manager for psycopg2 connections.
+
+    Commits on clean exit, rolls back on exception, always closes.
+
+    Usage::
+
+        with get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT 1")
+
+    Args:
+        autocommit: If True, set ``conn.autocommit = True`` so
+            each statement commits immediately (useful for DDL).
+    """
+    conn = psycopg2.connect(**DB_CONFIG)
+    if autocommit:
+        conn.autocommit = True
+    try:
+        yield conn
+        if not autocommit:
+            conn.commit()
+    except Exception:
+        if not autocommit:
+            conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def get_connection():
-    """Open a psycopg2 connection using the shared DB_CONFIG."""
+    """Open a psycopg2 connection using the shared DB_CONFIG.
+
+    Prefer ``get_db_connection()`` context manager for new code.
+    """
     return psycopg2.connect(**DB_CONFIG)
 
 
 def table_row_count(table: str) -> int:
     """Return the row count of a PostGIS table."""
-    conn = psycopg2.connect(**DB_CONFIG)
-    try:
+    with get_db_connection() as conn:
         cur = conn.cursor()
         cur.execute(f"SELECT COUNT(*) FROM {table};")
         count = cur.fetchone()[0]
         cur.close()
-    finally:
-        conn.close()
     return count
 
 

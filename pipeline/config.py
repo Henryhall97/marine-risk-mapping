@@ -3,20 +3,24 @@
 Single source of truth for database credentials, H3 resolution,
 geographic bounding box, and file paths used across ingestion,
 aggregation, and database scripts.
+
+Database credentials are read from environment variables (MR_DB_*)
+with local dev defaults so nothing breaks without a .env file.
 """
 
+import os
 from pathlib import Path
 
 # ── Project root (two levels up from this file) ────────────
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-# ── Database connection (matches docker-compose.yml) ────────
+# ── Database connection (env vars override defaults) ────────
 DB_CONFIG: dict[str, str | int] = {
-    "host": "localhost",
-    "port": 5433,
-    "dbname": "marine_risk",
-    "user": "marine",
-    "password": "marine_dev",
+    "host": os.environ.get("MR_DB_HOST", "localhost"),
+    "port": int(os.environ.get("MR_DB_PORT", "5433")),
+    "dbname": os.environ.get("MR_DB_NAME", "marine_risk"),
+    "user": os.environ.get("MR_DB_USER", "marine"),
+    "password": os.environ.get("MR_DB_PASSWORD", "marine_dev"),
 }
 
 # ── H3 spatial indexing ─────────────────────────────────────
