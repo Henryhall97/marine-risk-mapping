@@ -32,9 +32,13 @@ years are most relevant for SDM training.
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import xarray as xr
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 from pipeline.config import OCEAN_DIR, US_BBOX_WIDE
 
@@ -291,124 +295,187 @@ def download_pp_copernicus() -> Path:
     return output_file
 
 
+# ── Helpers ──────────────────────────────────────────────────────────
+def _load_sst_climatology(
+    output_dir: Path,
+) -> tuple[xr.DataArray, xr.DataArray, np.ndarray, np.ndarray] | None:
+    """Load SST monthly NetCDF and compute 12-month climatological means.
+
+    Returns (sst_clim, sst_sd_clim, target_lats, target_lons) or None.
+    """
+    sst_file = output_dir / "sst_monthly.nc"
+    if not sst_file.exists():
+        logger.error("SST file not found — run download_sst_erddap() first")
+        return None
+
+    ds_sst = xr.open_dataset(sst_file)
+    target_lats = ds_sst["latitude"].values
+    target_lons = ds_sst["longitude"].values
+
+    sst_clim = ds_sst["sst"].groupby("time.month").mean(dim="time")
+    sst_sd_clim = ds_sst["sst_sd"].groupby("time.month").mean(dim="time")
+    ds_sst.close()
+
+    return sst_clim, sst_sd_clim, target_lats, target_lons
+
+
+def _load_mld_sla_climatology(
+    output_dir: Path,
+    target_lats: np.ndarray,
+    target_lons: np.ndarray,
+) -> dict[str, xr.DataArray]:
+    """Load MLD/SLA monthly NetCDF and regrid to SST 0.25° grid."""
+    mld_file = output_dir / "mld_sla_monthly.nc"
+    result: dict[str, xr.DataArray] = {}
+    if not mld_file.exists():
+        logger.warning("MLD/SLA file not found — skipping")
+        return result
+
+    logger.info("Regridding MLD/SLA from 1/12° to 0.25°...")
+    ds_phy = xr.open_dataset(mld_file)
+
+    for var in ["mld", "sla"]:
+        if var in ds_phy:
+            clim = ds_phy[var].groupby("time.month").mean(dim="time")
+            regridded = clim.interp(
+                latitude=target_lats,
+                longitude=target_lons,
+                method="nearest",
+            )
+            result[var] = regridded
+
+    ds_phy.close()
+    return result
+
+
+def _load_pp_climatology(
+    output_dir: Path,
+    target_lats: np.ndarray,
+    target_lons: np.ndarray,
+) -> dict[str, xr.DataArray]:
+    """Load PP monthly NetCDF and align to SST 0.25° grid."""
+    pp_file = output_dir / "pp_monthly.nc"
+    result: dict[str, xr.DataArray] = {}
+    if not pp_file.exists():
+        logger.warning("PP file not found — skipping")
+        return result
+
+    logger.info("Processing primary productivity...")
+    ds_bgc = xr.open_dataset(pp_file)
+
+    if "pp_upper_200m" in ds_bgc:
+        clim = ds_bgc["pp_upper_200m"].groupby("time.month").mean(dim="time")
+        if not np.array_equal(clim.latitude.values, target_lats):
+            clim = clim.interp(
+                latitude=target_lats,
+                longitude=target_lons,
+                method="nearest",
+            )
+        result["pp_upper_200m"] = clim
+
+    ds_bgc.close()
+    return result
+
+
+def _log_covariate_summary(df: pd.DataFrame, ocean_cols: list[str]) -> None:
+    """Log summary statistics for ocean covariate columns."""
+    logger.info("--- Covariate summary ---")
+    for col in ocean_cols:
+        if col in df.columns:
+            valid = df[col].notna().sum()
+            if valid > 0:
+                logger.info(
+                    "  %s: %s valid values, range [%.2f, %.2f]",
+                    col,
+                    f"{valid:,}",
+                    df[col].min(),
+                    df[col].max(),
+                )
+            else:
+                logger.info("  %s: 0 valid values", col)
+
+
 # ── Merge all covariates to a uniform grid ───────────────────────────
-def merge_to_parquet() -> Path:
-    """Merge all ocean covariates onto a common 0.25° grid.
+def merge_to_parquet(force: bool = False) -> Path:
+    """Merge all ocean covariates onto a common 0.25° grid at seasonal grain.
 
     Regrid higher-resolution data (MLD/SLA at 1/12°) to the 0.25° SST
-    grid, compute climatological monthly means (12 months), and save
-    as a flat parquet file ready for PostGIS loading.
+    grid, compute climatological seasonal means (4 seasons), and save
+    as a flat parquet file with a ``season`` column ready for PostGIS.
+
+    Seasons follow the SEASONS dict from pipeline.config:
+      winter = [12, 1, 2], spring = [3, 4, 5],
+      summer = [6, 7, 8],  fall = [9, 10, 11].
 
     Returns:
         Path to the saved parquet file.
     """
+    import pandas as pd
+
+    from pipeline.config import SEASONS
+
     output_file = OUTPUT_DIR / "ocean_covariates.parquet"
-    if output_file.exists():
+    if output_file.exists() and not force:
         logger.info("Merged parquet already exists: %s", output_file)
         return output_file
 
-    # Load SST (already at 0.25°, monthly)
-    sst_file = OUTPUT_DIR / "sst_monthly.nc"
-    if not sst_file.exists():
-        logger.error("SST file not found — run download_sst_erddap() first")
+    loaded = _load_sst_climatology(OUTPUT_DIR)
+    if loaded is None:
         return output_file
-    ds_sst = xr.open_dataset(sst_file)
+    sst_clim, sst_sd_clim, target_lats, target_lons = loaded
 
-    # Reference grid from SST
-    target_lats = ds_sst["latitude"].values
-    target_lons = ds_sst["longitude"].values
+    # Build month→season lookup from config
+    month_to_season = {}
+    for season_name, months in SEASONS.items():
+        for m in months:
+            month_to_season[m] = season_name
 
-    # Compute climatological monthly means (12 months)
-    logger.info("Computing SST climatological means...")
-    sst_clim = ds_sst["sst"].groupby("time.month").mean(dim="time")
-    sst_sd_clim = ds_sst["sst_sd"].groupby("time.month").mean(dim="time")
+    # Gather all 12-month climatologies (month dim = 1..12)
+    all_vars: dict[str, xr.DataArray] = {
+        "sst": sst_clim,
+        "sst_sd": sst_sd_clim,
+    }
+    all_vars.update(_load_mld_sla_climatology(OUTPUT_DIR, target_lats, target_lons))
+    all_vars.update(_load_pp_climatology(OUTPUT_DIR, target_lats, target_lons))
 
-    # Start with SST annual mean (simplest for SDM)
-    sst_annual = sst_clim.mean(dim="month")
-    sst_sd_annual = sst_sd_clim.mean(dim="month")
+    # Average each variable across the months in each season
+    season_frames: list[pd.DataFrame] = []
+    for season_name, months in SEASONS.items():
+        logger.info("Computing %s means (months %s)...", season_name, months)
+        season_ds = xr.Dataset()
+        for var_name, clim_da in all_vars.items():
+            season_ds[var_name] = clim_da.sel(month=months).mean(dim="month")
 
-    result = xr.Dataset(
-        {
-            "sst": sst_annual,
-            "sst_sd": sst_sd_annual,
-        }
-    )
+        df_season = season_ds.to_dataframe().reset_index()
+        df_season["season"] = season_name
+        season_frames.append(df_season)
 
-    # Load MLD/SLA if available (at 1/12° — regrid to 0.25°)
-    mld_file = OUTPUT_DIR / "mld_sla_monthly.nc"
-    if mld_file.exists():
-        logger.info("Regridding MLD/SLA from 1/12° to 0.25°...")
-        ds_phy = xr.open_dataset(mld_file)
-
-        for var in ["mld", "sla"]:
-            if var in ds_phy:
-                # Climatological mean then regrid via nearest-neighbour
-                clim = ds_phy[var].groupby("time.month").mean(dim="time")
-                annual = clim.mean(dim="month")
-                # Regrid to SST grid
-                regridded = annual.interp(
-                    latitude=target_lats,
-                    longitude=target_lons,
-                    method="nearest",
-                )
-                result[var] = regridded
-
-        ds_phy.close()
-    else:
-        logger.warning("MLD/SLA file not found — skipping")
-
-    # Load PP if available (already at 0.25°)
-    pp_file = OUTPUT_DIR / "pp_monthly.nc"
-    if pp_file.exists():
-        logger.info("Processing primary productivity...")
-        ds_bgc = xr.open_dataset(pp_file)
-
-        if "pp_upper_200m" in ds_bgc:
-            clim = ds_bgc["pp_upper_200m"].groupby("time.month").mean(dim="time")
-            annual = clim.mean(dim="month")
-            # Align to SST grid if needed
-            if not np.array_equal(annual.latitude.values, target_lats):
-                annual = annual.interp(
-                    latitude=target_lats,
-                    longitude=target_lons,
-                    method="nearest",
-                )
-            result["pp_upper_200m"] = annual
-
-        ds_bgc.close()
-    else:
-        logger.warning("PP file not found — skipping")
-
-    # Convert to flat DataFrame
-    logger.info("Converting to flat DataFrame...")
-    df = result.to_dataframe().reset_index()
+    df = pd.concat(season_frames, ignore_index=True)
 
     # Drop NaN-only rows (land cells)
-    ocean_cols = [c for c in df.columns if c not in ("latitude", "longitude")]
+    ocean_cols = [c for c in df.columns if c not in ("latitude", "longitude", "season")]
     df = df.dropna(subset=ocean_cols, how="all")
 
     # Rename for consistency
     df = df.rename(columns={"latitude": "lat", "longitude": "lon"})
 
-    logger.info("Saving %s ocean covariate records to parquet", f"{len(df):,}")
+    # Reorder columns: lat, lon, season, then covariates
+    col_order = ["lat", "lon", "season"] + [
+        c for c in df.columns if c not in ("lat", "lon", "season")
+    ]
+    df = df[col_order]
+
+    logger.info(
+        "Saving %s seasonal ocean covariate records to parquet",
+        f"{len(df):,}",
+    )
     df.to_parquet(output_file, index=False)
 
-    ds_sst.close()
     size_mb = output_file.stat().st_size / 1e6
     logger.info("Saved: %s (%.1f MB)", output_file, size_mb)
 
-    # Summary
-    logger.info("--- Covariate summary ---")
-    for col in ocean_cols:
-        if col in df.columns:
-            valid = df[col].notna().sum()
-            logger.info(
-                "  %s: %s valid values, range [%.2f, %.2f]",
-                col,
-                f"{valid:,}",
-                df[col].min(),
-                df[col].max(),
-            )
+    _log_covariate_summary(df, ocean_cols)
+    logger.info("Seasons: %s", df["season"].value_counts().to_dict())
 
     return output_file
 
