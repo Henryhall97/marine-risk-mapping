@@ -175,7 +175,8 @@ STRIKE_FEATURES_FILE = ML_DIR / "strike_risk_features.parquet"
 SDM_FEATURES_FILE = ML_DIR / "whale_sdm_features.parquet"
 SDM_SEASONAL_FEATURES_FILE = ML_DIR / "whale_sdm_seasonal_features.parquet"
 MLRUNS_DIR = PROJECT_ROOT / "mlruns"
-MLFLOW_TRACKING_URI = f"file://{MLRUNS_DIR}"
+MLFLOW_DB = PROJECT_ROOT / "mlruns.db"
+MLFLOW_TRACKING_URI = f"sqlite:///{MLFLOW_DB}"
 
 # ── Seasons (from dbt vars — meteorological, North Atlantic whale ecology) ──
 SEASONS: dict[str, list[int]] = {
@@ -359,3 +360,56 @@ AUDIO_AUG_TIME_STRETCH_RANGE = (0.9, 1.1)  # rate multiplier
 AUDIO_AUG_PITCH_SHIFT_RANGE = (-2.0, 2.0)  # semitones
 AUDIO_AUG_NOISE_SNR_RANGE = (15.0, 30.0)  # dB
 AUDIO_AUG_TIME_SHIFT_FRACTION = 0.25  # ±25 % of segment length
+
+# ── Photo classification ─────────────────────────────────────
+WHALE_PHOTO_RAW_DIR = RAW_DIR / "whale_photos"
+PHOTO_MODEL_DIR = ML_DIR / "photo_classifier"
+
+# Preprocessing parameters
+PHOTO_IMAGE_SIZE = 224  # 380→224 for faster MPS training
+PHOTO_BATCH_SIZE = 64  # Doubled from 32 — 224px images use ~4× less memory
+PHOTO_EPOCHS = 30  # max epochs (early stopping will cut short)
+PHOTO_LR_HEAD = 1e-4  # learning rate for classifier head
+PHOTO_LR_BACKBONE = 1e-5  # learning rate for backbone (10× lower)
+PHOTO_EARLY_STOP_PATIENCE = 7  # stop if val macro F1 stalls
+PHOTO_LABEL_SMOOTHING = 0.1  # regularises overconfident predictions
+PHOTO_MAX_IMAGES_PER_SPECIES = 5000  # cap dominant classes
+PHOTO_OTHER_PER_SPECIES_CAP = 250  # per non-target species for other_cetacean
+PHOTO_BACKBONE_FREEZE_EPOCHS = 2  # freeze backbone for first N epochs (head warmup)
+
+PHOTO_IMAGENET_MEAN = (0.485, 0.456, 0.406)
+PHOTO_IMAGENET_STD = (0.229, 0.224, 0.225)
+
+# Target species labels (7 target + 1 catch-all for non-target cetaceans)
+# Note: sperm_whale excluded — not present in Happywhale Kaggle dataset
+WHALE_PHOTO_SPECIES: list[str] = [
+    "right_whale",
+    "humpback_whale",
+    "fin_whale",
+    "blue_whale",
+    "minke_whale",
+    "sei_whale",
+    "killer_whale",
+    "other_cetacean",
+]
+
+# The 7 target species (before adding other_cetacean)
+# sperm_whale not in Happywhale dataset (deep divers, rarely surface-photographed)
+WHALE_PHOTO_TARGET_SPECIES: list[str] = [
+    "right_whale",
+    "humpback_whale",
+    "fin_whale",
+    "blue_whale",
+    "minke_whale",
+    "sei_whale",
+    "killer_whale",
+]
+
+# Known label fixes in the Happywhale Kaggle dataset
+HAPPYWHALE_LABEL_FIXES: dict[str, str] = {
+    "globis": "short_finned_pilot_whale",
+    "pilot_whale": "short_finned_pilot_whale",
+    "kiler_whale": "killer_whale",
+    "bottlenose_dolpin": "bottlenose_dolphin",
+    "southern_right_whale": "right_whale",
+}

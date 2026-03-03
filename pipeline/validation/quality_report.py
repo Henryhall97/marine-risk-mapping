@@ -49,7 +49,7 @@ def completeness_report(df: pd.DataFrame, name: str) -> pd.DataFrame:
                 "column": col,
                 "non_null_count": int(non_null),
                 "total_rows": total,
-                "completeness_pct": round(100 * non_null / total, 2),
+                "completeness_pct": round(100 * non_null / total, 2) if total else 0.0,
             }
         )
 
