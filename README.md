@@ -76,6 +76,7 @@ Next.js (React) frontend with Deck.gl for map rendering. Users see an interactiv
 | **Analysis** | Pandas, GeoPandas | Tabular and spatial data manipulation |
 | **Risk Model** | XGBoost, scikit-learn | Binary classification for collision risk prediction |
 | **Audio Classification** | librosa, soundfile, PyTorch | Whale species ID from underwater recordings (XGBoost + CNN) |
+| **Photo Classification** | torchvision (EfficientNet-B4) | Whale species ID from fluke/dorsal/flank photos |
 | **ML Experiment Tracking** | MLflow | Experiment logging, model registry, artifact storage |
 | **Backend API** | FastAPI, Pydantic | REST API with automatic validation and documentation |
 | **Frontend** | Next.js (React), TypeScript | Modern web application framework |
@@ -167,6 +168,37 @@ uv run python pipeline/analysis/train_audio_classifier.py --tune
 uv run python pipeline/analysis/train_audio_classifier.py --backend cnn --epochs 30
 ```
 
+### Photo Classification
+
+Single-stage EfficientNet-B4 fine-tuned from ImageNet weights classifies 8 whale species from user-submitted fluke, dorsal fin, and flank photographs, plus a 9th `other_cetacean` class (stratified from ~22 non-target Happywhale species) for graceful rejection of dolphin/porpoise submissions.  Trained on the [Happywhale](https://www.kaggle.com/c/happy-whale-and-dolphin) Kaggle dataset (~51K images across 30 species).
+
+| Property | Value |
+|----------|-------|
+| **Architecture** | EfficientNet-B4 (19M params), classifier head → `nn.Linear(1792, 9)` |
+| **Input resolution** | 380 × 380 (native B4 resolution) |
+| **Optimizer** | AdamW, differential LR: 1e-4 (head), 1e-5 (backbone) |
+| **Scheduler** | CosineAnnealingLR, early stopping patience 7 on val macro F1 |
+| **Balancing** | Per-species image cap (5K) + stratified `other_cetacean` (250/species) + WeightedRandomSampler + label smoothing (0.1) |
+| **Target species** | right, humpback, fin, blue, sperm, minke, sei, killer whale + `other_cetacean` |
+
+**Why single-stage?** The Happywhale dataset has no body-part annotations — a two-stage pipeline (detect body part → classify species) would require manual labelling thousands of images.  A single CNN learns view-invariant features automatically, and 8-class species classification is a much easier target than 15K-class individual re-ID.
+
+### Photo Classification Scripts
+
+```bash
+# Download and filter Happywhale training images (requires Kaggle API key)
+uv run python pipeline/ingestion/download_whale_photos.py
+
+# Train EfficientNet-B4 species classifier
+uv run python pipeline/analysis/train_photo_classifier.py
+
+# With Optuna hyperparameter tuning
+uv run python pipeline/analysis/train_photo_classifier.py --tune
+
+# Evaluate an existing model
+uv run python pipeline/analysis/train_photo_classifier.py --evaluate-only
+```
+
 ## 📊 Data Sources
 
 | Dataset | Source | Format | Description |
@@ -182,6 +214,7 @@ uv run python pipeline/analysis/train_audio_classifier.py --backend cnn --epochs
 | Nisi et al. 2024 ISDM Training | [GitHub: annanisi/Global_Whale_Ship](https://github.com/annanisi/Global_Whale_Ship) | CSV | 548K presence/absence records for 4 whale species + 7 environmental covariates |
 | Watkins Sound Database | [WHOI](https://whoicf2.whoi.edu/science/B/whalesounds/) | WAV/AIF | ~15K whale vocalisation clips across 8 target species |
 | Zenodo Whale Audio | [Zenodo](https://zenodo.org/) | WAV | Annotated recordings: blue (3624145), humpback (4293955), fin (8147524) |
+| Happywhale Photos | [Kaggle](https://www.kaggle.com/c/happy-whale-and-dolphin) | JPG + CSV | ~51K whale/dolphin photos; filtered to 8 target species for classification |
 
 ## � Manual Data Prerequisites
 
@@ -230,6 +263,7 @@ marine_risk_mapping/
 │   ├── database/          # PostGIS schema & data loading, DuckDB views
 │   ├── aggregation/       # AIS H3 aggregation (DuckDB two-pass pipeline)
 │   ├── audio/             # Whale audio classification (preprocessing + classifier)
+│   ├── photo/             # Whale photo classification (EfficientNet-B4 + preprocessing)
 │   ├── analysis/          # ML training, evaluation, validation scripts
 │   └── validation/        # Pandera schemas & data quality reports
 ├── transform/             # dbt project (SQL transformations)
@@ -352,16 +386,29 @@ marine_risk_mapping/
 | 7b.7 | Train CNN classifier (99.3% accuracy, 99.4% F1, early stopping) | ✅ |
 | 7b.8 | Audio classification PDF report (17 pages, 7 diagrams) | ✅ |
 
+### Phase 7c: Photo Classification
+
+| Step | Task | Status |
+|------|------|--------|
+| 7c.1 | Photo preprocessing pipeline (EfficientNet-B4 transforms, dataset class, EXIF GPS) | ✅ |
+| 7c.2 | Classifier framework (EfficientNet-B4 fine-tune, H3 risk enrichment) | ✅ |
+| 7c.3 | Training data download script (Happywhale Kaggle dataset) | ✅ |
+| 7c.4 | Training pipeline (stratified split, differential LR, early stopping, MLflow) | ✅ |
+| 7c.5 | Download training data and train model | ⬜ |
+| 7c.6 | Photo classification PDF report | ⬜ |
+
 ### Phase 8: FastAPI Backend
 
 | Step | Task | Status |
 |------|------|--------|
-| 8.1 | Set up FastAPI project structure | ⬜ |
-| 8.2 | Build risk score endpoints | ⬜ |
-| 8.3 | Build spatial query endpoints | ⬜ |
-| 8.4 | Add authentication and rate limiting | ⬜ |
-| 8.5 | Write API documentation | ⬜ |
-| 8.6 | Whale sighting submission endpoint (POST /api/sightings) | ⬜ |
+| 8.1 | Set up FastAPI project structure (app, config, lifespan, CORS) | ✅ |
+| 8.2 | Build risk score endpoints (4 routes: zones, stats, detail, seasonal) | ✅ |
+| 8.3 | Build species + traffic + photo endpoints (4 routes) | ✅ |
+| 8.4 | Pydantic models + service layer + DB pool | ✅ |
+| 8.5 | Backend pytest suite (23 tests, all passing) | ✅ |
+| 8.6 | Add authentication and rate limiting | ⬜ |
+| 8.7 | Write API documentation | ⬜ |
+| 8.8 | Whale sighting submission endpoint (POST /api/sightings) | ⬜ |
 
 ### Phase 9: Frontend Dashboard
 
