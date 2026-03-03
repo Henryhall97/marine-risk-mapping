@@ -68,13 +68,14 @@ vars:
   risk_weight_protection_gap: 0.10
   risk_weight_reference: 0.05
 
-  # ML-enhanced 8-sub-score model (fct_collision_risk_ml)
-  risk_ml_weight_interaction: 0.25
+  # ML-enhanced 7-sub-score model (fct_collision_risk_ml)
+  # No habitat sub-score — ISDM predictions already encode habitat
+  # via the 7 environmental covariates they were trained on.
+  risk_ml_weight_interaction: 0.30
   risk_ml_weight_traffic: 0.15
-  risk_ml_weight_whale_ml: 0.10
+  risk_ml_weight_whale_ml: 0.15
   risk_ml_weight_proximity: 0.15
   risk_ml_weight_strike: 0.10
-  risk_ml_weight_habitat: 0.10
   risk_ml_weight_protection_gap: 0.10
   risk_ml_weight_reference: 0.05
 
@@ -111,7 +112,13 @@ vars:
   strike_w_fatal: 0.35
   strike_w_baleen: 0.25
 
-  # Habitat suitability (shelf + edge + depth zone)
+  # Habitat suitability — two-level weighting:
+  #   Outer:  bathymetry (geomorphology) vs ocean (productivity)
+  #   Inner:  shelf / edge / depth zone within the bathymetry component
+  # TODO: revisit ocean weight — ISDM shows PP ranks 5th-6th (9-13%)
+  #   across all 4 species.  See TODO.md for full rationale.
+  habitat_w_bathymetry: 0.80
+  habitat_w_ocean: 0.20
   habitat_w_shelf: 0.50
   habitat_w_edge: 0.30
   habitat_w_depth_zone: 0.20

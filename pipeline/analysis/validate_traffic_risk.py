@@ -30,12 +30,19 @@ import psycopg2
 from scipy import stats
 
 from pipeline.config import (
+    CETACEAN_SCORE_WEIGHTS,
     COLLISION_RISK_ML_WEIGHTS,
     COLLISION_RISK_WEIGHTS,
     DB_CONFIG,
+    HABITAT_BATHY_WEIGHTS,
+    HABITAT_SCORE_WEIGHTS,
     ML_DIR,
+    PROXIMITY_SCORE_WEIGHTS,
+    STRIKE_SCORE_WEIGHTS,
+    TRAFFIC_SCORE_WEIGHTS,
     VT_LETHALITY_BETA0,
     VT_LETHALITY_BETA1,
+    WHALE_ML_SCORE_WEIGHTS,
 )
 
 logging.basicConfig(
@@ -99,43 +106,27 @@ def check_weight_sums() -> bool:
     log.info("  ML composite weights sum:         %.6f  [%s]", ml_sum, status)
     all_ok = all_ok and ok
 
-    # 8-component traffic sub-score weights
-    traffic_weights = {
-        "speed_lethality": 0.20,
-        "high_speed_fraction": 0.10,
-        "vessels": 0.20,
-        "large_vessels": 0.10,
-        "draft_risk": 0.10,
-        "draft_risk_fraction": 0.05,
-        "commercial": 0.10,
-        "night_traffic": 0.15,
-    }
-    tw_sum = sum(traffic_weights.values())
-    ok = abs(tw_sum - 1.0) < 1e-9
-    status = "PASS" if ok else "FAIL"
-    log.info("  Traffic sub-score weights sum:    %.6f  [%s]", tw_sum, status)
-    all_ok = all_ok and ok
-
-    # Cetacean sub-score
-    cetacean_sum = 0.35 + 0.35 + 0.30
-    ok = abs(cetacean_sum - 1.0) < 1e-9
-    status = "PASS" if ok else "FAIL"
-    log.info("  Cetacean sub-score weights sum:   %.6f  [%s]", cetacean_sum, status)
-    all_ok = all_ok and ok
-
-    # Strike sub-score
-    strike_sum = 0.40 + 0.35 + 0.25
-    ok = abs(strike_sum - 1.0) < 1e-9
-    status = "PASS" if ok else "FAIL"
-    log.info("  Strike sub-score weights sum:     %.6f  [%s]", strike_sum, status)
-    all_ok = all_ok and ok
-
-    # Proximity sub-score
-    prox_sum = 0.45 + 0.30 + 0.25
-    ok = abs(prox_sum - 1.0) < 1e-9
-    status = "PASS" if ok else "FAIL"
-    log.info("  Proximity sub-score weights sum:  %.6f  [%s]", prox_sum, status)
-    all_ok = all_ok and ok
+    # All sub-score weight dicts from pipeline.config (single source of truth)
+    sub_score_dicts = [
+        ("Traffic", TRAFFIC_SCORE_WEIGHTS),
+        ("Cetacean", CETACEAN_SCORE_WEIGHTS),
+        ("Whale ML", WHALE_ML_SCORE_WEIGHTS),
+        ("Strike", STRIKE_SCORE_WEIGHTS),
+        ("Habitat (outer)", HABITAT_SCORE_WEIGHTS),
+        ("Habitat (bathy)", HABITAT_BATHY_WEIGHTS),
+        ("Proximity", PROXIMITY_SCORE_WEIGHTS),
+    ]
+    for label, weights in sub_score_dicts:
+        w_sum = sum(weights.values())
+        ok = abs(w_sum - 1.0) < 1e-9
+        status = "PASS" if ok else "FAIL"
+        log.info(
+            "  %-28s %.6f  [%s]",
+            f"{label} sub-score weights sum:",
+            w_sum,
+            status,
+        )
+        all_ok = all_ok and ok
 
     log.info("")
     return all_ok
@@ -916,17 +907,8 @@ def check_weight_perturbation() -> bool:
     for raw_col, pctl_col in components:
         df[pctl_col] = df[raw_col].fillna(0).rank(pct=True)
 
-    # Baseline weights
-    base_weights = {
-        "pctl_speed_lethality": 0.20,
-        "pctl_high_speed_fraction": 0.10,
-        "pctl_vessels": 0.20,
-        "pctl_large_vessels": 0.10,
-        "pctl_draft_risk": 0.10,
-        "pctl_draft_risk_fraction": 0.05,
-        "pctl_commercial": 0.10,
-        "pctl_night_traffic": 0.15,
-    }
+    # Derive from central config — prefix with pctl_ to match DataFrame columns
+    base_weights = {f"pctl_{k}": v for k, v in TRAFFIC_SCORE_WEIGHTS.items()}
 
     def compute_traffic_score(weights: dict) -> pd.Series:
         score = pd.Series(0.0, index=df.index)

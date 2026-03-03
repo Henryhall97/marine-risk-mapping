@@ -5,8 +5,13 @@
 --   - Traffic: seasonal aggregate from int_vessel_traffic_seasonal
 --   - Cetacean: seasonal sightings from int_cetacean_density_seasonal
 --   - Speed zones: only zones active in that season
+--   - Ocean covariates: seasonal SST/MLD/SLA/PP from Copernicus
 -- Static inputs reused across all seasons:
---   - Bathymetry, proximity, strike history, MPA, Nisi, ocean covariates
+--   - Bathymetry, proximity, strike history, MPA, Nisi
+--
+-- See fct_collision_risk.sql header for full methodology notes
+-- (relative scoring, expert-elicited weights, strike binary nature,
+-- proximity overlap rationale, species variation).
 --
 -- Percentile ranking is done WITHIN each season so sub-scores
 -- are comparable across seasons (each season has its own 0–1 scale).
@@ -204,7 +209,11 @@ ranked as (
 
         -- Nisi reference percentile
         percent_rank() over (partition by season order by coalesce(nisi_all_risk, 0))
-            as pctl_nisi_risk
+            as pctl_nisi_risk,
+
+        -- Ocean productivity percentile (higher PP = better whale habitat)
+        percent_rank() over (partition by season order by coalesce(pp_upper_200m, 0))
+            as pctl_ocean_productivity
 
     from features
 

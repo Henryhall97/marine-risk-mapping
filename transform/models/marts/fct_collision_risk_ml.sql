@@ -12,15 +12,27 @@
 --   3. Per-species probabilities allow species-weighted risk (endangered
 --      species like right whale can get higher weight in future).
 --
--- Sub-score architecture (8 sub-scores, interaction-first):
---   - Whale×traffic interaction 25%  (P(whale) × traffic_threat — PRIMARY)
+-- TODO: species-vulnerability-weighted composite — replace equal-weight
+-- any_whale_prob with Σ wᵢ·Pᵢ where wᵢ reflects IUCN status or
+-- population size.  See TODO.md for details.
+--
+-- Sub-score architecture (7 sub-scores, interaction-first):
+--   - Whale×traffic interaction 30%  (P(whale) × traffic_threat — PRIMARY)
 --   - Traffic threat      15%  (V&T lethality, draft, volume, vessel type, night)
---   - Whale exposure      10%  (residual ML whale presence)
+--   - Whale exposure      15%  (residual ML whale presence)
 --   - Proximity           15%  (unchanged)
 --   - Strike history      10%  (unchanged)
---   - Habitat suitability 10%  (unchanged)
 --   - Protection gap      10%  (unchanged)
 --   - Reference risk       5%  (unchanged)
+--
+-- Habitat suitability is deliberately OMITTED from the ML mart.
+-- The ISDM models were trained on all 7 environmental covariates
+-- (SST, MLD, SLA, PP, depth, depth_range), so habitat information
+-- is already encoded in the whale probability predictions.  Including
+-- a separate hand-tuned habitat sub-score would double-count that
+-- signal.  This provides clean separation: the standard mart uses
+-- expert-elicited habitat weights, the ML mart delegates habitat
+-- entirely to the learned species distribution models.
 --
 -- The interaction score captures Rockwood et al. (2021) co-occurrence:
 --   risk = P(whale present) × P(lethal encounter | traffic).
@@ -225,7 +237,11 @@ ranked as (
 
         -- Nisi reference percentile
         percent_rank() over (partition by season order by coalesce(nisi_all_risk, 0))
-            as pctl_nisi_risk
+            as pctl_nisi_risk,
+
+        -- Ocean productivity percentile (higher PP = better whale habitat)
+        percent_rank() over (partition by season order by coalesce(pp_upper_200m, 0))
+            as pctl_ocean_productivity
 
     from features
 
@@ -245,8 +261,9 @@ scored as (
         -- ── Strike history sub-score ────────────────────────────
         {{ strike_score() }} as strike_score,
 
-        -- ── Habitat suitability ─────────────────────────────────
-        {{ habitat_score() }} as habitat_score,
+        -- (No habitat sub-score — ISDM predictions already encode
+        --  habitat via the 7 env covariates they were trained on.
+        --  See weighted_risk_score.sql header for rationale.)
 
         -- ── Protection gap ──────────────────────────────────────
         {{ protection_gap_score() }} as protection_gap,
@@ -310,7 +327,6 @@ select
     round(whale_ml_score::numeric, 4)          as whale_ml_score,
     round(proximity_score::numeric, 4)         as proximity_score,
     round(strike_score::numeric, 4)            as strike_score,
-    round(habitat_score::numeric, 4)           as habitat_score,
     round(protection_gap::numeric, 4)          as protection_gap,
     round(reference_risk_score::numeric, 4)    as reference_risk_score,
 

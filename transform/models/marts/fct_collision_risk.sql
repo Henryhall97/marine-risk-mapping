@@ -3,7 +3,11 @@
 -- Joins all intermediate domains onto the hex grid and computes
 -- a composite risk score on a 0–1 scale (higher = more dangerous).
 --
--- Methodology:
+-- ═══════════════════════════════════════════════════════════════
+-- METHODOLOGY
+-- ═══════════════════════════════════════════════════════════════
+--
+-- Pipeline:
 --   1. Aggregate monthly vessel traffic to per-cell summaries
 --   2. LEFT JOIN traffic, cetacean, bathymetry, MPA, proximity,
 --      strike history, speed zones, Nisi reference, ocean covariates
@@ -11,14 +15,39 @@
 --   4. Combine into seven sub-scores via weighted average
 --   5. Final score = weighted sum of sub-scores
 --
--- Sub-score weights (updated):
---   - Traffic threat      25%  (vessel density, speed, size)
---   - Cetacean exposure   25%  (sighting density, vulnerability)
---   - Proximity           15%  (co-location of whales and ships)
---   - Strike history      10%  (historical collision record)
---   - Habitat suitability 10%  (shelf, shelf edge, depth, ocean env)
+-- Sub-score weights (expert-elicited — see notes below):
+--   - Traffic threat      25%  (V&T lethality, draft, volume, vessel type)
+--   - Cetacean exposure   25%  (sighting density, baleen, recency)
+--   - Proximity           15%  (co-location gradients: whale×ship, strike, protection)
+--   - Strike history      10%  (sparse historical hotspot indicator)
+--   - Habitat suitability 10%  (bathymetry 80% + ocean productivity 20%)
 --   - Protection gap      10%  (inverse of MPA/speed zone coverage)
 --   - Reference risk       5%  (Nisi et al. 2024 benchmark)
+--
+-- IMPORTANT — scores are RELATIVE:
+--   All features are percentile-ranked before scoring.  A risk_score
+--   of 0.75 means "higher risk than 75% of cells", NOT a 75%
+--   probability of collision.  This avoids scale-sensitivity across
+--   features with different units (knots, counts, km, boolean).
+--
+-- IMPORTANT — strike sub-score is effectively BINARY:
+--   Only 67 of ~1.8M cells have any ship strike history.  All other
+--   cells share pctl_strikes = 0.  The sub-score acts as a sparse
+--   hotspot flag rather than a graduated risk curve.
+--
+-- IMPORTANT — proximity blend has intentional overlap:
+--   Whale proximity correlates with cetacean density; ship proximity
+--   correlates with traffic intensity.  This is by design: proximity
+--   captures spatial *gradients* (distance to nearest hotspot) while
+--   the density sub-scores capture *magnitude* within each cell.
+--   The geometric mean √(whale_prox × ship_prox) ensures high scores
+--   only where BOTH whales and ships are nearby.
+--
+-- IMPORTANT — weights are expert-elicited, not data-fitted:
+--   Informed by Vanderlaan & Taggart (2007), Rockwood et al. (2021),
+--   Nisi et al. (2024), and NOAA strike reduction strategy.  The
+--   ML-enhanced mart (fct_collision_risk_ml) provides an independent
+--   data-driven comparison via XGBoost feature importance.
 --
 -- Land cells are excluded. Cells with no data for a domain
 -- get zero/null for those features and rank at the bottom.
@@ -259,7 +288,11 @@ ranked as (
 
         -- Nisi reference risk percentile
         percent_rank() over (order by coalesce(nisi_all_risk, 0))
-            as pctl_nisi_risk
+            as pctl_nisi_risk,
+
+        -- Ocean productivity percentile (higher PP = better whale habitat)
+        percent_rank() over (order by coalesce(pp_upper_200m, 0))
+            as pctl_ocean_productivity
 
     from features
 

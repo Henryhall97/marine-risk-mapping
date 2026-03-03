@@ -6,13 +6,25 @@ aggregation, and database scripts.
 
 Database credentials are read from environment variables (MR_DB_*)
 with local dev defaults so nothing breaks without a .env file.
+
+Scoring weights and domain thresholds are read from
+transform/dbt_project.yml so dbt SQL and Python share one
+source of truth — no manual sync required.
 """
 
 import os
 from pathlib import Path
 
+import yaml
+
 # ── Project root (two levels up from this file) ────────────
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# ── Load dbt vars (single source of truth for shared constants) ──
+_DBT_PROJECT_FILE = PROJECT_ROOT / "transform" / "dbt_project.yml"
+with open(_DBT_PROJECT_FILE) as _f:
+    _dbt_cfg = yaml.safe_load(_f)
+_DBT_VARS: dict = _dbt_cfg.get("vars", {})
 
 # ── Database connection (env vars override defaults) ────────
 DB_CONFIG: dict[str, str | int] = {
@@ -55,8 +67,8 @@ DEEP_DRAFT_M = 8  # Deep-draft vessel
 # ── Vanderlaan & Taggart (2007) speed-lethality logistic ─────
 # P(lethal | speed) = 1 / (1 + exp(-(β₀ + β₁ × speed_knots)))
 # Fitted to 40 observed whale-vessel collisions with known outcomes.
-VT_LETHALITY_BETA0 = -4.89  # Intercept
-VT_LETHALITY_BETA1 = 0.41  # Speed coefficient (per knot)
+VT_LETHALITY_BETA0: float = _DBT_VARS["vt_lethality_beta0"]
+VT_LETHALITY_BETA1: float = _DBT_VARS["vt_lethality_beta1"]
 
 # ── Day/night boundaries (local solar hour) ──────────────────
 NIGHT_START_HOUR = 20  # 8 PM local
@@ -66,21 +78,21 @@ NIGHT_END_HOUR = 6  # 6 AM local
 PROXIMITY_HALF_LIFE_WHALE_KM = 10.0
 PROXIMITY_HALF_LIFE_STRIKE_KM = 25.0
 PROXIMITY_HALF_LIFE_PROTECTION_KM = 50.0
-PROXIMITY_DISTANCE_CAP_KM = 700.0
-PROXIMITY_PROTECTION_CAP_KM = 1000.0
+PROXIMITY_DISTANCE_CAP_KM: float = _DBT_VARS["proximity_distance_cap_km"]
+PROXIMITY_PROTECTION_CAP_KM: float = _DBT_VARS["proximity_protection_cap_km"]
 
 # Derived decay rates: λ = ln(2) / half-life
 _LN2 = 0.693147180559945
-PROXIMITY_LAMBDA_WHALE = _LN2 / PROXIMITY_HALF_LIFE_WHALE_KM  # ≈ 0.0693
-PROXIMITY_LAMBDA_STRIKE = _LN2 / PROXIMITY_HALF_LIFE_STRIKE_KM  # ≈ 0.0277
-PROXIMITY_LAMBDA_PROTECTION = _LN2 / PROXIMITY_HALF_LIFE_PROTECTION_KM  # ≈ 0.01386
+PROXIMITY_LAMBDA_WHALE: float = _DBT_VARS["proximity_whale_lambda"]
+PROXIMITY_LAMBDA_STRIKE: float = _DBT_VARS["proximity_strike_lambda"]
+PROXIMITY_LAMBDA_PROTECTION: float = _DBT_VARS["proximity_protection_lambda"]
 
 # ── Bathymetry classification (metres, negative = below sea level)
-SHELF_DEPTH_M = -200  # Continental shelf break
-SLOPE_DEPTH_M = -1000  # Slope–abyssal boundary
+SHELF_DEPTH_M: int = _DBT_VARS["shelf_depth_m"]
+SLOPE_DEPTH_M: int = _DBT_VARS["slope_depth_m"]
 
 # ── Cetacean analysis ────────────────────────────────────────
-CETACEAN_RECENT_YEAR = 2019  # "Recent" sighting cutoff year
+CETACEAN_RECENT_YEAR: int = _DBT_VARS["cetacean_recent_year"]
 BALEEN_FAMILIES: tuple[str, ...] = (
     "Balaenopteridae",  # Rorquals: blue, fin, humpback, minke
     "Balaenidae",  # Right whales
@@ -165,12 +177,12 @@ SDM_SEASONAL_FEATURES_FILE = ML_DIR / "whale_sdm_seasonal_features.parquet"
 MLRUNS_DIR = PROJECT_ROOT / "mlruns"
 MLFLOW_TRACKING_URI = f"file://{MLRUNS_DIR}"
 
-# ── Seasons (meteorological, aligned with North Atlantic whale ecology) ──
+# ── Seasons (from dbt vars — meteorological, North Atlantic whale ecology) ──
 SEASONS: dict[str, list[int]] = {
-    "winter": [12, 1, 2],  # Right whale calving (SE US), low survey effort
-    "spring": [3, 4, 5],  # Northward migration, SMAs activate
-    "summer": [6, 7, 8],  # Feeding season (Gulf of Maine), peak surveys
-    "fall": [9, 10, 11],  # Southward migration, SMAs deactivate
+    "winter": _DBT_VARS["season_winter_months"],
+    "spring": _DBT_VARS["season_spring_months"],
+    "summer": _DBT_VARS["season_summer_months"],
+    "fall": _DBT_VARS["season_fall_months"],
 }
 SEASON_ORDER: list[str] = ["winter", "spring", "summer", "fall"]
 
@@ -178,99 +190,101 @@ SEASON_ORDER: list[str] = ["winter", "spring", "summer", "fall"]
 H3_CV_RESOLUTION = 2  # ~158 km edge — parent cells for CV fold grouping
 N_CV_FOLDS = 5
 
-# ── Collision risk sub-score weights ────────────────────────
-# Must stay in sync with risk_weight_* vars in dbt_project.yml.
+# ── Collision risk sub-score weights (from dbt vars) ────────
+# dbt_project.yml is the single source of truth.
 COLLISION_RISK_WEIGHTS: dict[str, float] = {
-    "traffic_score": 0.25,
-    "cetacean_score": 0.25,
-    "proximity_score": 0.15,
-    "strike_score": 0.10,
-    "habitat_score": 0.10,
-    "protection_gap": 0.10,
-    "reference_risk_score": 0.05,
+    "traffic_score": _DBT_VARS["risk_weight_traffic"],
+    "cetacean_score": _DBT_VARS["risk_weight_cetacean"],
+    "proximity_score": _DBT_VARS["risk_weight_proximity"],
+    "strike_score": _DBT_VARS["risk_weight_strike"],
+    "habitat_score": _DBT_VARS["risk_weight_habitat"],
+    "protection_gap": _DBT_VARS["risk_weight_protection_gap"],
+    "reference_risk_score": _DBT_VARS["risk_weight_reference"],
 }
 
 # ── ML-enhanced collision risk weights ──────────────────────
 COLLISION_RISK_ML_WEIGHTS: dict[str, float] = {
-    "interaction_score": 0.25,
-    "traffic_score": 0.15,
-    "whale_ml_score": 0.10,
-    "proximity_score": 0.15,
-    "strike_score": 0.10,
-    "habitat_score": 0.10,
-    "protection_gap": 0.10,
-    "reference_risk_score": 0.05,
+    "interaction_score": _DBT_VARS["risk_ml_weight_interaction"],
+    "traffic_score": _DBT_VARS["risk_ml_weight_traffic"],
+    "whale_ml_score": _DBT_VARS["risk_ml_weight_whale_ml"],
+    "proximity_score": _DBT_VARS["risk_ml_weight_proximity"],
+    "strike_score": _DBT_VARS["risk_ml_weight_strike"],
+    "protection_gap": _DBT_VARS["risk_ml_weight_protection_gap"],
+    "reference_risk_score": _DBT_VARS["risk_ml_weight_reference"],
 }
 
 # ── Risk category thresholds (score >= threshold → label) ──
-# Must stay in sync with risk_threshold_* vars in dbt_project.yml.
 RISK_THRESHOLDS: dict[str, float] = {
-    "critical": 0.70,
-    "high": 0.50,
-    "medium": 0.35,
-    "low": 0.20,
-    # Anything below 0.20 → "minimal" (implicit)
+    "critical": _DBT_VARS["risk_threshold_critical"],
+    "high": _DBT_VARS["risk_threshold_high"],
+    "medium": _DBT_VARS["risk_threshold_medium"],
+    "low": _DBT_VARS["risk_threshold_low"],
+    # Anything below low threshold → "minimal" (implicit)
 }
 
 # ── Sub-score internal weights ──────────────────────────────
-# Must stay in sync with matching vars in dbt_project.yml.
 
 TRAFFIC_SCORE_WEIGHTS: dict[str, float] = {
-    "speed_lethality": 0.20,
-    "high_speed_fraction": 0.10,
-    "vessels": 0.20,
-    "large_vessels": 0.10,
-    "draft_risk": 0.10,
-    "draft_risk_fraction": 0.05,
-    "commercial": 0.10,
-    "night_traffic": 0.15,
+    "speed_lethality": _DBT_VARS["traffic_w_speed_lethality"],
+    "high_speed_fraction": _DBT_VARS["traffic_w_high_speed_fraction"],
+    "vessels": _DBT_VARS["traffic_w_vessels"],
+    "large_vessels": _DBT_VARS["traffic_w_large_vessels"],
+    "draft_risk": _DBT_VARS["traffic_w_draft_risk"],
+    "draft_risk_fraction": _DBT_VARS["traffic_w_draft_risk_fraction"],
+    "commercial": _DBT_VARS["traffic_w_commercial"],
+    "night_traffic": _DBT_VARS["traffic_w_night_traffic"],
 }
 
 CETACEAN_SCORE_WEIGHTS: dict[str, float] = {
-    "sightings": 0.35,
-    "baleen": 0.35,
-    "recent": 0.30,
+    "sightings": _DBT_VARS["cetacean_w_sightings"],
+    "baleen": _DBT_VARS["cetacean_w_baleen"],
+    "recent": _DBT_VARS["cetacean_w_recent"],
 }
 
 WHALE_ML_SCORE_WEIGHTS: dict[str, float] = {
-    "any": 0.50,
-    "max": 0.30,
-    "mean": 0.20,
+    "any": _DBT_VARS["whale_ml_w_any"],
+    "max": _DBT_VARS["whale_ml_w_max"],
+    "mean": _DBT_VARS["whale_ml_w_mean"],
 }
 
 STRIKE_SCORE_WEIGHTS: dict[str, float] = {
-    "total": 0.40,
-    "fatal": 0.35,
-    "baleen": 0.25,
+    "total": _DBT_VARS["strike_w_total"],
+    "fatal": _DBT_VARS["strike_w_fatal"],
+    "baleen": _DBT_VARS["strike_w_baleen"],
 }
 
 HABITAT_SCORE_WEIGHTS: dict[str, float] = {
-    "shelf": 0.50,
-    "edge": 0.30,
-    "depth_zone": 0.20,
+    "bathymetry": _DBT_VARS["habitat_w_bathymetry"],
+    "ocean": _DBT_VARS["habitat_w_ocean"],
+}
+
+HABITAT_BATHY_WEIGHTS: dict[str, float] = {
+    "shelf": _DBT_VARS["habitat_w_shelf"],
+    "edge": _DBT_VARS["habitat_w_edge"],
+    "depth_zone": _DBT_VARS["habitat_w_depth_zone"],
 }
 
 DEPTH_ZONE_SCORES: dict[str, float] = {
-    "shelf": 1.0,
-    "slope": 0.5,
-    "abyssal": 0.1,
+    "shelf": _DBT_VARS["depth_zone_shelf"],
+    "slope": _DBT_VARS["depth_zone_slope"],
+    "abyssal": _DBT_VARS["depth_zone_abyssal"],
 }
 
 PROXIMITY_SCORE_WEIGHTS: dict[str, float] = {
-    "whale_ship": 0.45,
-    "strike": 0.30,
-    "protection": 0.25,
+    "whale_ship": _DBT_VARS["proximity_w_whale_ship"],
+    "strike": _DBT_VARS["proximity_w_strike"],
+    "protection": _DBT_VARS["proximity_w_protection"],
 }
 
 PROTECTION_GAP_SCORES: dict[str, float] = {
-    "sma_and_notake": 0.1,
-    "sma_only": 0.2,
-    "proposed_and_mpa": 0.3,
-    "notake_only": 0.3,
-    "proposed_only": 0.4,
-    "strict_mpa": 0.5,
-    "any_mpa": 0.7,
-    "none": 1.0,
+    "sma_and_notake": _DBT_VARS["protection_sma_and_notake"],
+    "sma_only": _DBT_VARS["protection_sma_only"],
+    "proposed_and_mpa": _DBT_VARS["protection_proposed_and_mpa"],
+    "notake_only": _DBT_VARS["protection_notake_only"],
+    "proposed_only": _DBT_VARS["protection_proposed_only"],
+    "strict_mpa": _DBT_VARS["protection_strict_mpa"],
+    "any_mpa": _DBT_VARS["protection_any_mpa"],
+    "none": _DBT_VARS["protection_none"],
 }
 
 # Validate all sub-score weight sets sum to 1.0
@@ -282,6 +296,7 @@ for _name, _weights in [
     ("WHALE_ML_SCORE_WEIGHTS", WHALE_ML_SCORE_WEIGHTS),
     ("STRIKE_SCORE_WEIGHTS", STRIKE_SCORE_WEIGHTS),
     ("HABITAT_SCORE_WEIGHTS", HABITAT_SCORE_WEIGHTS),
+    ("HABITAT_BATHY_WEIGHTS", HABITAT_BATHY_WEIGHTS),
     ("PROXIMITY_SCORE_WEIGHTS", PROXIMITY_SCORE_WEIGHTS),
 ]:
     _total = round(sum(_weights.values()), 10)
