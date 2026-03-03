@@ -215,72 +215,29 @@ scored as (
     select
         *,
 
-        -- V&T speed-lethality + fractions for improved traffic threat
-        (
-            0.20 * pctl_speed_lethality
-          + 0.10 * pctl_high_speed_fraction
-          + 0.20 * pctl_vessels
-          + 0.10 * pctl_large_vessels
-          + 0.10 * pctl_draft_risk
-          + 0.05 * pctl_draft_risk_fraction
-          + 0.10 * pctl_commercial
-          + 0.15 * pctl_night_traffic
-        ) as traffic_score,
+        {{ traffic_score() }} as traffic_score,
 
-        (
-            0.35 * pctl_sightings
-          + 0.35 * pctl_baleen
-          + 0.30 * pctl_recent_sightings
-        ) as cetacean_score,
+        {{ cetacean_score() }} as cetacean_score,
 
-        (
-            0.40 * pctl_strikes
-          + 0.35 * pctl_fatal_strikes
-          + 0.25 * pctl_baleen_strikes
-        ) as strike_score,
+        {{ strike_score() }} as strike_score,
 
-        (
-            0.50 * coalesce(is_continental_shelf::int, 0)
-          + 0.30 * coalesce(is_shelf_edge::int, 0)
-          + 0.20 * case coalesce(depth_zone, 'unknown')
-                       when 'shelf'   then 1.0
-                       when 'slope'   then 0.5
-                       when 'abyssal' then 0.1
-                       else 0.0
-                   end
-        ) as habitat_score,
+        {{ habitat_score() }} as habitat_score,
 
-        case
-            when coalesce(in_current_sma, false) and coalesce(has_no_take_zone, false)
-                then 0.1
-            when coalesce(in_current_sma, false)
-                then 0.2
-            when coalesce(in_proposed_zone, false) and in_mpa
-                then 0.3
-            when coalesce(has_no_take_zone, false)
-                then 0.3
-            when coalesce(in_proposed_zone, false)
-                then 0.4
-            when coalesce(has_strict_protection, false)
-                then 0.5
-            when in_mpa
-                then 0.7
-            else 1.0
-        end as protection_gap,
+        {{ protection_gap_score() }} as protection_gap,
 
-        (
-            0.45 * sqrt(
-                coalesce(whale_proximity_score, 0)
-              * coalesce(ship_proximity_score, 0)
-            )
-          + 0.30 * coalesce(strike_proximity_score, 0)
-          + 0.25 * (1.0 - coalesce(protection_proximity_score, 0))
-        ) as proximity_score,
+        {{ proximity_score() }} as proximity_score,
 
         pctl_nisi_risk as reference_risk_score
 
     from ranked
 
+),
+
+risk_computed as (
+    select
+        *,
+        {{ weighted_risk_score('standard') }} as risk_score
+    from scored
 )
 
 select
@@ -291,56 +248,10 @@ select
     geom,
 
     -- ── Composite risk score ────────────────────────
-    round((
-        0.25 * traffic_score
-      + 0.25 * cetacean_score
-      + 0.15 * proximity_score
-      + 0.10 * strike_score
-      + 0.10 * habitat_score
-      + 0.10 * protection_gap
-      + 0.05 * reference_risk_score
-    )::numeric, 4) as risk_score,
+    risk_score,
 
     -- ── Risk category ───────────────────────────────
-    case
-        when (
-            0.25 * traffic_score
-          + 0.25 * cetacean_score
-          + 0.15 * proximity_score
-          + 0.10 * strike_score
-          + 0.10 * habitat_score
-          + 0.10 * protection_gap
-          + 0.05 * reference_risk_score
-        ) >= 0.7  then 'critical'
-        when (
-            0.25 * traffic_score
-          + 0.25 * cetacean_score
-          + 0.15 * proximity_score
-          + 0.10 * strike_score
-          + 0.10 * habitat_score
-          + 0.10 * protection_gap
-          + 0.05 * reference_risk_score
-        ) >= 0.5  then 'high'
-        when (
-            0.25 * traffic_score
-          + 0.25 * cetacean_score
-          + 0.15 * proximity_score
-          + 0.10 * strike_score
-          + 0.10 * habitat_score
-          + 0.10 * protection_gap
-          + 0.05 * reference_risk_score
-        ) >= 0.35 then 'medium'
-        when (
-            0.25 * traffic_score
-          + 0.25 * cetacean_score
-          + 0.15 * proximity_score
-          + 0.10 * strike_score
-          + 0.10 * habitat_score
-          + 0.10 * protection_gap
-          + 0.05 * reference_risk_score
-        ) >= 0.2  then 'low'
-        else 'minimal'
-    end as risk_category,
+    {{ risk_category('risk_score') }} as risk_category,
 
     -- ── Sub-scores ──────────────────────────────────
     round(traffic_score::numeric, 4)         as traffic_score,
@@ -361,4 +272,4 @@ select
     in_proposed_zone,
     has_nisi_reference
 
-from scored
+from risk_computed

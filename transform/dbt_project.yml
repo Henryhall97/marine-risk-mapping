@@ -58,6 +58,84 @@ vars:
   season_summer_months: [6, 7, 8]
   season_fall_months: [9, 10, 11]
 
+  # ── Collision risk sub-score weights (must sum to 1.0) ──
+  # Standard 7-sub-score model (fct_collision_risk, fct_collision_risk_seasonal)
+  risk_weight_traffic: 0.25
+  risk_weight_cetacean: 0.25
+  risk_weight_proximity: 0.15
+  risk_weight_strike: 0.10
+  risk_weight_habitat: 0.10
+  risk_weight_protection_gap: 0.10
+  risk_weight_reference: 0.05
+
+  # ML-enhanced 8-sub-score model (fct_collision_risk_ml)
+  risk_ml_weight_interaction: 0.25
+  risk_ml_weight_traffic: 0.15
+  risk_ml_weight_whale_ml: 0.10
+  risk_ml_weight_proximity: 0.15
+  risk_ml_weight_strike: 0.10
+  risk_ml_weight_habitat: 0.10
+  risk_ml_weight_protection_gap: 0.10
+  risk_ml_weight_reference: 0.05
+
+  # Risk category thresholds (score >= threshold → label)
+  risk_threshold_critical: 0.7
+  risk_threshold_high: 0.5
+  risk_threshold_medium: 0.35
+  risk_threshold_low: 0.2
+
+  # ── Sub-score internal weights (must each sum to 1.0) ───
+
+  # Traffic threat (8 percentile components)
+  traffic_w_speed_lethality: 0.20
+  traffic_w_high_speed_fraction: 0.10
+  traffic_w_vessels: 0.20
+  traffic_w_large_vessels: 0.10
+  traffic_w_draft_risk: 0.10
+  traffic_w_draft_risk_fraction: 0.05
+  traffic_w_commercial: 0.10
+  traffic_w_night_traffic: 0.15
+
+  # Cetacean exposure (3 components)
+  cetacean_w_sightings: 0.35
+  cetacean_w_baleen: 0.35
+  cetacean_w_recent: 0.30
+
+  # ML whale exposure (3 components — fct_collision_risk_ml only)
+  whale_ml_w_any: 0.50
+  whale_ml_w_max: 0.30
+  whale_ml_w_mean: 0.20
+
+  # Strike history (3 components)
+  strike_w_total: 0.40
+  strike_w_fatal: 0.35
+  strike_w_baleen: 0.25
+
+  # Habitat suitability (shelf + edge + depth zone)
+  habitat_w_shelf: 0.50
+  habitat_w_edge: 0.30
+  habitat_w_depth_zone: 0.20
+
+  # Depth zone scores (used inside habitat sub-score)
+  depth_zone_shelf: 1.0
+  depth_zone_slope: 0.5
+  depth_zone_abyssal: 0.1
+
+  # Proximity blend (whale×ship, strike, protection gap)
+  proximity_w_whale_ship: 0.45
+  proximity_w_strike: 0.30
+  proximity_w_protection: 0.25
+
+  # Protection gap tiered scores (lower = better protected)
+  protection_sma_and_notake: 0.1
+  protection_sma_only: 0.2
+  protection_proposed_and_mpa: 0.3
+  protection_notake_only: 0.3
+  protection_proposed_only: 0.4
+  protection_strict_mpa: 0.5
+  protection_any_mpa: 0.7
+  protection_none: 1.0
+
 seeds:
   marine_risk:
     species_crosswalk:

@@ -271,91 +271,35 @@ scored as (
         *,
 
         -- ── Traffic threat sub-score (0–1) ────────────
-        -- V&T speed-lethality + high-speed fraction (speed risk),
-        -- vessel volume, size, draft (continuous + fraction),
-        -- commercial vessel type, and night traffic.
-        (
-            0.20 * pctl_speed_lethality
-          + 0.10 * pctl_high_speed_fraction
-          + 0.20 * pctl_vessels
-          + 0.10 * pctl_large_vessels
-          + 0.10 * pctl_draft_risk
-          + 0.05 * pctl_draft_risk_fraction
-          + 0.10 * pctl_commercial
-          + 0.15 * pctl_night_traffic
-        ) as traffic_score,
+        {{ traffic_score() }} as traffic_score,
 
         -- ── Cetacean exposure sub-score (0–1) ─────────
-        -- Captures whale presence and vulnerability
-        (
-            0.35 * pctl_sightings
-          + 0.35 * pctl_baleen
-          + 0.30 * pctl_recent_sightings
-        ) as cetacean_score,
+        {{ cetacean_score() }} as cetacean_score,
 
         -- ── Strike history sub-score (0–1) ────────────
-        -- Historical collision record in this cell
-        -- Fatal and baleen strikes get extra weight
-        (
-            0.40 * pctl_strikes
-          + 0.35 * pctl_fatal_strikes
-          + 0.25 * pctl_baleen_strikes
-        ) as strike_score,
+        {{ strike_score() }} as strike_score,
 
         -- ── Habitat suitability sub-score (0–1) ───────
-        -- Continental shelf and shelf-edge are prime whale habitat
-        (
-            0.50 * coalesce(is_continental_shelf::int, 0)
-          + 0.30 * coalesce(is_shelf_edge::int, 0)
-          + 0.20 * case coalesce(depth_zone, 'unknown')
-                       when 'shelf'   then 1.0
-                       when 'slope'   then 0.5
-                       when 'abyssal' then 0.1
-                       else 0.0
-                   end
-        ) as habitat_score,
+        {{ habitat_score() }} as habitat_score,
 
         -- ── Protection gap sub-score (0–1) ────────────
-        -- Higher = less protected = more risk
-        -- MPA and speed zone coverage mitigate collision risk
-        case
-            when coalesce(in_current_sma, false) and coalesce(has_no_take_zone, false)
-                then 0.1   -- Best: SMA + no-take MPA
-            when coalesce(in_current_sma, false)
-                then 0.2   -- Active speed restriction
-            when coalesce(in_proposed_zone, false) and in_mpa
-                then 0.3   -- Proposed speed zone + MPA
-            when coalesce(has_no_take_zone, false)
-                then 0.3   -- No-take MPA
-            when coalesce(in_proposed_zone, false)
-                then 0.4   -- Proposed speed zone (not yet active)
-            when coalesce(has_strict_protection, false)
-                then 0.5   -- Strict MPA
-            when in_mpa
-                then 0.7   -- Some MPA coverage
-            else 1.0       -- No protection at all
-        end as protection_gap,
+        {{ protection_gap_score() }} as protection_gap,
 
         -- ── Proximity sub-score (0–1) ─────────────────
-        -- Blends co-location of whales/ships with proximity
-        -- to known strike sites and distance from protection.
-        -- Whale-ship overlap is the primary signal; strike
-        -- proximity and protection gap add spatial context.
-        (
-            0.45 * sqrt(
-                coalesce(whale_proximity_score, 0)
-              * coalesce(ship_proximity_score, 0)
-            )
-          + 0.30 * coalesce(strike_proximity_score, 0)
-          + 0.25 * (1.0 - coalesce(protection_proximity_score, 0))
-        ) as proximity_score,
+        {{ proximity_score() }} as proximity_score,
 
         -- ── Reference risk sub-score (0–1) ────────────
-        -- Nisi et al. 2024 published risk as external benchmark
         pctl_nisi_risk as reference_risk_score
 
     from ranked
 
+),
+
+risk_computed as (
+    select
+        *,
+        {{ weighted_risk_score('standard') }} as risk_score
+    from scored
 )
 
 select
@@ -365,57 +309,10 @@ select
     geom,
 
     -- ── Composite risk score ────────────────────────
-    -- 7 sub-scores weighted to 1.0
-    round((
-        0.25 * traffic_score
-      + 0.25 * cetacean_score
-      + 0.15 * proximity_score
-      + 0.10 * strike_score
-      + 0.10 * habitat_score
-      + 0.10 * protection_gap
-      + 0.05 * reference_risk_score
-    )::numeric, 4) as risk_score,
+    risk_score,
 
     -- ── Risk category ───────────────────────────────
-    case
-        when (
-            0.25 * traffic_score
-          + 0.25 * cetacean_score
-          + 0.15 * proximity_score
-          + 0.10 * strike_score
-          + 0.10 * habitat_score
-          + 0.10 * protection_gap
-          + 0.05 * reference_risk_score
-        ) >= 0.7  then 'critical'
-        when (
-            0.25 * traffic_score
-          + 0.25 * cetacean_score
-          + 0.15 * proximity_score
-          + 0.10 * strike_score
-          + 0.10 * habitat_score
-          + 0.10 * protection_gap
-          + 0.05 * reference_risk_score
-        ) >= 0.5  then 'high'
-        when (
-            0.25 * traffic_score
-          + 0.25 * cetacean_score
-          + 0.15 * proximity_score
-          + 0.10 * strike_score
-          + 0.10 * habitat_score
-          + 0.10 * protection_gap
-          + 0.05 * reference_risk_score
-        ) >= 0.35 then 'medium'
-        when (
-            0.25 * traffic_score
-          + 0.25 * cetacean_score
-          + 0.15 * proximity_score
-          + 0.10 * strike_score
-          + 0.10 * habitat_score
-          + 0.10 * protection_gap
-          + 0.05 * reference_risk_score
-        ) >= 0.2  then 'low'
-        else 'minimal'
-    end as risk_category,
+    {{ risk_category('risk_score') }} as risk_category,
 
     -- ── Sub-scores (for interpretability) ───────────
     round(traffic_score::numeric, 4)         as traffic_score,
@@ -514,4 +411,4 @@ select
     dist_to_nearest_strike_km,
     dist_to_nearest_protection_km
 
-from scored
+from risk_computed

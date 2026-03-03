@@ -179,7 +179,7 @@ H3_CV_RESOLUTION = 2  # ~158 km edge — parent cells for CV fold grouping
 N_CV_FOLDS = 5
 
 # ── Collision risk sub-score weights ────────────────────────
-# Must stay in sync with fct_collision_risk.sql
+# Must stay in sync with risk_weight_* vars in dbt_project.yml.
 COLLISION_RISK_WEIGHTS: dict[str, float] = {
     "traffic_score": 0.25,
     "cetacean_score": 0.25,
@@ -191,8 +191,6 @@ COLLISION_RISK_WEIGHTS: dict[str, float] = {
 }
 
 # ── ML-enhanced collision risk weights ──────────────────────
-# Promotes whale×traffic interaction as primary co-occurrence metric.
-# Must stay in sync with fct_collision_risk_ml.sql.
 COLLISION_RISK_ML_WEIGHTS: dict[str, float] = {
     "interaction_score": 0.25,
     "traffic_score": 0.15,
@@ -203,6 +201,97 @@ COLLISION_RISK_ML_WEIGHTS: dict[str, float] = {
     "protection_gap": 0.10,
     "reference_risk_score": 0.05,
 }
+
+# ── Risk category thresholds (score >= threshold → label) ──
+# Must stay in sync with risk_threshold_* vars in dbt_project.yml.
+RISK_THRESHOLDS: dict[str, float] = {
+    "critical": 0.70,
+    "high": 0.50,
+    "medium": 0.35,
+    "low": 0.20,
+    # Anything below 0.20 → "minimal" (implicit)
+}
+
+# ── Sub-score internal weights ──────────────────────────────
+# Must stay in sync with matching vars in dbt_project.yml.
+
+TRAFFIC_SCORE_WEIGHTS: dict[str, float] = {
+    "speed_lethality": 0.20,
+    "high_speed_fraction": 0.10,
+    "vessels": 0.20,
+    "large_vessels": 0.10,
+    "draft_risk": 0.10,
+    "draft_risk_fraction": 0.05,
+    "commercial": 0.10,
+    "night_traffic": 0.15,
+}
+
+CETACEAN_SCORE_WEIGHTS: dict[str, float] = {
+    "sightings": 0.35,
+    "baleen": 0.35,
+    "recent": 0.30,
+}
+
+WHALE_ML_SCORE_WEIGHTS: dict[str, float] = {
+    "any": 0.50,
+    "max": 0.30,
+    "mean": 0.20,
+}
+
+STRIKE_SCORE_WEIGHTS: dict[str, float] = {
+    "total": 0.40,
+    "fatal": 0.35,
+    "baleen": 0.25,
+}
+
+HABITAT_SCORE_WEIGHTS: dict[str, float] = {
+    "shelf": 0.50,
+    "edge": 0.30,
+    "depth_zone": 0.20,
+}
+
+DEPTH_ZONE_SCORES: dict[str, float] = {
+    "shelf": 1.0,
+    "slope": 0.5,
+    "abyssal": 0.1,
+}
+
+PROXIMITY_SCORE_WEIGHTS: dict[str, float] = {
+    "whale_ship": 0.45,
+    "strike": 0.30,
+    "protection": 0.25,
+}
+
+PROTECTION_GAP_SCORES: dict[str, float] = {
+    "sma_and_notake": 0.1,
+    "sma_only": 0.2,
+    "proposed_and_mpa": 0.3,
+    "notake_only": 0.3,
+    "proposed_only": 0.4,
+    "strict_mpa": 0.5,
+    "any_mpa": 0.7,
+    "none": 1.0,
+}
+
+# Validate all sub-score weight sets sum to 1.0
+for _name, _weights in [
+    ("COLLISION_RISK_WEIGHTS", COLLISION_RISK_WEIGHTS),
+    ("COLLISION_RISK_ML_WEIGHTS", COLLISION_RISK_ML_WEIGHTS),
+    ("TRAFFIC_SCORE_WEIGHTS", TRAFFIC_SCORE_WEIGHTS),
+    ("CETACEAN_SCORE_WEIGHTS", CETACEAN_SCORE_WEIGHTS),
+    ("WHALE_ML_SCORE_WEIGHTS", WHALE_ML_SCORE_WEIGHTS),
+    ("STRIKE_SCORE_WEIGHTS", STRIKE_SCORE_WEIGHTS),
+    ("HABITAT_SCORE_WEIGHTS", HABITAT_SCORE_WEIGHTS),
+    ("PROXIMITY_SCORE_WEIGHTS", PROXIMITY_SCORE_WEIGHTS),
+]:
+    _total = round(sum(_weights.values()), 10)
+    if _total != 1.0:
+        raise ValueError(f"{_name} sum to {_total}, expected 1.0")
+
+# Validate thresholds are strictly descending
+_vals = list(RISK_THRESHOLDS.values())
+if _vals != sorted(_vals, reverse=True) or len(set(_vals)) != len(_vals):
+    raise ValueError(f"RISK_THRESHOLDS must be strictly descending: {_vals}")
 
 # ── Audio classification ────────────────────────────────────
 WHALE_AUDIO_RAW_DIR = RAW_DIR / "whale_audio"

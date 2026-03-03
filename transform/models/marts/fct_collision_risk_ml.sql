@@ -237,95 +237,32 @@ scored as (
         *,
 
         -- ── Traffic threat sub-score (V&T lethality + draft) ────
-        (
-            0.20 * pctl_speed_lethality
-          + 0.10 * pctl_high_speed_fraction
-          + 0.20 * pctl_vessels
-          + 0.10 * pctl_large_vessels
-          + 0.10 * pctl_draft_risk
-          + 0.05 * pctl_draft_risk_fraction
-          + 0.10 * pctl_commercial
-          + 0.15 * pctl_night_traffic
-        ) as traffic_score,
+        {{ traffic_score() }} as traffic_score,
 
         -- ── ML whale exposure sub-score (REPLACES raw cetacean_score) ──
-        -- Uses three views of the ML predictions:
-        --   any_whale_prob (50%): P(at least one species present) — broadest signal
-        --   max_whale_prob (30%): most-likely single species — captures hotspots
-        --   mean_whale_prob (20%): average across species — smoothed baseline
-        (
-            0.50 * pctl_any_whale
-          + 0.30 * pctl_max_whale
-          + 0.20 * pctl_mean_whale
-        ) as whale_ml_score,
+        {{ whale_ml_score() }} as whale_ml_score,
 
-        -- ── Strike history sub-score (identical to hand-tuned) ──
-        (
-            0.40 * pctl_strikes
-          + 0.35 * pctl_fatal_strikes
-          + 0.25 * pctl_baleen_strikes
-        ) as strike_score,
+        -- ── Strike history sub-score ────────────────────────────
+        {{ strike_score() }} as strike_score,
 
-        -- ── Habitat suitability (identical to hand-tuned) ──
-        (
-            0.50 * coalesce(is_continental_shelf::int, 0)
-          + 0.30 * coalesce(is_shelf_edge::int, 0)
-          + 0.20 * case coalesce(depth_zone, 'unknown')
-                       when 'shelf'   then 1.0
-                       when 'slope'   then 0.5
-                       when 'abyssal' then 0.1
-                       else 0.0
-                   end
-        ) as habitat_score,
+        -- ── Habitat suitability ─────────────────────────────────
+        {{ habitat_score() }} as habitat_score,
 
-        -- ── Protection gap (identical to hand-tuned) ──
-        case
-            when coalesce(in_current_sma, false) and coalesce(has_no_take_zone, false)
-                then 0.1
-            when coalesce(in_current_sma, false)
-                then 0.2
-            when coalesce(in_proposed_zone, false) and in_mpa
-                then 0.3
-            when coalesce(has_no_take_zone, false)
-                then 0.3
-            when coalesce(in_proposed_zone, false)
-                then 0.4
-            when coalesce(has_strict_protection, false)
-                then 0.5
-            when in_mpa
-                then 0.7
-            else 1.0
-        end as protection_gap,
+        -- ── Protection gap ──────────────────────────────────────
+        {{ protection_gap_score() }} as protection_gap,
 
-        -- ── Proximity sub-score (identical to hand-tuned) ──
-        (
-            0.45 * sqrt(
-                coalesce(whale_proximity_score, 0)
-              * coalesce(ship_proximity_score, 0)
-            )
-          + 0.30 * coalesce(strike_proximity_score, 0)
-          + 0.25 * (1.0 - coalesce(protection_proximity_score, 0))
-        ) as proximity_score,
+        -- ── Proximity sub-score ─────────────────────────────────
+        {{ proximity_score() }} as proximity_score,
 
-        -- ── Reference risk (identical to hand-tuned) ──
+        -- ── Reference risk ──────────────────────────────────────
         pctl_nisi_risk as reference_risk_score,
 
-        -- ── Whale × traffic interaction ────────────────
+        -- ── Whale × traffic interaction ─────────────────────────
         -- P(any whale) × traffic_threat. Promoted to primary
         -- co-occurrence metric (25% of composite). Percentile-ranked
         -- in the interaction_ranked CTE before inclusion.
-        coalesce(any_whale_prob, 0)
-          * (
-              0.20 * pctl_speed_lethality
-            + 0.10 * pctl_high_speed_fraction
-            + 0.20 * pctl_vessels
-            + 0.10 * pctl_large_vessels
-            + 0.10 * pctl_draft_risk
-            + 0.05 * pctl_draft_risk_fraction
-            + 0.10 * pctl_commercial
-            + 0.15 * pctl_night_traffic
-            )
-        as whale_traffic_interaction
+        coalesce(any_whale_prob, 0) * {{ traffic_score() }}
+            as whale_traffic_interaction
 
     from ranked
 
@@ -345,6 +282,13 @@ interaction_ranked as (
 
     from scored
 
+),
+
+risk_computed as (
+    select
+        *,
+        {{ weighted_risk_score('ml') }} as risk_score
+    from interaction_ranked
 )
 
 select
@@ -355,64 +299,10 @@ select
     geom,
 
     -- ── Composite risk score ────────────────────────
-    -- Interaction-first: P(whale) × traffic threat (25%) is the
-    -- primary co-occurrence metric. Residual traffic (15%) and
-    -- whale (10%) capture independent risk dimensions.
-    round((
-        0.25 * interaction_score
-      + 0.15 * traffic_score
-      + 0.10 * whale_ml_score
-      + 0.15 * proximity_score
-      + 0.10 * strike_score
-      + 0.10 * habitat_score
-      + 0.10 * protection_gap
-      + 0.05 * reference_risk_score
-    )::numeric, 4) as risk_score,
+    risk_score,
 
     -- ── Risk category ───────────────────────────────
-    case
-        when (
-            0.25 * interaction_score
-          + 0.15 * traffic_score
-          + 0.10 * whale_ml_score
-          + 0.15 * proximity_score
-          + 0.10 * strike_score
-          + 0.10 * habitat_score
-          + 0.10 * protection_gap
-          + 0.05 * reference_risk_score
-        ) >= 0.7  then 'critical'
-        when (
-            0.25 * interaction_score
-          + 0.15 * traffic_score
-          + 0.10 * whale_ml_score
-          + 0.15 * proximity_score
-          + 0.10 * strike_score
-          + 0.10 * habitat_score
-          + 0.10 * protection_gap
-          + 0.05 * reference_risk_score
-        ) >= 0.5  then 'high'
-        when (
-            0.25 * interaction_score
-          + 0.15 * traffic_score
-          + 0.10 * whale_ml_score
-          + 0.15 * proximity_score
-          + 0.10 * strike_score
-          + 0.10 * habitat_score
-          + 0.10 * protection_gap
-          + 0.05 * reference_risk_score
-        ) >= 0.35 then 'medium'
-        when (
-            0.25 * interaction_score
-          + 0.15 * traffic_score
-          + 0.10 * whale_ml_score
-          + 0.15 * proximity_score
-          + 0.10 * strike_score
-          + 0.10 * habitat_score
-          + 0.10 * protection_gap
-          + 0.05 * reference_risk_score
-        ) >= 0.2  then 'low'
-        else 'minimal'
-    end as risk_category,
+    {{ risk_category('risk_score') }} as risk_category,
 
     -- ── Sub-scores ──────────────────────────────────
     round(interaction_score::numeric, 4)       as interaction_score,
@@ -446,4 +336,4 @@ select
     in_proposed_zone,
     has_nisi_reference
 
-from interaction_ranked
+from risk_computed
