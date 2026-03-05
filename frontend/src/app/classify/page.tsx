@@ -1,0 +1,148 @@
+"use client";
+
+import dynamic from "next/dynamic";
+
+const PhotoClassifier = dynamic(
+  () => import("@/components/PhotoClassifier"),
+  {
+    ssr: false,
+    loading: () => <Skeleton />,
+  },
+);
+
+const AudioClassifier = dynamic(
+  () => import("@/components/AudioClassifier"),
+  {
+    ssr: false,
+    loading: () => <Skeleton />,
+  },
+);
+
+function Skeleton() {
+  return (
+    <div className="flex justify-center py-20">
+      <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-blue-400 border-t-transparent" />
+    </div>
+  );
+}
+
+export default function ClassifyPage() {
+  return (
+    <>
+      <main className="min-h-screen bg-abyss-950 px-4 pb-12 pt-20">
+        {/* Header */}
+        <div className="mx-auto mb-10 max-w-5xl text-center">
+          <h1 className="text-2xl font-bold tracking-tight">
+            🔬 Species Classification
+          </h1>
+          <p className="mt-2 text-sm leading-relaxed text-slate-400">
+            Upload a whale photograph and/or underwater audio recording. Our
+            trained models will identify the species and, with GPS coordinates,
+            provide local collision risk context from our H3 risk grid.
+          </p>
+        </div>
+
+        {/* Side-by-side classifiers */}
+        <div className="mx-auto grid max-w-5xl gap-8 lg:grid-cols-2">
+          {/* Photo classifier */}
+          <section>
+            <div className="mb-4 flex items-center gap-2">
+              <span className="text-2xl">📷</span>
+              <div>
+                <h2 className="text-sm font-semibold text-bioluminescent-400">
+                  Photo Classification
+                </h2>
+                <p className="text-[11px] text-slate-500">
+                  EfficientNet-B4 · 8 species · Happywhale-trained
+                </p>
+              </div>
+            </div>
+            <PhotoClassifier />
+          </section>
+
+          {/* Audio classifier */}
+          <section>
+            <div className="mb-4 flex items-center gap-2">
+              <span className="text-2xl">🎙️</span>
+              <div>
+                <h2 className="text-sm font-semibold text-bioluminescent-400">
+                  Audio Classification
+                </h2>
+                <p className="text-[11px] text-slate-500">
+                  XGBoost / CNN · 8 species · 4s segments
+                </p>
+              </div>
+            </div>
+            <AudioClassifier />
+          </section>
+        </div>
+
+        {/* Model info — both always visible */}
+        <div className="mx-auto mt-16 grid max-w-5xl gap-8 lg:grid-cols-2">
+          <div className="rounded-xl border border-ocean-800 bg-abyss-900/40 p-6">
+            <h3 className="mb-4 text-xs font-semibold uppercase tracking-wider text-slate-400">
+              About the Photo Model
+            </h3>
+            <div className="space-y-3 text-xs leading-relaxed text-slate-500">
+              <p>
+                <strong className="text-slate-300">Architecture:</strong>{" "}
+                EfficientNet-B4 fine-tuned from ImageNet weights. 380×380
+                input, differential learning rates (1e-4 head, 1e-5
+                backbone), cosine annealing scheduler.
+              </p>
+              <p>
+                <strong className="text-slate-300">Training data:</strong>{" "}
+                ~20K filtered images from the Happywhale Kaggle dataset
+                across 7 target species + &quot;other cetacean&quot;
+                rejection class.
+              </p>
+              <p>
+                <strong className="text-slate-300">Species:</strong> Right
+                whale, humpback, fin, blue, minke, sei, killer whale, other
+                cetacean.
+              </p>
+              <p>
+                <strong className="text-slate-300">
+                  Visual features used:
+                </strong>{" "}
+                Fluke patterns, dorsal fin shape, callosities, jaw
+                coloring, saddle patches, flipper bands — learned
+                automatically from mixed body views.
+              </p>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-ocean-800 bg-abyss-900/40 p-6">
+            <h3 className="mb-4 text-xs font-semibold uppercase tracking-wider text-slate-400">
+              About the Audio Model
+            </h3>
+            <div className="space-y-3 text-xs leading-relaxed text-slate-500">
+              <p>
+                <strong className="text-slate-300">Architecture:</strong>{" "}
+                XGBoost on 64 acoustic features (97.9% accuracy) or CNN
+                (ResNet18) on mel spectrograms (99.3% accuracy). Audio is
+                segmented into 4-second windows with 2-second hop.
+              </p>
+              <p>
+                <strong className="text-slate-300">Features:</strong> 20
+                MFCCs (mean + std), spectral centroid/bandwidth/rolloff/
+                flatness, spectral contrast (7 bands), ZCR, RMS energy,
+                dominant frequency, temporal envelope statistics.
+              </p>
+              <p>
+                <strong className="text-slate-300">Training data:</strong>{" "}
+                452 audio files from Watkins Marine Mammal Sound Database +
+                3 Zenodo datasets → 10,185 segments after segmentation.
+              </p>
+              <p>
+                <strong className="text-slate-300">Species:</strong> Right
+                whale, humpback, fin, blue, sperm, minke, sei, killer
+                whale.
+              </p>
+            </div>
+          </div>
+        </div>
+      </main>
+    </>
+  );
+}

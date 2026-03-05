@@ -1,0 +1,39 @@
+{
+  "name": "marine-risk-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --port 3000",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@deck.gl/aggregation-layers": "~9.1.0",
+    "@deck.gl/core": "~9.1.0",
+    "@deck.gl/geo-layers": "~9.1.0",
+    "@deck.gl/layers": "~9.1.0",
+    "@deck.gl/react": "~9.1.0",
+    "@luma.gl/core": "~9.1.0",
+    "@luma.gl/engine": "~9.1.0",
+    "@luma.gl/webgl": "~9.1.0",
+    "deck.gl": "~9.1.0",
+    "h3-js": "^4.2.0",
+    "maplibre-gl": "^4.7.0",
+    "next": "^15.2.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-map-gl": "^7.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "autoprefixer": "^10.4.0",
+    "eslint": "^9.0.0",
+    "eslint-config-next": "^15.2.0",
+    "postcss": "^8.5.0",
+    "tailwindcss": "^3.4.0",
+    "typescript": "^5.7.0"
+  }
+}

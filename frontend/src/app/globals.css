@@ -1,0 +1,228 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ═══════════════════════════════════════════════════════════
+   Whale Watch — Ocean Theme
+   ═══════════════════════════════════════════════════════════ */
+
+/* ── Base reset ──────────────────────────────────────────── */
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* ── CSS custom properties (design tokens) ───────────────── */
+:root {
+  --ocean-primary: #0891b2;
+  --ocean-light: #22d3ee;
+  --ocean-dark: #01323e;
+  --abyss: #060e1c;
+  --abyss-surface: #0b1a30;
+  --abyss-elevated: #142647;
+  --coral-danger: #ff6b6b;
+  --seafoam-safe: #34d399;
+  --bioluminescent: #67e8f9;
+  --text-primary: #e2e8f0;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --border-subtle: rgba(8, 145, 178, 0.12);
+  --border-accent: rgba(34, 211, 238, 0.20);
+  --glass-bg: rgba(11, 26, 48, 0.70);
+  --glass-border: rgba(8, 145, 178, 0.15);
+}
+
+/* ── Selection colour ────────────────────────────────────── */
+::selection {
+  background: rgba(8, 145, 178, 0.35);
+  color: #e2e8f0;
+}
+
+/* ── Custom scrollbar (WebKit) ───────────────────────────── */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--abyss);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(8, 145, 178, 0.25);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(8, 145, 178, 0.45);
+}
+
+/* Firefox scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(8, 145, 178, 0.25) var(--abyss);
+}
+
+/* ── Utility classes ─────────────────────────────────────── */
+@layer utilities {
+  /* Glass-morphism panel */
+  .glass-panel {
+    background: var(--glass-bg);
+    backdrop-filter: blur(16px) saturate(1.4);
+    -webkit-backdrop-filter: blur(16px) saturate(1.4);
+    border: 1px solid var(--glass-border);
+  }
+
+  .glass-panel-strong {
+    background: rgba(11, 26, 48, 0.85);
+    backdrop-filter: blur(24px) saturate(1.6);
+    -webkit-backdrop-filter: blur(24px) saturate(1.6);
+    border: 1px solid rgba(8, 145, 178, 0.20);
+  }
+
+  /* Shimmer highlight for loading / accent */
+  .shimmer {
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(34, 211, 238, 0.08) 50%,
+      transparent 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 3s ease-in-out infinite;
+  }
+
+  /* Ocean-themed text gradient */
+  .text-ocean-gradient {
+    background: linear-gradient(135deg, #22d3ee, #0891b2, #06b6d4);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .text-ocean-bright {
+    background: linear-gradient(135deg, #67e8f9, #22d3ee, #06b6d4);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* Danger/coral gradient */
+  .text-danger-gradient {
+    background: linear-gradient(135deg, #ff8a80, #ff6b6b, #e74c3c);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* Bioluminescent glow behind elements */
+  .glow-ocean {
+    box-shadow: 0 0 30px rgba(34, 211, 238, 0.12),
+                0 0 60px rgba(8, 145, 178, 0.08);
+  }
+
+  .glow-ocean-strong {
+    box-shadow: 0 0 40px rgba(34, 211, 238, 0.20),
+                0 0 80px rgba(8, 145, 178, 0.12);
+  }
+
+  .glow-coral {
+    box-shadow: 0 0 20px rgba(255, 107, 107, 0.15),
+                0 0 40px rgba(231, 76, 60, 0.08);
+  }
+
+  /* Subtle ocean border glow on hover */
+  .border-glow-hover {
+    transition: box-shadow 0.3s ease, border-color 0.3s ease;
+  }
+  .border-glow-hover:hover {
+    border-color: rgba(8, 145, 178, 0.30);
+    box-shadow: 0 0 20px rgba(8, 145, 178, 0.08),
+                inset 0 1px 0 rgba(34, 211, 238, 0.06);
+  }
+
+  /* Animated ocean background for hero / special sections */
+  .bg-ocean-animated {
+    background: linear-gradient(
+      -45deg,
+      #060e1c,
+      #0b1a30,
+      #01323e,
+      #034a5c,
+      #0b1a30,
+      #060e1c
+    );
+    background-size: 400% 400%;
+    animation: gradient-shift 16s ease infinite;
+  }
+
+  /* Depth rings — concentric circles evoking sonar / bathymetry */
+  .depth-ring {
+    border-radius: 50%;
+    border: 1px solid rgba(8, 145, 178, 0.08);
+    animation: glow-pulse 4s ease-in-out infinite;
+  }
+
+  /* Marine stat card */
+  .stat-card {
+    position: relative;
+    overflow: hidden;
+  }
+  .stat-card::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      135deg,
+      rgba(8, 145, 178, 0.05) 0%,
+      transparent 60%
+    );
+    pointer-events: none;
+  }
+}
+
+/* ── Wave keyframes (for SVG wave dividers) ──────────────── */
+@keyframes wave-drift {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+@keyframes bubble-rise {
+  0% {
+    transform: translateY(100%) scale(0.4);
+    opacity: 0;
+  }
+  30% { opacity: 0.6; }
+  100% {
+    transform: translateY(-20%) scale(1);
+    opacity: 0;
+  }
+}
+
+/* ── Marine-themed focus rings ───────────────────────────── */
+*:focus-visible {
+  outline: 2px solid var(--ocean-primary);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ── Smooth scroll ───────────────────────────────────────── */
+html {
+  scroll-behavior: smooth;
+}
+
+/* ── Map overrides (MapLibre canvas) ─────────────────────── */
+.maplibregl-map {
+  font-family: Inter, system-ui, sans-serif;
+}
+.maplibregl-popup-content {
+  background: var(--glass-bg) !important;
+  backdrop-filter: blur(16px) !important;
+  border: 1px solid var(--glass-border) !important;
+  border-radius: 12px !important;
+  color: var(--text-primary) !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4) !important;
+}
+.maplibregl-popup-tip {
+  border-top-color: var(--glass-bg) !important;
+}
