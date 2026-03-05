@@ -222,7 +222,7 @@ Most data is downloaded automatically by the ingestion scripts, but **three data
 
 | Dataset | Source | Expected Path | Why Manual |
 |---------|--------|---------------|------------|
-| GEBCO Bathymetry | [gebco.net](https://www.gebco.net/data_and_products/gridded_bathymetry_data/) | `data/raw/bathymetry/gebco_2025_n49.0_s24.0_w-130.0_e-65.0.tif` | Requires licence acceptance; large extract emailed |
+| GEBCO Bathymetry | [gebco.net](https://www.gebco.net/data_and_products/gridded_bathymetry_data/) | `data/raw/bathymetry/gebco_2025_n52.0_s-2.0_w-180.0_e-59.0.tif` | Requires licence acceptance; large extract emailed |
 | Ship Strike PDF | [NOAA InPort 23127](https://www.fisheries.noaa.gov/inport/item/23127) | `data/raw/cetacean/noaa_23127_DS1.pdf` | No stable direct-download URL |
 | OBIS Occurrences | `s3://obis-open-data/occurrence/` | `data/raw/occurrence/*.parquet` (~6,800 files) | 180 GB bulk export via AWS CLI |
 
@@ -288,6 +288,76 @@ marine_risk_mapping/
 └── tests/                 # Python unit & integration tests
 ```
 
+## 🔌 Backend API
+
+FastAPI REST API with 45 endpoints across 12 route modules, serving collision risk data,
+species distributions, vessel traffic, ML classifications, sighting reports, and community
+features from the dbt marts in PostGIS.
+
+### Quick start
+
+```bash
+uv run uvicorn backend.app:app --reload --port 8000
+# Swagger UI: http://127.0.0.1:8000/docs
+```
+
+### Endpoint groups
+
+| Group | Endpoints | Description |
+|-------|-----------|-------------|
+| **Risk** | 9 | Zones, stats, cell detail, seasonal, ML-enhanced, breakdown, compare |
+| **Layers** | 10 | Bathymetry, ocean, whale predictions, MPA, speed zones, proximity, Nisi, cetacean/strike/traffic density |
+| **Species** | 3 | List, per-species risk, seasonal density |
+| **Traffic** | 2 | Monthly + seasonal aggregates |
+| **Classification** | 2 | Photo (EfficientNet-B4) + Audio (XGBoost/CNN) upload |
+| **Sightings** | 1 | Combined photo+audio+risk report |
+| **Zones** | 3 | GeoJSON geometries for SMAs, proposed zones, MPAs |
+| **Auth** | 6 | Register, login, profile, reputation, credentials |
+| **Submissions** | 6 | CRUD, community verification, public feed |
+| **Macro** | 2 | Coast-wide H3 res-4 overview, bathymetry contours |
+
+### Key patterns
+- JWT authentication with bcrypt password hashing
+- Bbox-validated spatial queries with 100 deg² area limit
+- Paginated responses (default 100, max 5,000)
+- ThreadedConnectionPool (4–30 connections) with RealDictCursor
+- Service layer returns dicts; route handlers build Pydantic models
+- Lazy-loaded ML classifier singletons (photo + audio)
+- Community verification with reputation scoring engine
+
+## 🌐 Frontend Dashboard
+
+Interactive geospatial dashboard built with Next.js 15, React 19, and deck.gl 9.
+
+### Quick start
+
+```bash
+cd frontend
+npm install          # .npmrc enforces legacy-peer-deps for deck.gl compatibility
+npm run dev          # http://localhost:3000 (requires backend on port 8000)
+```
+
+### Map Architecture (dual-resolution)
+
+| Zoom level | Renderer | Data source | Cells |
+|-----------|----------|-------------|-------|
+| **Zoomed out** | `HeatmapLayer` | `macro_risk_overview` (H3 res-4) | 14,176 per season |
+| **Zoomed in** | `H3HexagonLayer` | Full-detail API endpoints (H3 res-7) | Up to 5,000 per viewport |
+
+### 13 switchable layers
+Risk (standard + ML), cetacean density, strike density, whale predictions (ISDM),
+bathymetry, ocean covariates, MPA coverage, speed zones, proximity, Nisi reference,
+traffic density (with 6 sub-metrics), protection gap.
+
+### Traffic density sub-metrics
+Six switchable danger metrics with distinct color ramps: vessel density, speed lethality,
+high-speed fraction, draft risk, night traffic ratio, commercial vessel count.
+Available in both overview heatmap and detail hex view.
+
+### 9 page routes
+Landing (`/`), interactive map (`/map`), sighting report (`/report`),
+classification (`/classify`), community feed (`/community`),
+login, register, profile, submissions management.
 ## �📋 Project Status
 
 ### Phase 1: Project Setup
@@ -355,8 +425,10 @@ marine_risk_mapping/
 |------|------|--------|
 | 6.1 | Dagster project scaffold (constants, definitions) | ✅ |
 | 6.2 | Define Dagster assets for ingestion + dbt | ✅ |
-| 6.3 | Create schedules and sensors | ⬜ |
-| 6.4 | Add monitoring and alerting | ⬜ |
+| 6.3 | Targeted refresh jobs (AIS, sightings, covariates, zones, all) | ✅ |
+| 6.4 | All ingestion/load scripts support `--force` for re-materialisation | ✅ |
+| 6.5 | Create schedules and sensors | ⬜ |
+| 6.6 | Add monitoring and alerting | ⬜ |
 
 ### Phase 7: Risk Model & MLOps
 
@@ -402,24 +474,35 @@ marine_risk_mapping/
 | Step | Task | Status |
 |------|------|--------|
 | 8.1 | Set up FastAPI project structure (app, config, lifespan, CORS) | ✅ |
-| 8.2 | Build risk score endpoints (4 routes: zones, stats, detail, seasonal) | ✅ |
-| 8.3 | Build species + traffic + photo endpoints (4 routes) | ✅ |
-| 8.4 | Pydantic models + service layer + DB pool | ✅ |
-| 8.5 | Backend pytest suite (23 tests, all passing) | ✅ |
-| 8.6 | Add authentication and rate limiting | ⬜ |
-| 8.7 | Write API documentation | ⬜ |
-| 8.8 | Whale sighting submission endpoint (POST /api/sightings) | ⬜ |
+| 8.2 | Build risk score endpoints (9 routes: zones, stats, detail, seasonal, ML×3, breakdown, compare) | ✅ |
+| 8.3 | Build species + traffic + photo + audio endpoints (8 routes) | ✅ |
+| 8.4 | Pydantic models + service layer + DB pool (12 model modules, 14 service modules) | ✅ |
+| 8.5 | Backend pytest suite (223 tests, all passing) | ✅ |
+| 8.6 | Spatial layer overlays (10 endpoints: bathymetry, ocean, whale predictions, MPA, speed zones, proximity, Nisi, cetacean density, strike density, traffic density) | ✅ |
+| 8.7 | Sighting report + zone geometry endpoints (4 routes) | ✅ |
+| 8.8 | JWT authentication (register, login, profile, reputation, credentials) | ✅ |
+| 8.9 | Community submissions (CRUD, verification, public feed) | ✅ |
+| 8.10 | Macro overview (coast-wide H3 res-4 pre-aggregated data + bathymetry contours) | ✅ |
+| 8.11 | Add rate limiting | ⬜ |
+| 8.12 | Write API documentation | ⬜ |
 
 ### Phase 9: Frontend Dashboard
 
 | Step | Task | Status |
 |------|------|--------|
-| 9.1 | Initialise Next.js project | ⬜ |
-| 9.2 | Build map component with Deck.gl | ⬜ |
-| 9.3 | Add risk layer visualisation | ⬜ |
-| 9.4 | Add filtering and controls | ⬜ |
-| 9.5 | Style and polish UI | ⬜ |
-| 9.6 | Crowdsourced whale sighting reporting (user submissions via map) | ⬜ |
+| 9.1 | Initialise Next.js 15 project (React 19 + TypeScript 5.7 + Tailwind 3.4) | ✅ |
+| 9.2 | Build map component with deck.gl 9 (HeatmapLayer + H3HexagonLayer) | ✅ |
+| 9.3 | Add 13 switchable risk/data layers with dual-resolution rendering | ✅ |
+| 9.4 | Sidebar controls (layer, season, species, traffic metric selectors) | ✅ |
+| 9.5 | Cell detail panel (click-to-inspect with full sub-score breakdown) | ✅ |
+| 9.6 | Landing page with animated stats, feature cards, sub-score breakdown | ✅ |
+| 9.7 | Sighting report page (photo + audio upload + GPS + species guess) | ✅ |
+| 9.8 | Classification page (standalone photo/audio classification) | ✅ |
+| 9.9 | JWT auth (login, register, profile pages + AuthContext) | ✅ |
+| 9.10 | Community feed page (verified public sightings) | ✅ |
+| 9.11 | Traffic density layer with 6 switchable danger metrics | ✅ |
+| 9.12 | Macro overview heatmap with per-metric granular data | ✅ |
+| 9.13 | Style and polish UI | ⬜ |
 
 ### Phase 10: Testing
 

@@ -26,6 +26,7 @@ data/
 *.geojson
 !data/.gitkeep
 *.db
+.png
 
 # dbt
 target/
@@ -66,7 +67,9 @@ logs/
 # Environment variables
 .env
 .env.local
-*.lock
+
+# Backup files
+*.bak
 
 # Test coverage
 htmlcov/

@@ -787,6 +787,57 @@ class TestBathymetryLayer:
         r = client.get("/api/v1/layers/bathymetry", params=params)
         assert r.status_code == 400
 
+    def test_default_us_bbox(self, client: TestClient):
+        """No bbox params → uses full US coastal bbox, skips area check."""
+        with (
+            patch(
+                "backend.services.layers.count_bathymetry",
+                return_value=500_000,
+            ),
+            patch(
+                "backend.services.layers.get_bathymetry",
+                return_value=[_SAMPLE_BATHY_ROW],
+            ),
+        ):
+            r = client.get("/api/v1/layers/bathymetry")
+        assert r.status_code == 200
+        assert r.json()["total"] == 500_000
+
+    def test_exclude_land_default(self, client: TestClient):
+        """exclude_land=True by default — service receives True."""
+        with (
+            patch(
+                "backend.services.layers.count_bathymetry",
+                return_value=0,
+            ) as mock_count,
+            patch(
+                "backend.services.layers.get_bathymetry",
+                return_value=[],
+            ) as mock_get,
+        ):
+            client.get("/api/v1/layers/bathymetry", params=_BBOX)
+        mock_count.assert_called_once()
+        assert mock_count.call_args.kwargs["exclude_land"] is True
+        mock_get.assert_called_once()
+        assert mock_get.call_args.kwargs["exclude_land"] is True
+
+    def test_include_land(self, client: TestClient):
+        """exclude_land=false includes land cells."""
+        with (
+            patch(
+                "backend.services.layers.count_bathymetry",
+                return_value=1,
+            ) as mock_count,
+            patch(
+                "backend.services.layers.get_bathymetry",
+                return_value=[{**_SAMPLE_BATHY_ROW, "is_land": True}],
+            ),
+        ):
+            params = {**_BBOX, "exclude_land": "false"}
+            r = client.get("/api/v1/layers/bathymetry", params=params)
+        assert r.status_code == 200
+        assert mock_count.call_args.kwargs["exclude_land"] is False
+
 
 class TestOceanCovariateLayer:
     def test_list_annual(self, client: TestClient):
@@ -844,10 +895,71 @@ class TestOceanCovariateLayer:
         assert r.status_code == 200
         assert r.json()["data"][0]["season"] == "summer"
 
+    def test_season_all(self, client: TestClient):
+        """season=all returns all 4 seasons per cell."""
+        rows = [
+            {
+                "h3_cell": 607252735839895551,
+                "cell_lat": 40.5,
+                "cell_lon": -73.2,
+                "season": s,
+                "sst": 18.5,
+                "sst_sd": 2.1,
+                "mld": 25.0,
+                "sla": 0.02,
+                "pp_upper_200m": 0.45,
+            }
+            for s in ("winter", "spring", "summer", "fall")
+        ]
+        with (
+            patch(
+                "backend.services.layers.count_ocean_covariates",
+                return_value=4,
+            ),
+            patch(
+                "backend.services.layers.get_ocean_covariates",
+                return_value=rows,
+            ),
+        ):
+            params = {**_BBOX, "season": "all"}
+            r = client.get("/api/v1/layers/ocean", params=params)
+        assert r.status_code == 200
+        body = r.json()
+        assert body["total"] == 4
+        seasons = {d["season"] for d in body["data"]}
+        assert seasons == {"winter", "spring", "summer", "fall"}
+
     def test_invalid_season(self, client: TestClient):
         params = {**_BBOX, "season": "autumn"}
         r = client.get("/api/v1/layers/ocean", params=params)
         assert r.status_code == 400
+
+    def test_default_us_bbox(self, client: TestClient):
+        """No bbox params → uses full US coastal bbox, skips area check."""
+        row = {
+            "h3_cell": 607252735839895551,
+            "cell_lat": 40.5,
+            "cell_lon": -73.2,
+            "season": None,
+            "sst": 18.5,
+            "sst_sd": 2.1,
+            "mld": 25.0,
+            "sla": 0.02,
+            "pp_upper_200m": 0.45,
+        }
+        with (
+            patch(
+                "backend.services.layers.count_ocean_covariates",
+                return_value=1_100_000,
+            ),
+            patch(
+                "backend.services.layers.get_ocean_covariates",
+                return_value=[row],
+            ),
+        ):
+            r = client.get("/api/v1/layers/ocean")
+        assert r.status_code == 200
+        assert r.json()["total"] == 1_100_000
 
 
 class TestWhalePredictionLayer:
@@ -903,6 +1015,72 @@ class TestWhalePredictionLayer:
     def test_invalid_species(self, client: TestClient):
         params = {**_BBOX, "species": "narwhal"}
         r = client.get("/api/v1/layers/whale-predictions", params=params)
+        assert r.status_code == 400
+
+
+class TestSdmPredictionLayer:
+    def test_list_sdm_predictions(self, client: TestClient):
+        row = {
+            "h3_cell": 607252735839895551,
+            "cell_lat": 40.5,
+            "cell_lon": -73.2,
+            "season": "winter",
+            "sdm_any_whale": 0.58,
+            "sdm_blue_whale": 0.10,
+            "sdm_fin_whale": 0.30,
+            "sdm_humpback_whale": 0.40,
+            "sdm_sperm_whale": 0.05,
+            "max_whale_prob": 0.40,
+            "mean_whale_prob": 0.21,
+            "any_whale_prob_joint": 0.62,
+        }
+        with (
+            patch(
+                "backend.services.layers.count_sdm_predictions",
+                return_value=1,
+            ),
+            patch(
+                "backend.services.layers.get_sdm_predictions",
+                return_value=[row],
+            ),
+        ):
+            params = {**_BBOX, "season": "winter"}
+            r = client.get(
+                "/api/v1/layers/sdm-predictions",
+                params=params,
+            )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["data"][0]["sdm_any_whale"] == 0.58
+
+    def test_species_filter(self, client: TestClient):
+        with (
+            patch(
+                "backend.services.layers.count_sdm_predictions",
+                return_value=0,
+            ),
+            patch(
+                "backend.services.layers.get_sdm_predictions",
+                return_value=[],
+            ),
+        ):
+            params = {
+                **_BBOX,
+                "species": "blue_whale",
+                "min_probability": 0.5,
+            }
+            r = client.get(
+                "/api/v1/layers/sdm-predictions",
+                params=params,
+            )
+        assert r.status_code == 200
+
+    def test_invalid_species(self, client: TestClient):
+        params = {**_BBOX, "species": "narwhal"}
+        r = client.get(
+            "/api/v1/layers/sdm-predictions",
+            params=params,
+        )
         assert r.status_code == 400
 
 
@@ -1739,3 +1917,321 @@ class TestSightingReport:
         assert body["photo_classification"] is not None
         # Advisory still generated (low risk default)
         assert body["advisory"] is not None
+
+
+# ── Zone geometry endpoints ─────────────────────────────────
+
+
+_SAMPLE_GEOJSON = {
+    "type": "Polygon",
+    "coordinates": [[[-73.0, 40.0], [-72.0, 40.0], [-72.0, 41.0], [-73.0, 40.0]]],
+}
+
+_SAMPLE_MULTI_GEOJSON = {
+    "type": "MultiPolygon",
+    "coordinates": [[[[-73.0, 40.0], [-72.0, 40.0], [-72.0, 41.0], [-73.0, 40.0]]]],
+}
+
+
+class TestCurrentSpeedZones:
+    def test_list_all(self, client: TestClient):
+        rows = [
+            {
+                "id": 1,
+                "zone_name": "Block Island Sound",
+                "zone_abbr": "BIS",
+                "start_month": 11,
+                "start_day": 1,
+                "end_month": 4,
+                "end_day": 30,
+                "season_label": "Nov 01 – Apr 30",
+                "is_active": True,
+                "area_sq_deg": 2.5,
+                "perimeter_deg": 6.1,
+                "geometry": _SAMPLE_GEOJSON,
+            }
+        ]
+        with patch(
+            "backend.services.zones.get_current_speed_zones",
+            return_value=rows,
+        ):
+            r = client.get("/api/v1/zones/speed-zones/current")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["total"] == 1
+        assert body["data"][0]["zone_name"] == "Block Island Sound"
+        assert body["data"][0]["geometry"]["type"] == "Polygon"
+        assert body["data"][0]["is_active"] is True
+
+    def test_active_on_date(self, client: TestClient):
+        """active_on query param is forwarded to the service."""
+        rows = [
+            {
+                "id": 1,
+                "zone_name": "Block Island Sound",
+                "zone_abbr": "BIS",
+                "start_month": 11,
+                "start_day": 1,
+                "end_month": 4,
+                "end_day": 30,
+                "season_label": "Nov 01 – Apr 30",
+                "is_active": False,
+                "area_sq_deg": 2.5,
+                "perimeter_deg": 6.1,
+                "geometry": _SAMPLE_GEOJSON,
+            }
+        ]
+        with patch(
+            "backend.services.zones.get_current_speed_zones",
+            return_value=rows,
+        ) as mock_svc:
+            r = client.get(
+                "/api/v1/zones/speed-zones/current",
+                params={"active_on": "2026-07-15"},
+            )
+        assert r.status_code == 200
+        assert r.json()["data"][0]["is_active"] is False
+        # Verify date was forwarded
+        from datetime import date
+
+        mock_svc.assert_called_once_with(
+            check_date=date(2026, 7, 15),
+        )
+
+    def test_empty_response(self, client: TestClient):
+        with patch(
+            "backend.services.zones.get_current_speed_zones",
+            return_value=[],
+        ):
+            r = client.get("/api/v1/zones/speed-zones/current")
+        assert r.status_code == 200
+        assert r.json()["total"] == 0
+
+
+class TestProposedSpeedZones:
+    def test_list_all(self, client: TestClient):
+        rows = [
+            {
+                "id": 1,
+                "zone_name": "Southeast US",
+                "start_month": 11,
+                "start_day": 1,
+                "end_month": 4,
+                "end_day": 30,
+                "season_label": "Nov 01 – Apr 30",
+                "is_active": True,
+                "area_sq_deg": 5.0,
+                "perimeter_deg": 10.0,
+                "geometry": _SAMPLE_GEOJSON,
+            }
+        ]
+        with patch(
+            "backend.services.zones.get_proposed_speed_zones",
+            return_value=rows,
+        ):
+            r = client.get("/api/v1/zones/speed-zones/proposed")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["total"] == 1
+        assert body["data"][0]["zone_name"] == "Southeast US"
+        assert body["data"][0]["geometry"]["type"] == "Polygon"
+        assert body["data"][0]["is_active"] is True
+
+    def test_active_on_date(self, client: TestClient):
+        """Proposed zone active_on param works like current."""
+        rows = [
+            {
+                "id": 1,
+                "zone_name": "Southeast US",
+                "start_month": 11,
+                "start_day": 1,
+                "end_month": 4,
+                "end_day": 30,
+                "season_label": "Nov 01 – Apr 30",
+                "is_active": True,
+                "area_sq_deg": 5.0,
+                "perimeter_deg": 10.0,
+                "geometry": _SAMPLE_GEOJSON,
+            }
+        ]
+        with patch(
+            "backend.services.zones.get_proposed_speed_zones",
+            return_value=rows,
+        ):
+            r = client.get(
+                "/api/v1/zones/speed-zones/proposed",
+                params={"active_on": "2026-01-15"},
+            )
+        assert r.status_code == 200
+        assert r.json()["data"][0]["is_active"] is True
+
+    def test_empty_response(self, client: TestClient):
+        with patch(
+            "backend.services.zones.get_proposed_speed_zones",
+            return_value=[],
+        ):
+            r = client.get("/api/v1/zones/speed-zones/proposed")
+        assert r.status_code == 200
+        assert r.json()["total"] == 0
+
+
+class TestMPAFeatures:
+    def test_list_with_bbox(self, client: TestClient):
+        rows = [
+            {
+                "id": 42,
+                "site_id": "US_MPA_42",
+                "site_name": "Stellwagen Bank NMS",
+                "gov_level": "Federal",
+                "state": "MA",
+                "protection_level": "Uniform Multiple Use",
+                "managing_agency": "NOAA",
+                "iucn_category": "VI",
+                "established_year": 1992,
+                "area_total_km2": 2181.0,
+                "area_marine_km2": 2181.0,
+                "marine_percent": 100,
+                "geometry": _SAMPLE_MULTI_GEOJSON,
+            }
+        ]
+        with (
+            patch(
+                "backend.services.zones.count_mpa_features",
+                return_value=1,
+            ),
+            patch(
+                "backend.services.zones.get_mpa_features",
+                return_value=rows,
+            ),
+        ):
+            r = client.get("/api/v1/zones/mpas", params=_BBOX)
+        assert r.status_code == 200
+        body = r.json()
+        assert body["total"] == 1
+        assert body["data"][0]["site_name"] == "Stellwagen Bank NMS"
+        assert body["data"][0]["geometry"]["type"] == "MultiPolygon"
+
+    def test_protection_level_filter(self, client: TestClient):
+        with (
+            patch(
+                "backend.services.zones.count_mpa_features",
+                return_value=0,
+            ),
+            patch(
+                "backend.services.zones.get_mpa_features",
+                return_value=[],
+            ),
+        ):
+            r = client.get(
+                "/api/v1/zones/mpas",
+                params={**_BBOX, "protection_level": "No Take"},
+            )
+        assert r.status_code == 200
+        assert r.json()["total"] == 0
+
+    def test_invalid_bbox(self, client: TestClient):
+        r = client.get(
+            "/api/v1/zones/mpas",
+            params={
+                "lat_min": 42.0,
+                "lat_max": 40.0,
+                "lon_min": -74.0,
+                "lon_max": -72.0,
+            },
+        )
+        assert r.status_code == 400
+
+
+class TestIsZoneActive:
+    """Unit tests for the year-wrapping _is_zone_active helper."""
+
+    def test_same_year_range_active(self):
+        from datetime import date
+
+        from backend.services.zones import _is_zone_active
+
+        row = {
+            "start_month": 3,
+            "start_day": 1,
+            "end_month": 7,
+            "end_day": 31,
+        }
+        assert _is_zone_active(row, date(2026, 5, 15)) is True
+
+    def test_same_year_range_inactive(self):
+        from datetime import date
+
+        from backend.services.zones import _is_zone_active
+
+        row = {
+            "start_month": 3,
+            "start_day": 1,
+            "end_month": 7,
+            "end_day": 31,
+        }
+        assert _is_zone_active(row, date(2026, 8, 1)) is False
+
+    def test_wrapping_range_active_before_year_end(self):
+        from datetime import date
+
+        from backend.services.zones import _is_zone_active
+
+        row = {
+            "start_month": 11,
+            "start_day": 1,
+            "end_month": 4,
+            "end_day": 30,
+        }
+        assert _is_zone_active(row, date(2026, 12, 15)) is True
+
+    def test_wrapping_range_active_after_year_start(self):
+        from datetime import date
+
+        from backend.services.zones import _is_zone_active
+
+        row = {
+            "start_month": 11,
+            "start_day": 1,
+            "end_month": 4,
+            "end_day": 30,
+        }
+        assert _is_zone_active(row, date(2026, 2, 1)) is True
+
+    def test_wrapping_range_inactive_summer(self):
+        from datetime import date
+
+        from backend.services.zones import _is_zone_active
+
+        row = {
+            "start_month": 11,
+            "start_day": 1,
+            "end_month": 4,
+            "end_day": 30,
+        }
+        assert _is_zone_active(row, date(2026, 7, 15)) is False
+
+    def test_boundary_start_day(self):
+        from datetime import date
+
+        from backend.services.zones import _is_zone_active
+
+        row = {
+            "start_month": 11,
+            "start_day": 1,
+            "end_month": 4,
+            "end_day": 30,
+        }
+        assert _is_zone_active(row, date(2026, 11, 1)) is True
+
+    def test_boundary_end_day(self):
+        from datetime import date
+
+        from backend.services.zones import _is_zone_active
+
+        row = {
+            "start_month": 11,
+            "start_day": 1,
+            "end_month": 4,
+            "end_day": 30,
+        }
+        assert _is_zone_active(row, date(2026, 4, 30)) is True

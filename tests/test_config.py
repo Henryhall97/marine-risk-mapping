@@ -208,9 +208,9 @@ class TestGeoBounds:
 
         assert US_BBOX["lat_min"] < US_BBOX["lat_max"]
         assert US_BBOX["lon_min"] < US_BBOX["lon_max"]
-        # Should cover continental US + Alaska approaches
-        assert US_BBOX["lat_min"] >= 15
-        assert US_BBOX["lat_max"] <= 75
+        # Covers Galápagos (~-2°) to Aleutians (~52°N)
+        assert US_BBOX["lat_min"] >= -5
+        assert US_BBOX["lat_max"] <= 55
 
     def test_wide_bbox_is_superset(self):
         from pipeline.config import US_BBOX, US_BBOX_WIDE
@@ -375,12 +375,25 @@ class TestProtectionGapScores:
 
         assert PROTECTION_GAP_SCORES["none"] == max(PROTECTION_GAP_SCORES.values())
 
-    def test_sma_and_notake_is_lowest_gap(self):
+    def test_notake_and_sma_is_lowest_gap(self):
         from pipeline.config import PROTECTION_GAP_SCORES
 
-        assert PROTECTION_GAP_SCORES["sma_and_notake"] == min(
+        assert PROTECTION_GAP_SCORES["notake_and_sma"] == min(
             PROTECTION_GAP_SCORES.values()
         )
+
+    def test_no_proposed_tiers(self):
+        """Proposed zones must not appear — they are not real protection."""
+        from pipeline.config import PROTECTION_GAP_SCORES
+
+        for tier in PROTECTION_GAP_SCORES:
+            assert "proposed" not in tier, f"Proposed tier still present: {tier}"
+
+    def test_sma_only_near_unprotected(self):
+        """SMA-only should score much higher (worse) than any MPA tier."""
+        from pipeline.config import PROTECTION_GAP_SCORES
+
+        assert PROTECTION_GAP_SCORES["sma_only"] > PROTECTION_GAP_SCORES["any_mpa"]
 
 
 # ── Depth zone scores ──────────────────────────────────────
