@@ -49,12 +49,16 @@ def get_bathymetry(
     lon_min: float,
     lon_max: float,
     depth_zone: str | None = None,
+    exclude_land: bool = True,
     limit: int = 100,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
     """Query bathymetry cells within a bounding box."""
     where_parts = [_BBOX_WHERE]
     params = _bbox_params(lat_min, lat_max, lon_min, lon_max)
+
+    if exclude_land:
+        where_parts.append("b.is_land = false")
 
     if depth_zone:
         where_parts.append("b.depth_zone = %(depth_zone)s")
@@ -84,10 +88,13 @@ def count_bathymetry(
     lon_min: float,
     lon_max: float,
     depth_zone: str | None = None,
+    exclude_land: bool = True,
 ) -> int:
     """Count bathymetry rows in bbox."""
     where_parts = [_BBOX_WHERE]
     params = _bbox_params(lat_min, lat_max, lon_min, lon_max)
+    if exclude_land:
+        where_parts.append("b.is_land = false")
     if depth_zone:
         where_parts.append("b.depth_zone = %(depth_zone)s")
         params["depth_zone"] = depth_zone
@@ -112,13 +119,27 @@ def get_ocean_covariates(
     limit: int = 100,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
-    """Query ocean covariates — annual mean or seasonal."""
+    """Query ocean covariates — annual mean, single season, or all."""
     params = _bbox_params(lat_min, lat_max, lon_min, lon_max)
     params["limit"] = limit
     params["offset"] = offset
 
-    if season:
-        # Seasonal variant
+    if season == "all":
+        # All 4 seasons — seasonal table, no season filter
+        where = _BBOX_WHERE
+        query = (
+            "SELECT g.h3_cell, g.cell_lat, g.cell_lon, "
+            "  o.season, o.sst, o.sst_sd, o.mld, "
+            "  o.sla, o.pp_upper_200m "
+            "FROM int_hex_grid g "
+            "JOIN int_ocean_covariates_seasonal o "
+            "  ON g.h3_cell = o.h3_cell "
+            f"WHERE {where} "
+            "ORDER BY g.h3_cell, o.season "
+            f"LIMIT %(limit)s OFFSET %(offset)s"
+        )
+    elif season:
+        # Single season
         where_parts = [_BBOX_WHERE]
         where_parts.append("o.season = %(season)s")
         params["season"] = season
@@ -159,7 +180,15 @@ def count_ocean_covariates(
 ) -> int:
     """Count ocean covariate rows in bbox."""
     params = _bbox_params(lat_min, lat_max, lon_min, lon_max)
-    if season:
+    if season == "all":
+        # All 4 seasons — no season filter
+        query = (
+            "SELECT count(*) FROM int_hex_grid g "
+            "JOIN int_ocean_covariates_seasonal o "
+            "  ON g.h3_cell = o.h3_cell "
+            f"WHERE {_BBOX_WHERE}"
+        )
+    elif season:
         where_parts = [_BBOX_WHERE]
         where_parts.append("o.season = %(season)s")
         params["season"] = season
@@ -258,6 +287,93 @@ def count_whale_predictions(
     query = (
         "SELECT count(*) FROM int_hex_grid g "
         "JOIN int_ml_whale_predictions w ON g.h3_cell = w.h3_cell "
+        f"WHERE {where}"
+    )
+    return fetch_scalar(query, params) or 0
+
+
+# ── SDM whale predictions (OBIS-trained) ────────────────────
+
+
+def get_sdm_predictions(
+    lat_min: float,
+    lat_max: float,
+    lon_min: float,
+    lon_max: float,
+    season: str | None = None,
+    species: str | None = None,
+    min_probability: float | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    """Query SDM (OBIS-trained) whale predictions within a bbox."""
+    where_parts = [_BBOX_WHERE]
+    params = _bbox_params(lat_min, lat_max, lon_min, lon_max)
+
+    if season:
+        where_parts.append("s.season = %(season)s")
+        params["season"] = season
+
+    if species and min_probability is not None:
+        col = f"s.sdm_{species}"
+        where_parts.append(f"{col} >= %(min_prob)s")
+        params["min_prob"] = min_probability
+    elif min_probability is not None:
+        where_parts.append("s.sdm_any_whale >= %(min_prob)s")
+        params["min_prob"] = min_probability
+
+    where = " AND ".join(where_parts)
+    params["limit"] = limit
+    params["offset"] = offset
+
+    query = (
+        "SELECT g.h3_cell, g.cell_lat, g.cell_lon, "
+        "  s.season, "
+        "  s.sdm_any_whale, "
+        "  s.sdm_blue_whale, s.sdm_fin_whale, "
+        "  s.sdm_humpback_whale, s.sdm_sperm_whale, "
+        "  s.max_whale_prob, s.mean_whale_prob, "
+        "  s.any_whale_prob_joint "
+        "FROM int_hex_grid g "
+        "JOIN int_sdm_whale_predictions s "
+        "  ON g.h3_cell = s.h3_cell "
+        f"WHERE {where} "
+        "ORDER BY s.sdm_any_whale DESC "
+        f"LIMIT %(limit)s OFFSET %(offset)s"
+    )
+    return fetch_all(query, params)
+
+
+def count_sdm_predictions(
+    lat_min: float,
+    lat_max: float,
+    lon_min: float,
+    lon_max: float,
+    season: str | None = None,
+    species: str | None = None,
+    min_probability: float | None = None,
+) -> int:
+    """Count SDM prediction rows in bbox."""
+    where_parts = [_BBOX_WHERE]
+    params = _bbox_params(lat_min, lat_max, lon_min, lon_max)
+
+    if season:
+        where_parts.append("s.season = %(season)s")
+        params["season"] = season
+
+    if species and min_probability is not None:
+        col = f"s.sdm_{species}"
+        where_parts.append(f"{col} >= %(min_prob)s")
+        params["min_prob"] = min_probability
+    elif min_probability is not None:
+        where_parts.append("s.sdm_any_whale >= %(min_prob)s")
+        params["min_prob"] = min_probability
+
+    where = " AND ".join(where_parts)
+    query = (
+        "SELECT count(*) FROM int_hex_grid g "
+        "JOIN int_sdm_whale_predictions s "
+        "  ON g.h3_cell = s.h3_cell "
         f"WHERE {where}"
     )
     return fetch_scalar(query, params) or 0
@@ -512,7 +628,8 @@ def get_cetacean_density(
         "SELECT g.h3_cell, g.cell_lat, g.cell_lon, "
         "  NULL AS season, "
         "  c.total_sightings, c.unique_species, "
-        "  c.baleen_sightings, c.recent_sightings, "
+        "  c.baleen_whale_sightings AS baleen_sightings, "
+        "  c.recent_sightings, "
         "  c.right_whale_sightings, c.humpback_sightings, "
         "  c.fin_whale_sightings, c.blue_whale_sightings, "
         "  c.sperm_whale_sightings, c.minke_whale_sightings "
@@ -838,7 +955,8 @@ def get_seasonal_species(
     query = (
         "SELECT g.h3_cell, g.cell_lat, g.cell_lon, c.season, "
         "  c.total_sightings, c.unique_species, "
-        "  c.baleen_sightings, c.recent_sightings, "
+        "  c.baleen_whale_sightings AS baleen_sightings, "
+        "  c.recent_sightings, "
         "  c.right_whale_sightings, c.humpback_sightings, "
         "  c.fin_whale_sightings, c.blue_whale_sightings, "
         "  c.sperm_whale_sightings, c.minke_whale_sightings "
@@ -929,6 +1047,90 @@ def count_seasonal_traffic(
     season: str | None = None,
 ) -> int:
     """Count seasonal traffic rows in bbox."""
+    where_parts = [_BBOX_WHERE]
+    params = _bbox_params(lat_min, lat_max, lon_min, lon_max)
+    if season:
+        where_parts.append("t.season = %(season)s")
+        params["season"] = season
+    where = " AND ".join(where_parts)
+    query = (
+        "SELECT count(*) FROM int_hex_grid g "
+        "JOIN int_vessel_traffic_seasonal t "
+        "  ON g.h3_cell = t.h3_cell "
+        f"WHERE {where}"
+    )
+    return fetch_scalar(query, params) or 0
+
+
+# ── Traffic density ─────────────────────────────────────────
+
+
+def get_traffic_density(
+    lat_min: float,
+    lat_max: float,
+    lon_min: float,
+    lon_max: float,
+    season: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    """Query detailed traffic metrics from int_vessel_traffic_seasonal.
+
+    Returns the 8 composite traffic sub-score inputs plus supporting
+    fields so the frontend can render hex cells coloured by any
+    danger metric.
+    """
+    where_parts = [_BBOX_WHERE]
+    params = _bbox_params(lat_min, lat_max, lon_min, lon_max)
+
+    if season:
+        where_parts.append("t.season = %(season)s")
+        params["season"] = season
+
+    where = " AND ".join(where_parts)
+    params["limit"] = limit
+    params["offset"] = offset
+
+    query = (
+        "SELECT g.h3_cell, g.cell_lat, g.cell_lon, "
+        "  t.season, "
+        "  t.months_active, "
+        "  t.total_pings, "
+        "  t.avg_monthly_vessels, "
+        "  t.avg_speed_knots, "
+        "  t.peak_speed_knots, "
+        "  t.avg_high_speed_fraction, "
+        "  t.avg_speed_lethality, "
+        "  t.avg_vessel_length_m, "
+        "  t.avg_deep_draft_vessels, "
+        "  t.avg_draft_risk_fraction, "
+        "  t.avg_large_vessels, "
+        "  t.avg_commercial_vessels, "
+        "  t.avg_fishing_vessels, "
+        "  t.avg_passenger_vessels, "
+        "  t.avg_night_vessels, "
+        "  t.avg_night_high_speed, "
+        "  t.night_traffic_ratio, "
+        "  t.avg_cog_diversity, "
+        "  t.avg_draft_imputed_m "
+        "FROM int_hex_grid g "
+        "JOIN int_vessel_traffic_seasonal t "
+        "  ON g.h3_cell = t.h3_cell "
+        f"WHERE {where} "
+        "ORDER BY t.avg_monthly_vessels DESC NULLS LAST "
+        f"LIMIT %(limit)s OFFSET %(offset)s"
+    )
+    return fetch_all(query, params)
+
+
+def count_traffic_density(
+    lat_min: float,
+    lat_max: float,
+    lon_min: float,
+    lon_max: float,
+    season: str | None = None,
+) -> int:
+    """Count traffic density rows in bbox."""
     where_parts = [_BBOX_WHERE]
     params = _bbox_params(lat_min, lat_max, lon_min, lon_max)
     if season:

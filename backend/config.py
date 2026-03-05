@@ -6,7 +6,7 @@ settings (pagination limits, CORS origins, rate limits).
 
 from __future__ import annotations
 
-from pipeline.config import DB_CONFIG
+from pipeline.config import DB_CONFIG, US_BBOX  # noqa: F401 — re-exported
 
 # ── Database ────────────────────────────────────────────────
 DATABASE_URL = (

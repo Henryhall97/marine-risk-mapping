@@ -8,7 +8,12 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query
 
-from backend.config import DEFAULT_PAGE_SIZE, MAX_BBOX_AREA_DEG2, MAX_PAGE_SIZE
+from backend.config import (
+    DEFAULT_PAGE_SIZE,
+    MAX_BBOX_AREA_DEG2,
+    MAX_PAGE_SIZE,
+    US_BBOX,
+)
 from backend.models.layers import (
     BathymetryCell,
     BathymetryListResponse,
@@ -22,10 +27,14 @@ from backend.models.layers import (
     OceanCovariateListResponse,
     ProximityCell,
     ProximityListResponse,
+    SdmPredictionCell,
+    SdmPredictionListResponse,
     SpeedZoneCell,
     SpeedZoneListResponse,
     StrikeDensityCell,
     StrikeDensityListResponse,
+    TrafficDensityCell,
+    TrafficDensityListResponse,
     WhalePredictionCell,
     WhalePredictionListResponse,
 )
@@ -48,6 +57,12 @@ _VALID_ISDM_SPECIES = {
     "humpback_whale",
     "sperm_whale",
 }
+_VALID_SDM_SPECIES = {
+    "blue_whale",
+    "fin_whale",
+    "humpback_whale",
+    "sperm_whale",
+}
 
 
 def _validate_bbox(
@@ -55,20 +70,23 @@ def _validate_bbox(
     lat_max: float,
     lon_min: float,
     lon_max: float,
+    *,
+    skip_area_check: bool = False,
 ) -> None:
     """Shared bbox validation — raises HTTPException on failure."""
     if lat_min >= lat_max:
         raise HTTPException(400, "lat_min must be less than lat_max")
     if lon_min >= lon_max:
         raise HTTPException(400, "lon_min must be less than lon_max")
-    area = (lat_max - lat_min) * (lon_max - lon_min)
-    if area > MAX_BBOX_AREA_DEG2:
-        raise HTTPException(
-            400,
-            f"Bounding box area ({area:.1f} deg²) exceeds "
-            f"maximum ({MAX_BBOX_AREA_DEG2} deg²). "
-            "Narrow your query region.",
-        )
+    if not skip_area_check:
+        area = (lat_max - lat_min) * (lon_max - lon_min)
+        if area > MAX_BBOX_AREA_DEG2:
+            raise HTTPException(
+                400,
+                f"Bounding box area ({area:.1f} deg²) exceeds "
+                f"maximum ({MAX_BBOX_AREA_DEG2} deg²). "
+                "Narrow your query region.",
+            )
 
 
 # ── Bathymetry ──────────────────────────────────────────────
@@ -76,27 +94,72 @@ def _validate_bbox(
 
 @router.get("/bathymetry", response_model=BathymetryListResponse)
 def list_bathymetry(
-    lat_min: float = Query(..., ge=-90, le=90),
-    lat_max: float = Query(..., ge=-90, le=90),
-    lon_min: float = Query(..., ge=-180, le=180),
-    lon_max: float = Query(..., ge=-180, le=180),
+    lat_min: float | None = Query(
+        None,
+        ge=-90,
+        le=90,
+        description="Defaults to US bbox (2°S) if omitted.",
+    ),
+    lat_max: float | None = Query(
+        None,
+        ge=-90,
+        le=90,
+        description="Defaults to US bbox (74°N) if omitted.",
+    ),
+    lon_min: float | None = Query(
+        None,
+        ge=-180,
+        le=180,
+        description="Defaults to US bbox (−180°W) if omitted.",
+    ),
+    lon_max: float | None = Query(
+        None,
+        ge=-180,
+        le=180,
+        description="Defaults to US bbox (−59°W) if omitted.",
+    ),
     depth_zone: str | None = Query(None),
+    exclude_land: bool = Query(
+        True,
+        description="Exclude land cells (default True).",
+    ),
     limit: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     offset: int = Query(0, ge=0),
 ):
     """Bathymetry layer — depth, depth zone, shelf flags.
 
+    Bbox is optional — omit to get the full US coastal extent.
+    Land cells are excluded by default (set exclude_land=false
+    to include them).
     Optional filter by depth_zone (shallow, continental_shelf,
     shelf_edge, slope, deep_ocean, land).
     """
-    _validate_bbox(lat_min, lat_max, lon_min, lon_max)
+    using_defaults = (
+        lat_min is None or lat_max is None or lon_min is None or lon_max is None
+    )
+    lat_min = lat_min if lat_min is not None else US_BBOX["lat_min"]
+    lat_max = lat_max if lat_max is not None else US_BBOX["lat_max"]
+    lon_min = lon_min if lon_min is not None else US_BBOX["lon_min"]
+    lon_max = lon_max if lon_max is not None else US_BBOX["lon_max"]
+    _validate_bbox(
+        lat_min,
+        lat_max,
+        lon_min,
+        lon_max,
+        skip_area_check=using_defaults,
+    )
     if depth_zone and depth_zone not in _VALID_DEPTH_ZONES:
         raise HTTPException(
             400,
             f"Invalid depth_zone. Must be one of: {sorted(_VALID_DEPTH_ZONES)}",
         )
     total = layer_svc.count_bathymetry(
-        lat_min, lat_max, lon_min, lon_max, depth_zone=depth_zone
+        lat_min,
+        lat_max,
+        lon_min,
+        lon_max,
+        depth_zone=depth_zone,
+        exclude_land=exclude_land,
     )
     rows = layer_svc.get_bathymetry(
         lat_min,
@@ -104,11 +167,17 @@ def list_bathymetry(
         lon_min,
         lon_max,
         depth_zone=depth_zone,
+        exclude_land=exclude_land,
         limit=limit,
         offset=offset,
     )
     data = [BathymetryCell(**r) for r in rows]
-    return BathymetryListResponse(total=total, offset=offset, limit=limit, data=data)
+    return BathymetryListResponse(
+        total=total,
+        offset=offset,
+        limit=limit,
+        data=data,
+    )
 
 
 # ── Ocean covariates ────────────────────────────────────────
@@ -116,38 +185,80 @@ def list_bathymetry(
 
 @router.get("/ocean", response_model=OceanCovariateListResponse)
 def list_ocean_covariates(
-    lat_min: float = Query(..., ge=-90, le=90),
-    lat_max: float = Query(..., ge=-90, le=90),
-    lon_min: float = Query(..., ge=-180, le=180),
-    lon_max: float = Query(..., ge=-180, le=180),
+    lat_min: float | None = Query(
+        None,
+        ge=-90,
+        le=90,
+        description="Defaults to US bbox (2°S) if omitted.",
+    ),
+    lat_max: float | None = Query(
+        None,
+        ge=-90,
+        le=90,
+        description="Defaults to US bbox (74°N) if omitted.",
+    ),
+    lon_min: float | None = Query(
+        None,
+        ge=-180,
+        le=180,
+        description="Defaults to US bbox (−180°W) if omitted.",
+    ),
+    lon_max: float | None = Query(
+        None,
+        ge=-180,
+        le=180,
+        description="Defaults to US bbox (−59°W) if omitted.",
+    ),
     season: str | None = Query(
         None,
-        description=("Filter by season for seasonal data. Omit for annual mean."),
+        description=(
+            "Filter by season. Use 'winter', 'spring', 'summer', "
+            "'fall' for one season, 'all' for all four seasons, "
+            "or omit for the annual mean."
+        ),
     ),
     limit: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     offset: int = Query(0, ge=0),
 ):
     """Ocean covariates — SST, MLD, SLA, primary productivity.
 
+    Bbox is optional — omit to get the full US coastal extent.
     Without season: returns annual mean from int_ocean_covariates.
-    With season: returns seasonal values from
-    int_ocean_covariates_seasonal.
+    With season=<name>: returns values for that season.
+    With season=all: returns all 4 seasons (4× rows per cell).
     """
-    _validate_bbox(lat_min, lat_max, lon_min, lon_max)
-    if season and season not in _VALID_SEASONS:
+    using_defaults = (
+        lat_min is None or lat_max is None or lon_min is None or lon_max is None
+    )
+    lat_min = lat_min if lat_min is not None else US_BBOX["lat_min"]
+    lat_max = lat_max if lat_max is not None else US_BBOX["lat_max"]
+    lon_min = lon_min if lon_min is not None else US_BBOX["lon_min"]
+    lon_max = lon_max if lon_max is not None else US_BBOX["lon_max"]
+    _validate_bbox(
+        lat_min,
+        lat_max,
+        lon_min,
+        lon_max,
+        skip_area_check=using_defaults,
+    )
+    _valid_season_opts = _VALID_SEASONS | {"all"}
+    _valid_season_opts = _VALID_SEASONS | {"all"}
+    if season and season not in _valid_season_opts:
         raise HTTPException(
             400,
-            f"Invalid season. Must be one of: {sorted(_VALID_SEASONS)}",
+            f"Invalid season. Must be one of: {sorted(_VALID_SEASONS)} or 'all'.",
         )
+    # Normalise: 'all' → uses seasonal table without season filter
+    svc_season = season if season != "all" else "all"
     total = layer_svc.count_ocean_covariates(
-        lat_min, lat_max, lon_min, lon_max, season=season
+        lat_min, lat_max, lon_min, lon_max, season=svc_season
     )
     rows = layer_svc.get_ocean_covariates(
         lat_min,
         lat_max,
         lon_min,
         lon_max,
-        season=season,
+        season=svc_season,
         limit=limit,
         offset=offset,
     )
@@ -226,6 +337,77 @@ def list_whale_predictions(
     return WhalePredictionListResponse(
         total=total, offset=offset, limit=limit, data=data
     )
+
+
+# ── SDM whale predictions (OBIS-trained) ───────────────────
+
+
+@router.get(
+    "/sdm-predictions",
+    response_model=SdmPredictionListResponse,
+)
+def list_sdm_predictions(
+    lat_min: float = Query(..., ge=-90, le=90),
+    lat_max: float = Query(..., ge=-90, le=90),
+    lon_min: float = Query(..., ge=-180, le=180),
+    lon_max: float = Query(..., ge=-180, le=180),
+    season: str | None = Query(None),
+    species: str | None = Query(
+        None,
+        description=(
+            "SDM species to filter by probability "
+            "(blue_whale, fin_whale, humpback_whale, "
+            "sperm_whale)"
+        ),
+    ),
+    min_probability: float | None = Query(
+        None,
+        ge=0,
+        le=1,
+        description="Minimum probability threshold",
+    ),
+    limit: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+    offset: int = Query(0, ge=0),
+):
+    """SDM (OBIS-trained) whale predictions — OOF spatial CV.
+
+    Comparable to ISDM predictions but trained on OBIS
+    opportunistic sighting data instead of expert-curated
+    Nisi et al. presence/absence.
+    """
+    _validate_bbox(lat_min, lat_max, lon_min, lon_max)
+    if season and season not in _VALID_SEASONS:
+        raise HTTPException(
+            400,
+            f"Invalid season. Must be one of: {sorted(_VALID_SEASONS)}",
+        )
+    if species and species not in _VALID_SDM_SPECIES:
+        raise HTTPException(
+            400,
+            f"Invalid species. Must be one of: {sorted(_VALID_SDM_SPECIES)}",
+        )
+    total = layer_svc.count_sdm_predictions(
+        lat_min,
+        lat_max,
+        lon_min,
+        lon_max,
+        season=season,
+        species=species,
+        min_probability=min_probability,
+    )
+    rows = layer_svc.get_sdm_predictions(
+        lat_min,
+        lat_max,
+        lon_min,
+        lon_max,
+        season=season,
+        species=species,
+        min_probability=min_probability,
+        limit=limit,
+        offset=offset,
+    )
+    data = [SdmPredictionCell(**r) for r in rows]
+    return SdmPredictionListResponse(total=total, offset=offset, limit=limit, data=data)
 
 
 # ── MPA coverage ────────────────────────────────────────────
@@ -435,3 +617,60 @@ def list_strike_density(
     )
     data = [StrikeDensityCell(**r) for r in rows]
     return StrikeDensityListResponse(total=total, offset=offset, limit=limit, data=data)
+
+
+# ── Traffic density ──────────────────────────────────────────
+
+
+@router.get(
+    "/traffic-density",
+    response_model=TrafficDensityListResponse,
+)
+def list_traffic_density(
+    lat_min: float = Query(..., ge=-90, le=90),
+    lat_max: float = Query(..., ge=-90, le=90),
+    lon_min: float = Query(..., ge=-180, le=180),
+    lon_max: float = Query(..., ge=-180, le=180),
+    season: str | None = Query(
+        None,
+        description="Filter by season",
+    ),
+    limit: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+    offset: int = Query(0, ge=0),
+):
+    """Vessel traffic density and danger metrics per H3 cell.
+
+    Exposes the 8 traffic sub-score components: speed lethality
+    (V&T 2007), high-speed fraction, vessel volume, large vessels,
+    draft risk, commercial traffic, night operations, plus
+    supporting metrics (COG diversity, vessel length, draft).
+    """
+    _validate_bbox(lat_min, lat_max, lon_min, lon_max)
+    if season and season not in _VALID_SEASONS:
+        raise HTTPException(
+            400,
+            f"Invalid season: {season}. Valid: {sorted(_VALID_SEASONS)}",
+        )
+    total = layer_svc.count_traffic_density(
+        lat_min,
+        lat_max,
+        lon_min,
+        lon_max,
+        season=season,
+    )
+    rows = layer_svc.get_traffic_density(
+        lat_min,
+        lat_max,
+        lon_min,
+        lon_max,
+        season=season,
+        limit=limit,
+        offset=offset,
+    )
+    data = [TrafficDensityCell(**r) for r in rows]
+    return TrafficDensityListResponse(
+        total=total,
+        offset=offset,
+        limit=limit,
+        data=data,
+    )

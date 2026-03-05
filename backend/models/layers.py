@@ -86,6 +86,35 @@ class WhalePredictionListResponse(BaseModel):
     data: list[WhalePredictionCell]
 
 
+# ── SDM whale predictions (OBIS-trained) ───────────────────
+
+
+class SdmPredictionCell(BaseModel):
+    """SDM (OBIS) whale prediction for a single (h3_cell, season)."""
+
+    h3_cell: int
+    cell_lat: float
+    cell_lon: float
+    season: str | None = None
+    sdm_any_whale: float | None = None
+    sdm_blue_whale: float | None = None
+    sdm_fin_whale: float | None = None
+    sdm_humpback_whale: float | None = None
+    sdm_sperm_whale: float | None = None
+    max_whale_prob: float | None = None
+    mean_whale_prob: float | None = None
+    any_whale_prob_joint: float | None = None
+
+
+class SdmPredictionListResponse(BaseModel):
+    """Paginated SDM prediction layer."""
+
+    total: int
+    offset: int
+    limit: int
+    data: list[SdmPredictionCell]
+
+
 # ── MPA coverage ────────────────────────────────────────────
 
 
@@ -445,3 +474,86 @@ class SeasonalTrafficListResponse(BaseModel):
     offset: int
     limit: int
     data: list[SeasonalTrafficCell]
+
+
+# ── Traffic density (detail hex) ────────────────────────────
+
+
+class TrafficDensityCell(BaseModel):
+    """Vessel traffic metrics for a single H3 cell.
+
+    Exposes the 8 key danger indicators from the composite traffic
+    sub-score: speed lethality (V&T 2007), high-speed fraction,
+    vessel volume, large vessels, draft risk, commercial traffic,
+    and night operations.
+    """
+
+    h3_cell: int
+    cell_lat: float
+    cell_lon: float
+    season: str | None = None
+    # Volume
+    avg_monthly_vessels: float | None = Field(
+        None,
+        description="Mean unique vessels per month",
+    )
+    total_pings: int | None = Field(
+        None,
+        description="Total AIS pings in period",
+    )
+    # Speed lethality — the #1 danger metric
+    avg_speed_lethality: float | None = Field(
+        None,
+        description="V&T 2007 logistic lethality index (0–1)",
+    )
+    avg_speed_knots: float | None = None
+    peak_speed_knots: float | None = None
+    avg_high_speed_fraction: float | None = Field(
+        None,
+        description="Fraction of vessels at ≥10 kn lethal speed",
+    )
+    # Vessel size & draft
+    avg_vessel_length_m: float | None = None
+    avg_deep_draft_vessels: float | None = Field(
+        None,
+        description="Avg vessels with >8m draft per month",
+    )
+    avg_draft_risk_fraction: float | None = Field(
+        None,
+        description="Fraction with deep draft (>8m)",
+    )
+    avg_large_vessels: float | None = None
+    # Vessel composition
+    avg_commercial_vessels: float | None = Field(
+        None,
+        description="Avg cargo + tanker per month",
+    )
+    avg_fishing_vessels: float | None = None
+    avg_passenger_vessels: float | None = None
+    # Night operations
+    avg_night_vessels: float | None = None
+    avg_night_high_speed: float | None = Field(
+        None,
+        description="Avg night vessels at ≥10 kn",
+    )
+    night_traffic_ratio: float | None = Field(
+        None,
+        description="Night/(day+night) vessel ratio",
+    )
+    # Course diversity (erratic routing)
+    avg_cog_diversity: float | None = Field(
+        None,
+        description="Cross-vessel COG circular std dev",
+    )
+    # Imputed draft
+    avg_draft_imputed_m: float | None = None
+    months_active: int | None = None
+
+
+class TrafficDensityListResponse(BaseModel):
+    """Paginated traffic density layer."""
+
+    total: int
+    offset: int
+    limit: int
+    data: list[TrafficDensityCell]

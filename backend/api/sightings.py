@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile
 
 from backend.models.sightings import (
     AudioResult,
     AudioSegmentDetail,
     InteractionType,
     PhotoResult,
+    RegionalAuthority,
     RiskAdvisory,
     RiskSummary,
     SightingLocation,
@@ -23,10 +24,41 @@ from backend.models.sightings import (
     SpeciesAssessment,
     UserInput,
 )
+from backend.services import auth as auth_svc
 from backend.services import sightings as sighting_svc
+from backend.services import submissions as sub_svc
 
 router = APIRouter(prefix="/sightings", tags=["sightings"])
 logger = logging.getLogger(__name__)
+
+
+def _persist_if_authenticated(
+    authorization: str | None,
+    result: dict,
+    is_public: bool = True,
+    image_bytes: bytes | None = None,
+    image_filename: str | None = None,
+    audio_bytes: bytes | None = None,
+    audio_filename: str | None = None,
+) -> str | None:
+    """Save the submission to the DB if the user is logged in."""
+    user_id = auth_svc.get_current_user_id(authorization)
+    if user_id is None:
+        return None
+    try:
+        return sub_svc.save_submission(
+            user_id,
+            result,
+            is_public=is_public,
+            image_bytes=image_bytes,
+            image_filename=image_filename,
+            audio_bytes=audio_bytes,
+            audio_filename=audio_filename,
+        )
+    except Exception:
+        logger.warning("Failed to persist submission", exc_info=True)
+        return None
+
 
 # Reuse content-type and size limits from the dedicated endpoints
 _ALLOWED_IMAGE_TYPES = {
@@ -89,6 +121,11 @@ async def submit_sighting_report(
         None,
         description=("Underwater audio recording (WAV/FLAC/MP3/AIF, max 100 MB)"),
     ),
+    share_publicly: bool = Form(
+        True,
+        description="Make the submission visible on the community feed",
+    ),
+    authorization: str | None = Header(default=None),
 ):
     """Submit a whale sighting report.
 
@@ -213,7 +250,15 @@ async def submit_sighting_report(
 
     advisory = None
     if result.get("advisory"):
-        advisory = RiskAdvisory(**result["advisory"])
+        adv = result["advisory"]
+        auth = None
+        if adv.get("authority"):
+            auth = RegionalAuthority(**adv["authority"])
+        advisory = RiskAdvisory(
+            level=adv["level"],
+            message=adv["message"],
+            authority=auth,
+        )
 
     return SightingReportResponse(
         location=location,
@@ -223,4 +268,13 @@ async def submit_sighting_report(
         species_assessment=assessment,
         risk_summary=risk_summary,
         advisory=advisory,
+        submission_id=_persist_if_authenticated(
+            authorization,
+            result,
+            is_public=share_publicly,
+            image_bytes=image_bytes,
+            image_filename=image_filename,
+            audio_bytes=audio_bytes,
+            audio_filename=audio_filename,
+        ),
     )

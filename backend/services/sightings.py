@@ -91,17 +91,160 @@ _SPECIES_DISPLAY = {
 }
 
 
+# ── Regional authority lookup ───────────────────────────────
+
+# NOAA Fisheries regional offices + stranding coordinators
+# responsible for marine mammal incidents in US waters.
+# Regions are checked in order; first bbox match wins,
+# so put smaller / more specific regions before large ones.
+
+_REGIONAL_AUTHORITIES: list[dict[str, Any]] = [
+    # ── Alaska ──────────────────────────────────────────
+    {
+        "lat_min": 48.0,
+        "lat_max": 72.0,
+        "lon_min": -180.0,
+        "lon_max": -130.0,
+        "name": "NOAA Alaska Region",
+        "office": "Alaska Regional Office",
+        "phone": "1-877-925-7773",
+        "stranding": "Alaska Marine Mammal Stranding Hotline",
+        "stranding_phone": "1-877-925-7773",
+        "email": "akr.stranding@noaa.gov",
+    },
+    # ── Pacific Islands (Hawaii) ────────────────────────
+    {
+        "lat_min": 15.0,
+        "lat_max": 32.0,
+        "lon_min": -180.0,
+        "lon_max": -150.0,
+        "name": "NOAA Pacific Islands Region",
+        "office": "Pacific Islands Regional Office (PIRO)",
+        "phone": "1-888-256-9840",
+        "stranding": "NOAA Pacific Islands Stranding",
+        "stranding_phone": "1-888-256-9840",
+        "email": "pir.stranding@noaa.gov",
+    },
+    # ── West Coast ──────────────────────────────────────
+    {
+        "lat_min": 32.0,
+        "lat_max": 49.0,
+        "lon_min": -130.0,
+        "lon_max": -117.0,
+        "name": "NOAA West Coast Region",
+        "office": "West Coast Regional Office",
+        "phone": "1-866-767-6114",
+        "stranding": "West Coast Marine Mammal Stranding",
+        "stranding_phone": "1-866-767-6114",
+        "email": "wcr.stranding@noaa.gov",
+    },
+    # ── Southeast: FL Keys + South FL ───────────────────
+    {
+        "lat_min": 24.0,
+        "lat_max": 28.0,
+        "lon_min": -84.0,
+        "lon_max": -79.0,
+        "name": "NOAA Southeast Region — South Florida",
+        "office": "Southeast Regional Office (SERO)",
+        "phone": "1-877-942-5343",
+        "stranding": "FWC Wildlife Alert Hotline",
+        "stranding_phone": "1-888-404-3922",
+        "email": "ser.stranding@noaa.gov",
+    },
+    # ── Gulf of Mexico ──────────────────────────────────
+    {
+        "lat_min": 24.0,
+        "lat_max": 31.0,
+        "lon_min": -98.0,
+        "lon_max": -81.0,
+        "name": "NOAA Southeast Region — Gulf of Mexico",
+        "office": "Southeast Regional Office (SERO)",
+        "phone": "1-877-942-5343",
+        "stranding": ("Southeast US Marine Mammal Stranding Hotline"),
+        "stranding_phone": "1-877-942-5343",
+        "email": "ser.stranding@noaa.gov",
+    },
+    # ── Southeast Atlantic: NC–FL east coast ────────────
+    {
+        "lat_min": 25.0,
+        "lat_max": 36.0,
+        "lon_min": -82.0,
+        "lon_max": -74.0,
+        "name": "NOAA Southeast Region — Atlantic",
+        "office": "Southeast Regional Office (SERO)",
+        "phone": "1-877-942-5343",
+        "stranding": ("Southeast US Marine Mammal Stranding Hotline"),
+        "stranding_phone": "1-877-942-5343",
+        "email": "ser.stranding@noaa.gov",
+    },
+    # ── Greater Atlantic: ME–VA ─────────────────────────
+    {
+        "lat_min": 35.0,
+        "lat_max": 48.0,
+        "lon_min": -78.0,
+        "lon_max": -59.0,
+        "name": "NOAA Greater Atlantic Region",
+        "office": ("Greater Atlantic Regional Fisheries Office (GARFO)"),
+        "phone": "1-866-755-6622",
+        "stranding": ("Northeast US Marine Mammal Stranding Hotline"),
+        "stranding_phone": "1-866-755-6622",
+        "email": "ne.stranding@noaa.gov",
+    },
+]
+
+# Fallback for coordinates outside defined regions
+_FALLBACK_AUTHORITY: dict[str, str] = {
+    "name": "NOAA Fisheries",
+    "office": "National Marine Fisheries Service",
+    "phone": "1-866-755-6622",
+    "stranding": "NOAA Marine Mammal Hotline",
+    "stranding_phone": "1-866-755-6622",
+    "email": "",
+}
+
+
+def get_regional_authority(
+    lat: float | None,
+    lon: float | None,
+) -> dict[str, str]:
+    """Return the NOAA regional authority for a coordinate pair.
+
+    Matches the most specific (first-matching) region.  Falls back
+    to the national NOAA hotline if outside US waters or if coords
+    are missing.
+    """
+    if lat is None or lon is None:
+        return _FALLBACK_AUTHORITY
+
+    for r in _REGIONAL_AUTHORITIES:
+        if r["lat_min"] <= lat <= r["lat_max"] and r["lon_min"] <= lon <= r["lon_max"]:
+            return {
+                "name": r["name"],
+                "office": r["office"],
+                "phone": r["phone"],
+                "stranding": r["stranding"],
+                "stranding_phone": r["stranding_phone"],
+                "email": r.get("email", ""),
+            }
+
+    return _FALLBACK_AUTHORITY
+
+
 def _generate_advisory(
     species: str | None,
     risk_category: str | None,
     interaction_type: str | None,
-) -> dict[str, str]:
+    lat: float | None = None,
+    lon: float | None = None,
+) -> dict[str, Any]:
     """Build a plain-language risk advisory.
 
-    Returns dict with 'level' and 'message' keys.
+    Returns dict with 'level', 'message', and 'authority' keys.
+    The authority dict contains regional contact information.
     """
     display = _SPECIES_DISPLAY.get(species or "", species or "unknown")
     is_protected = species in _PROTECTED_SPECIES
+    authority = get_regional_authority(lat, lon)
 
     # Determine advisory level from risk category
     level_map = {
@@ -138,12 +281,23 @@ def _generate_advisory(
         )
 
     if interaction_type == "strike":
-        parts.append("Ship strike reported — notify NOAA immediately (1-866-755-6622).")
+        parts.append(
+            "Ship strike reported — notify "
+            f"{authority['name']} immediately "
+            f"({authority['phone']})."
+        )
     elif interaction_type == "entanglement":
         parts.append(
-            "Entanglement reported — contact NOAA Entanglement "
-            "Hotline (1-866-755-6622). Do NOT attempt to "
-            "disentangle."
+            "Entanglement reported — contact "
+            f"{authority['stranding']} "
+            f"({authority['stranding_phone']}). "
+            "Do NOT attempt to disentangle."
+        )
+    elif interaction_type == "stranding":
+        parts.append(
+            "Stranding reported — contact "
+            f"{authority['stranding']} "
+            f"({authority['stranding_phone']})."
         )
     elif interaction_type == "near_miss":
         parts.append(
@@ -161,9 +315,14 @@ def _generate_advisory(
             "strongly recommended."
         )
 
+    # Always append authority contact info
+    contact = f"Regional authority: {authority['office']} ({authority['phone']})."
+    parts.append(contact)
+
     return {
         "level": level,
         "message": " ".join(parts),
+        "authority": authority,
     }
 
 
@@ -244,7 +403,13 @@ def process_sighting_report(
     # ── 5. Advisory ─────────────────────────────────────────
     advisory_species = assessment.get("model_species") if assessment else None
     risk_category = risk_data.get("risk_category") if risk_data else None
-    advisory = _generate_advisory(advisory_species, risk_category, interaction_type)
+    advisory = _generate_advisory(
+        advisory_species,
+        risk_category,
+        interaction_type,
+        lat=resolved_lat,
+        lon=resolved_lon,
+    )
 
     # ── 6. Assemble response dict ───────────────────────────
     response: dict[str, Any] = {

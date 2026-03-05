@@ -20,13 +20,18 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api import (
     audio,
+    auth,
     health,
     layers,
+    macro,
+    media,
     photo,
     risk,
     sightings,
     species,
+    submissions,
     traffic,
+    zones,
 )
 from backend.config import (
     API_DESCRIPTION,
@@ -54,7 +59,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     shutdown.
     """
     log.info("Starting %s v%s", API_TITLE, API_VERSION)
-    init_pool(min_conn=2, max_conn=10)
+    init_pool(min_conn=4, max_conn=30)
     yield
     close_pool()
     log.info("Shutdown complete")
@@ -93,6 +98,17 @@ app.include_router(layers.router, prefix=_API_PREFIX)
 app.include_router(photo.router, prefix=_API_PREFIX)
 app.include_router(audio.router, prefix=_API_PREFIX)
 app.include_router(sightings.router, prefix=_API_PREFIX)
+app.include_router(zones.router, prefix=_API_PREFIX)
+
+# Auth & submissions (own prefix — /api/v1/auth, /api/v1/submissions)
+app.include_router(auth.router)
+app.include_router(submissions.router)
+
+# Media file serving
+app.include_router(media.router, prefix=_API_PREFIX)
+
+# Macro overview (coast-wide, no prefix — already has /api/v1/macro)
+app.include_router(macro.router)
 
 
 # ── Direct execution ────────────────────────────────────────

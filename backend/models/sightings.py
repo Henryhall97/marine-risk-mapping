@@ -120,11 +120,29 @@ class RiskSummary(BaseModel):
     reference_risk_score: float | None = None
 
 
+class RegionalAuthority(BaseModel):
+    """NOAA regional authority contact for marine mammal incidents."""
+
+    name: str = Field(
+        ...,
+        description="Region name (e.g. NOAA Greater Atlantic Region)",
+    )
+    office: str = Field(..., description="Office name (e.g. GARFO)")
+    phone: str = Field(..., description="Primary phone number")
+    stranding: str = Field(..., description="Stranding hotline name")
+    stranding_phone: str = Field(..., description="Stranding hotline number")
+    email: str = Field("", description="Contact email (if available)")
+
+
 class RiskAdvisory(BaseModel):
     """Human-readable advisory derived from risk level + species."""
 
     level: str = Field(..., description="Advisory level: low, moderate, high, critical")
     message: str = Field(..., description="Plain-language risk advisory")
+    authority: RegionalAuthority | None = Field(
+        None,
+        description="Regional NOAA authority for this location",
+    )
 
 
 # ── Top-level response ──────────────────────────────────────
@@ -148,3 +166,10 @@ class SightingReportResponse(BaseModel):
     species_assessment: SpeciesAssessment | None = None
     risk_summary: RiskSummary | None = None
     advisory: RiskAdvisory | None = None
+    submission_id: str | None = Field(
+        None,
+        description=(
+            "Database submission ID (present only when the "
+            "user is authenticated; null for anonymous reports)"
+        ),
+    )
