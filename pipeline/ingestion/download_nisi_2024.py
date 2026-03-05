@@ -55,13 +55,15 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def download_file(url: str, dest: Path) -> bool:
+def download_file(url: str, dest: Path, *, force: bool = False) -> bool:
     """Download a single file from URL to destination path."""
     dest.parent.mkdir(parents=True, exist_ok=True)
-    if dest.exists():
+    if dest.exists() and not force:
         size_mb = dest.stat().st_size / (1024 * 1024)
         logger.info("  Already exists: %s (%.1f MB)", dest.name, size_mb)
         return True
+    if dest.exists() and force:
+        dest.unlink()
     try:
         logger.info("  Downloading: %s", url.split("/")[-1])
         urllib.request.urlretrieve(url, dest)
@@ -73,8 +75,12 @@ def download_file(url: str, dest: Path) -> bool:
         return False
 
 
-def main() -> None:
-    """Download all Nisi et al. (2024) data files."""
+def main(*, force: bool = False) -> None:
+    """Download all Nisi et al. (2024) data files.
+
+    Args:
+        force: If True, re-download even if files already exist.
+    """
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     logger.info("=" * 60)
     logger.info("Downloading Nisi et al. (2024) data from GitHub")
@@ -89,17 +95,17 @@ def main() -> None:
     for filename in FILES:
         url = f"{GITHUB_RAW_BASE}/{filename}"
         dest = OUTPUT_DIR / filename
-        if download_file(url, dest):
+        if download_file(url, dest, force=force):
             success_count += 1
         else:
             fail_count += 1
 
-    # ── Download prediction grid files ───────────────────
+    # ── Download prediction grid files ───────────────────────
     logger.info("\n--- North Pacific prediction grids (monthly) ---")
     for filename in PREDICTION_FILES:
         url = f"{GITHUB_RAW_BASE}/{filename}"
         dest = OUTPUT_DIR / filename
-        if download_file(url, dest):
+        if download_file(url, dest, force=force):
             success_count += 1
         else:
             fail_count += 1
@@ -122,4 +128,11 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    _parser = argparse.ArgumentParser(description="Download Nisi et al. 2024 data")
+    _parser.add_argument(
+        "--force", action="store_true", help="Re-download even if files exist"
+    )
+    _args = _parser.parse_args()
+    main(force=_args.force)

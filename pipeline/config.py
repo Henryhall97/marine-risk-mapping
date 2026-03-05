@@ -100,22 +100,24 @@ BALEEN_FAMILIES: tuple[str, ...] = (
 )
 
 # ── US coastal bounding box ─────────────────────────────────
-# All pipeline scripts filter to this region.
+# Covers all US waters plus adjacent AIS-dense corridors:
+# south to the Galápagos (~1.4°S), east to Barbados (~59.5°W),
+# north to the Aleutians/Kodiak (~52°N), west to the Aleutian chain.
 # Note: ocean covariates intentionally use a wider box
 # (US_BBOX_WIDE) because Copernicus grid cells near the
 # boundary need extra margin for interpolation.
 US_BBOX = {
-    "lat_min": 24.0,
-    "lat_max": 49.0,
-    "lon_min": -130.0,
-    "lon_max": -65.0,
+    "lat_min": -2.0,
+    "lat_max": 52.0,
+    "lon_min": -180.0,
+    "lon_max": -59.0,
 }
 
 US_BBOX_WIDE = {
-    "lat_min": 24.0,
-    "lat_max": 50.0,
-    "lon_min": -130.0,
-    "lon_max": -60.0,
+    "lat_min": -3.0,
+    "lat_max": 53.0,
+    "lon_min": -180.0,
+    "lon_max": -58.0,
 }
 
 # ── Data directories ────────────────────────────────────────
@@ -138,6 +140,8 @@ SPEED_ZONES_FILE = (
 SMA_DIR = RAW_DIR / "mpa" / "seasonal_management_areas"
 SMA_FILE = SMA_DIR / "seasonal_management_areas.geojson"
 
+OCEAN_MASK_FILE = RAW_DIR / "ocean_mask" / "ocean_mask.parquet"
+
 SHIP_STRIKES_PDF = RAW_DIR / "cetacean" / "noaa_23127_DS1.pdf"  # MANUAL
 SHIP_STRIKES_FILE = PROCESSED_DIR / "ship_strikes" / "ship_strikes.csv"
 
@@ -155,7 +159,7 @@ OCEAN_DIR = RAW_DIR / "ocean"
 OCEAN_COVARIATES_FILE = OCEAN_DIR / "ocean_covariates.parquet"
 
 # MANUAL: see docs/manual_data_acquisition.md
-BATHYMETRY_RASTER = RAW_DIR / "bathymetry" / "gebco_2025_n49.0_s24.0_w-130.0_e-65.0.tif"
+BATHYMETRY_RASTER = RAW_DIR / "bathymetry" / "gebco_2025_n52.0_s-2.0_w-180.0_e-59.0.tif"
 
 # ── Processed data file paths ──────────────────────────────
 AIS_H3_DIR = PROCESSED_DIR / "ais"
@@ -174,6 +178,7 @@ ML_DIR = PROCESSED_DIR / "ml"
 STRIKE_FEATURES_FILE = ML_DIR / "strike_risk_features.parquet"
 SDM_FEATURES_FILE = ML_DIR / "whale_sdm_features.parquet"
 SDM_SEASONAL_FEATURES_FILE = ML_DIR / "whale_sdm_seasonal_features.parquet"
+SDM_PREDICTIONS_DIR = ML_DIR / "sdm_predictions"
 MLRUNS_DIR = PROJECT_ROOT / "mlruns"
 MLFLOW_DB = PROJECT_ROOT / "mlruns.db"
 MLFLOW_TRACKING_URI = f"sqlite:///{MLFLOW_DB}"
@@ -278,13 +283,13 @@ PROXIMITY_SCORE_WEIGHTS: dict[str, float] = {
 }
 
 PROTECTION_GAP_SCORES: dict[str, float] = {
-    "sma_and_notake": _DBT_VARS["protection_sma_and_notake"],
-    "sma_only": _DBT_VARS["protection_sma_only"],
-    "proposed_and_mpa": _DBT_VARS["protection_proposed_and_mpa"],
+    "notake_and_sma": _DBT_VARS["protection_notake_and_sma"],
     "notake_only": _DBT_VARS["protection_notake_only"],
-    "proposed_only": _DBT_VARS["protection_proposed_only"],
+    "strict_and_sma": _DBT_VARS["protection_strict_and_sma"],
     "strict_mpa": _DBT_VARS["protection_strict_mpa"],
+    "mpa_and_sma": _DBT_VARS["protection_mpa_and_sma"],
     "any_mpa": _DBT_VARS["protection_any_mpa"],
+    "sma_only": _DBT_VARS["protection_sma_only"],
     "none": _DBT_VARS["protection_none"],
 }
 

@@ -65,7 +65,6 @@ NON_FEATURE_COLS = {
     "right_whale_strikes",
     "spatial_block",
     "cv_fold",
-    "is_land",
 }
 
 TARGET_COL = "has_strike"

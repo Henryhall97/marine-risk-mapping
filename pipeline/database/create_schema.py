@@ -214,6 +214,13 @@ CREATE TABLE IF NOT EXISTS seasonal_management_areas (
 );
 """
 
+CREATE_OCEAN_MASK_TABLE = """
+CREATE TABLE IF NOT EXISTS ocean_mask (
+    id              SERIAL PRIMARY KEY,
+    geom            GEOMETRY(MultiPolygon, 4326) NOT NULL
+);
+"""
+
 
 def create_tables() -> None:
     """Connect to PostGIS and create all schema tables."""
@@ -240,6 +247,7 @@ def create_tables() -> None:
             "right_whale_speed_zones": CREATE_SPEED_ZONES_TABLE,
             "ocean_covariates": CREATE_OCEAN_COVARIATES_TABLE,
             "seasonal_management_areas": CREATE_SMA_TABLE,
+            "ocean_mask": CREATE_OCEAN_MASK_TABLE,
         }
 
         for table_name, sql in tables.items():
@@ -292,6 +300,9 @@ def create_tables() -> None:
             # Seasonal management areas
             "CREATE INDEX IF NOT EXISTS idx_sma_geom"
             " ON seasonal_management_areas USING GIST (geom);",
+            # Ocean mask (Natural Earth)
+            "CREATE INDEX IF NOT EXISTS idx_ocean_mask_geom"
+            " ON ocean_mask USING GIST (geom);",
         ]
 
         for idx_sql in indexes:

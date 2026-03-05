@@ -128,8 +128,7 @@ SELECT
     nisi_shipping_index,
     nisi_whale_space_use,
     nisi_hotspot_overlap
-FROM fct_strike_risk_training
-WHERE NOT is_land;
+FROM fct_strike_risk_training;
 """
 
 SDM_QUERY = """
@@ -182,8 +181,7 @@ SELECT
     has_strict_protection
     -- NOTE: traffic features (avg_monthly_vessels, avg_speed_knots,
     -- months_active) deliberately excluded — detection bias
-FROM fct_whale_sdm_training
-WHERE NOT is_land;
+FROM fct_whale_sdm_training;
 """
 
 SDM_SEASONAL_QUERY = """
@@ -383,15 +381,6 @@ def _encode_season(df: pd.DataFrame) -> pd.DataFrame:
 def extract_sdm_seasonal_features() -> pd.DataFrame:
     """Extract and prepare seasonal whale SDM training features."""
     df = _extract_table(SDM_SEASONAL_QUERY, "fct_whale_sdm_seasonal")
-
-    # Filter land cells — fct_whale_sdm_seasonal lacks is_land column,
-    # so use depth_m >= 0 as proxy (matches int_bathymetry definition).
-    # NaN depth_m (no bathymetry coverage) is kept — likely ocean.
-    land_mask = df["depth_m"] >= 0
-    n_land = int(land_mask.sum())
-    if n_land > 0:
-        df = df[~land_mask].reset_index(drop=True)
-        log.info("  Filtered %d land cells (depth_m >= 0)", n_land)
 
     # Spatial block CV — same cell → same fold across all 4 seasons
     df = _assign_spatial_blocks(df)

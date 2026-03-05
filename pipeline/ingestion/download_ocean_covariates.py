@@ -30,6 +30,8 @@ AIS data covers 2024; cetacean sightings span decades but recent
 years are most relevant for SDM training.
 """
 
+from __future__ import annotations
+
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -71,7 +73,7 @@ logger = logging.getLogger(__name__)
 
 
 # ── SST from ERDDAP ─────────────────────────────────────────────────
-def download_sst_erddap() -> Path:
+def download_sst_erddap(*, force: bool = False) -> Path:
     """Download SST monthly means + std dev from NOAA OISST via ERDDAP.
 
     Downloads daily SST for the bounding box, then computes monthly
@@ -82,9 +84,12 @@ def download_sst_erddap() -> Path:
         Path to the saved NetCDF file.
     """
     output_file = OUTPUT_DIR / "sst_monthly.nc"
-    if output_file.exists():
+    if output_file.exists() and not force:
         logger.info("SST file already exists: %s", output_file)
         return output_file
+    if output_file.exists() and force:
+        output_file.unlink()
+        logger.info("Removed existing SST file (--force)")
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -142,7 +147,7 @@ def download_sst_erddap() -> Path:
 
 
 # ── MLD + SLA from Copernicus ────────────────────────────────────────
-def download_mld_sla_copernicus() -> Path:
+def download_mld_sla_copernicus(*, force: bool = False) -> Path:
     """Download MLD and SLA monthly means from Copernicus GLORYS12V1.
 
     Uses the copernicusmarine Python toolbox. Requires a free account:
@@ -155,9 +160,12 @@ def download_mld_sla_copernicus() -> Path:
         Path to the saved NetCDF file.
     """
     output_file = OUTPUT_DIR / "mld_sla_monthly.nc"
-    if output_file.exists():
+    if output_file.exists() and not force:
         logger.info("MLD/SLA file already exists: %s", output_file)
         return output_file
+    if output_file.exists() and force:
+        output_file.unlink()
+        logger.info("Removed existing MLD/SLA file (--force)")
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -215,7 +223,7 @@ def download_mld_sla_copernicus() -> Path:
 
 
 # ── Primary Productivity from Copernicus ─────────────────────────────
-def download_pp_copernicus() -> Path:
+def download_pp_copernicus(*, force: bool = False) -> Path:
     """Download net primary productivity from Copernicus BGC Hindcast.
 
     The PISCES biogeochemical model provides 'nppv' (net primary
@@ -226,9 +234,12 @@ def download_pp_copernicus() -> Path:
         Path to the saved NetCDF file.
     """
     output_file = OUTPUT_DIR / "pp_monthly.nc"
-    if output_file.exists():
+    if output_file.exists() and not force:
         logger.info("PP file already exists: %s", output_file)
         return output_file
+    if output_file.exists() and force:
+        output_file.unlink()
+        logger.info("Removed existing PP file (--force)")
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -480,11 +491,14 @@ def merge_to_parquet(force: bool = False) -> Path:
     return output_file
 
 
-def download_all() -> None:
+def download_all(*, force: bool = False) -> None:
     """Download all ocean covariates.
 
     Runs SST first (no auth needed), then attempts Copernicus
     downloads for MLD/SLA/PP. Finally merges everything to parquet.
+
+    Args:
+        force: If True, re-download even if files already exist.
     """
     logger.info("=" * 60)
     logger.info("Downloading ocean covariates for whale SDM")
@@ -500,12 +514,12 @@ def download_all() -> None:
 
     # Step 1: SST from ERDDAP (no auth)
     logger.info("\n--- Step 1/4: SST from ERDDAP ---")
-    download_sst_erddap()
+    download_sst_erddap(force=force)
 
     # Step 2: MLD + SLA from Copernicus (needs free account)
     logger.info("\n--- Step 2/4: MLD + SLA from Copernicus ---")
     try:
-        download_mld_sla_copernicus()
+        download_mld_sla_copernicus(force=force)
     except Exception as e:
         logger.warning(
             "Copernicus MLD/SLA download failed: %s\n"
@@ -517,7 +531,7 @@ def download_all() -> None:
     # Step 3: PP from Copernicus (needs free account)
     logger.info("\n--- Step 3/4: PP from Copernicus ---")
     try:
-        download_pp_copernicus()
+        download_pp_copernicus(force=force)
     except Exception as e:
         logger.warning(
             "Copernicus PP download failed: %s\n"
@@ -528,10 +542,19 @@ def download_all() -> None:
 
     # Step 4: Merge to parquet
     logger.info("\n--- Step 4/4: Merge to parquet ---")
-    merge_to_parquet()
+    merge_to_parquet(force=force)
 
     logger.info("\n✅ Ocean covariate download complete")
 
 
 if __name__ == "__main__":
-    download_all()
+    import argparse
+
+    _parser = argparse.ArgumentParser(description="Download ocean covariates")
+    _parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-download even if files exist",
+    )
+    _args = _parser.parse_args()
+    download_all(force=_args.force)

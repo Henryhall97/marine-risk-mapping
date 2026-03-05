@@ -155,14 +155,17 @@ def save_to_parquet(gdf: gpd.GeoDataFrame, output_path: Path) -> None:
     logger.info("Saved %d features to %s (%.1f MB)", len(gdf), output_path, size_mb)
 
 
-def download_mpa_data() -> None:
+def download_mpa_data(*, force: bool = False) -> None:
     """Download, filter, and save MPA data as GeoParquet."""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     # Skip if output already exists
-    if OUTPUT_FILE.exists():
+    if OUTPUT_FILE.exists() and not force:
         logger.info("MPA parquet already exists at %s — skipping", OUTPUT_FILE)
         return
+    if OUTPUT_FILE.exists() and force:
+        OUTPUT_FILE.unlink()
+        logger.info("Removed existing MPA file (--force)")
 
     # Step 1: Download zip
     zip_path = download_mpa_zip(OUTPUT_DIR)
@@ -186,4 +189,11 @@ def download_mpa_data() -> None:
 
 
 if __name__ == "__main__":
-    download_mpa_data()
+    import argparse
+
+    _parser = argparse.ArgumentParser(description="Download NOAA MPA inventory")
+    _parser.add_argument(
+        "--force", action="store_true", help="Re-download even if file exists"
+    )
+    _args = _parser.parse_args()
+    download_mpa_data(force=_args.force)

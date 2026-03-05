@@ -34,13 +34,20 @@ def generate_dates(start: date, end: date) -> list[date]:
     return dates
 
 
-def download_file(file_date: date, output_dir, base_url: str) -> bool:
+def download_file(
+    file_date: date,
+    output_dir,
+    base_url: str,
+    *,
+    force: bool = False,
+) -> bool:
     """Download a single day's AIS GeoParquet file.
 
     Args:
         file_date: The date to download data for.
         output_dir: Directory to save the file.
         base_url: Year-specific MarineCadastre base URL.
+        force: If True, re-download even if file already exists.
 
     Returns:
         True if downloaded successfully, False if skipped or failed.
@@ -50,9 +57,11 @@ def download_file(file_date: date, output_dir, base_url: str) -> bool:
     output_path = output_dir / filename
 
     # Skip if already downloaded
-    if output_path.exists():
+    if output_path.exists() and not force:
         logger.info("Skipping %s — already exists", filename)
         return False
+    if output_path.exists() and force:
+        output_path.unlink()
 
     logger.info("Downloading %s", filename)
 
@@ -79,7 +88,7 @@ def download_file(file_date: date, output_dir, base_url: str) -> bool:
         return False
 
 
-def download_all_ais_data() -> None:
+def download_all_ais_data(*, force: bool = False) -> None:
     """Download AIS GeoParquet files for all configured years."""
     AIS_RAW_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -96,7 +105,7 @@ def download_all_ais_data() -> None:
 
         for i, file_date in enumerate(dates, start=1):
             logger.info("Progress: %d/%d (%d)", i, len(dates), year)
-            result = download_file(file_date, AIS_RAW_DIR, base_url)
+            result = download_file(file_date, AIS_RAW_DIR, base_url, force=force)
 
             if result:
                 downloaded += 1
@@ -118,4 +127,13 @@ def download_all_ais_data() -> None:
 
 
 if __name__ == "__main__":
-    download_all_ais_data()
+    import argparse
+
+    _parser = argparse.ArgumentParser(description="Download AIS data")
+    _parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-download even if files exist",
+    )
+    _args = _parser.parse_args()
+    download_all_ais_data(force=_args.force)

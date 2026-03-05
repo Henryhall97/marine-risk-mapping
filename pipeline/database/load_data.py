@@ -27,6 +27,7 @@ from pipeline.config import (
     NISI_RISK_FILE,
     NISI_SHIPPING_FILE,
     OCEAN_COVARIATES_FILE,
+    OCEAN_MASK_FILE,
     SHIP_STRIKES_FILE,
     SMA_FILE,
     SPEED_ZONES_FILE,
@@ -507,9 +508,54 @@ def load_sma_data(cur) -> None:
     logger.info("Loaded %d SMA polygons", len(records))
 
 
-def load_all_data() -> None:
-    """Load all raw data into PostGIS."""
+def load_ocean_mask(cur) -> None:
+    """Load Natural Earth ocean polygon into PostGIS.
+
+    The ocean mask is used by dbt to flag H3 cells as ocean vs
+    inland (Great Lakes, rivers, etc.) — replacing the naive
+    ``depth_m >= 0`` heuristic that misclassifies deep freshwater.
+
+    Args:
+        cur: psycopg2 cursor.
+    """
+    if not OCEAN_MASK_FILE.exists():
+        logger.warning("Ocean mask file not found: %s", OCEAN_MASK_FILE)
+        return
+
+    gdf = gpd.read_parquet(OCEAN_MASK_FILE)
+    logger.info("Read %d ocean mask polygons", len(gdf))
+
+    records = []
+    for _, row in gdf.iterrows():
+        geom = row.geometry
+        # Ensure MultiPolygon for consistent schema
+        if geom.geom_type == "Polygon":
+            from shapely.geometry import MultiPolygon
+
+            geom = MultiPolygon([geom])
+        records.append({"geom": geom.wkt})
+
+    sql = """
+        INSERT INTO ocean_mask (geom)
+        VALUES %s
+    """
+    template = "(ST_GeomFromText(%(geom)s, 4326))"
+
+    execute_values(cur, sql, records, template=template)
+    logger.info("Loaded %d ocean mask polygons", len(records))
+
+
+def load_all_data(*, force: bool = False) -> None:
+    """Load all raw data into PostGIS.
+
+    Args:
+        force: If True, truncate tables before loading so data is
+               refreshed. Used by Dagster re-materialisation and
+               after bbox / source-data changes.
+    """
     logger.info("Connecting to PostGIS at %s:%s", DB_CONFIG["host"], DB_CONFIG["port"])
+    if force:
+        logger.info("Force mode — tables will be truncated before loading")
 
     conn = psycopg2.connect(**DB_CONFIG)
     conn.autocommit = True
@@ -527,6 +573,7 @@ def load_all_data() -> None:
             "right_whale_speed_zones": load_speed_zones,
             "ocean_covariates": load_ocean_covariates,
             "seasonal_management_areas": load_sma_data,
+            "ocean_mask": load_ocean_mask,
         }
 
         for table, loader in loaders.items():
@@ -539,11 +586,19 @@ def load_all_data() -> None:
             table_exists = cur.fetchone()[0]
 
             if table_exists:
-                cur.execute(f"SELECT COUNT(*) FROM {table};")
-                count = cur.fetchone()[0]
-                if count > 0:
-                    logger.info("Table %s already has %d rows — skipping", table, count)
-                    continue
+                if force:
+                    cur.execute(f"TRUNCATE TABLE {table} CASCADE;")
+                    logger.info("Truncated %s (force mode)", table)
+                else:
+                    cur.execute(f"SELECT COUNT(*) FROM {table};")
+                    count = cur.fetchone()[0]
+                    if count > 0:
+                        logger.info(
+                            "Table %s already has %d rows — skipping",
+                            table,
+                            count,
+                        )
+                        continue
 
             loader(cur)
 
@@ -568,4 +623,13 @@ def load_all_data() -> None:
 
 
 if __name__ == "__main__":
-    load_all_data()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Load raw data into PostGIS")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Truncate tables before loading (refresh all data)",
+    )
+    args = parser.parse_args()
+    load_all_data(force=args.force)

@@ -106,4 +106,11 @@ def download_sma(force: bool = False) -> Path:
 
 
 if __name__ == "__main__":
-    download_sma()
+    import argparse
+
+    _parser = argparse.ArgumentParser(description="Download NARW SMAs")
+    _parser.add_argument(
+        "--force", action="store_true", help="Re-download even if file exists"
+    )
+    _args = _parser.parse_args()
+    download_sma(force=_args.force)

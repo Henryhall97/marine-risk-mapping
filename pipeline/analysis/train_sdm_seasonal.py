@@ -45,7 +45,12 @@ from pipeline.analysis.evaluate import (
     spatial_cv_split,
 )
 from pipeline.analysis.extract_features import extract_sdm_seasonal_features
-from pipeline.config import ML_DIR, MLFLOW_TRACKING_URI, SDM_SEASONAL_FEATURES_FILE
+from pipeline.config import (
+    ML_DIR,
+    MLFLOW_TRACKING_URI,
+    SDM_PREDICTIONS_DIR,
+    SDM_SEASONAL_FEATURES_FILE,
+)
 from pipeline.utils import patch_shap_for_xgboost3
 
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -202,7 +207,7 @@ def train_single_model(
     target_col: str = "whale_present",
     params: dict | None = None,
     log_to_mlflow: bool = True,
-) -> tuple[xgb.XGBClassifier, dict]:
+) -> tuple[xgb.XGBClassifier, dict, np.ndarray]:
     """Train one XGBoost SDM with spatial block CV."""
     params = params or DEFAULT_PARAMS.copy()
     feature_cols = _get_feature_cols(df)
@@ -397,7 +402,268 @@ def train_single_model(
         plt.close()
         mlflow.log_artifact(str(shap_path))
 
-    return final_model, cv_metrics
+    return final_model, cv_metrics, oof_preds
+
+
+# ── Grid scoring (OOF predictions) ─────────────────────────
+
+# Targets to score for ISDM-comparable comparison
+SCORE_TARGETS = {
+    "whale_present": "sdm_any_whale",
+    "blue_whale_present": "sdm_blue_whale",
+    "fin_whale_present": "sdm_fin_whale",
+    "humpback_present": "sdm_humpback_whale",
+    "sperm_whale_present": "sdm_sperm_whale",
+}
+
+
+def _recover_season_col(df: pd.DataFrame) -> pd.Series:
+    """Reconstruct season label from one-hot season columns."""
+    season_cols = [
+        "season_winter",
+        "season_spring",
+        "season_summer",
+        "season_fall",
+    ]
+    season_names = ["winter", "spring", "summer", "fall"]
+    if "season" in df.columns:
+        return df["season"]
+    if all(c in df.columns for c in season_cols):
+        idx = df[season_cols].values.argmax(axis=1)
+        return pd.Series(
+            [season_names[i] for i in idx],
+            index=df.index,
+        )
+    return pd.Series("unknown", index=df.index)
+
+
+def save_oof_predictions(
+    df: pd.DataFrame,
+    oof_preds: np.ndarray,
+    target_col: str,
+) -> None:
+    """Save out-of-fold predictions to parquet.
+
+    OOF predictions give each cell a probability from a model
+    that never saw it during training — honest and comparable
+    to the ISDM's genuinely out-of-sample grid scores.
+    """
+    col_name = SCORE_TARGETS.get(target_col)
+    if col_name is None:
+        log.warning(
+            "Target %s not in SCORE_TARGETS — skipping save",
+            target_col,
+        )
+        return
+
+    result = pd.DataFrame(
+        {
+            "h3_cell": df["h3_cell"].values,
+            "season": _recover_season_col(df).values,
+            f"{col_name}_prob": oof_preds,
+        }
+    )
+
+    # Drop rows with NaN predictions (shouldn't happen with
+    # 5 complete folds, but defensive)
+    n_nan = result[f"{col_name}_prob"].isna().sum()
+    if n_nan > 0:
+        log.warning(
+            "%d rows have NaN OOF predictions — dropping",
+            n_nan,
+        )
+        result = result.dropna(subset=[f"{col_name}_prob"])
+
+    SDM_PREDICTIONS_DIR.mkdir(parents=True, exist_ok=True)
+    out_path = SDM_PREDICTIONS_DIR / f"{col_name}_predictions.parquet"
+    result.to_parquet(out_path, index=False)
+    log.info(
+        "Saved SDM OOF predictions: %s (%d rows, %.1f MB)",
+        out_path.name,
+        len(result),
+        out_path.stat().st_size / 1e6,
+    )
+
+
+def score_all_targets(
+    df: pd.DataFrame,
+    params: dict | None = None,
+) -> None:
+    """Train + save OOF predictions for all ISDM-comparable targets.
+
+    Loops through the 5 species targets (4 individual + any_whale),
+    trains each with spatial CV, and saves honest out-of-fold
+    predictions for every cell-season.
+    """
+    for target_col, col_name in SCORE_TARGETS.items():
+        if target_col not in df.columns:
+            log.warning(
+                "Target %s not in data — skipping",
+                target_col,
+            )
+            continue
+
+        n_pos = int(df[target_col].sum())
+        if n_pos < 50:
+            log.warning(
+                "Target %s has only %d positives — skipping (unreliable)",
+                target_col,
+                n_pos,
+            )
+            continue
+
+        log.info("=" * 60)
+        log.info(
+            "Scoring grid: %s → %s",
+            target_col,
+            col_name,
+        )
+        log.info("=" * 60)
+
+        model, metrics, oof_preds = train_single_model(
+            df,
+            target_col=target_col,
+            params=params,
+            log_to_mlflow=True,
+        )
+        save_oof_predictions(df, oof_preds, target_col)
+
+        log.info(
+            "  %s: AUC=%.4f±%.4f",
+            col_name,
+            metrics["cv_roc_auc_mean"],
+            metrics["cv_roc_auc_std"],
+        )
+
+    log.info("Grid scoring complete ✅")
+
+
+def score_fast(df: pd.DataFrame) -> None:
+    """Score the full grid using saved MLflow models (no retraining).
+
+    Loads the final model (trained on 100% of data) for each target
+    from the MLflow file store and predicts the entire grid in one
+    pass.  ~5× faster than OOF scoring but predictions are in-sample
+    (slightly optimistic).  Perfectly acceptable for a visual
+    comparison layer.
+    """
+    from pipeline.config import MLRUNS_DIR
+
+    # The original models live in the file-based mlruns/ store
+    # under experiment 691897149364591822 (whale_sdm_seasonal).
+    exp_dir = MLRUNS_DIR / "691897149364591822"
+    if not exp_dir.exists():
+        raise RuntimeError(
+            f"MLflow file store not found at {exp_dir}. Train models first."
+        )
+
+    # Build a map: target_col → (run_id, model_path, auc)
+    # by scanning run param files directly (no MLflow API needed)
+    run_map: dict[str, tuple[str, str, float]] = {}
+    for run_dir in exp_dir.iterdir():
+        param_file = run_dir / "params" / "target_col"
+        if not param_file.exists():
+            continue
+        target = param_file.read_text().strip()
+
+        # Find model.ubj via registered models dir
+        model_path = None
+        models_dir = exp_dir / "models"
+        if models_dir.exists():
+            for m_dir in models_dir.iterdir():
+                meta_file = m_dir / "meta.yaml"
+                if not meta_file.exists():
+                    continue
+                meta_text = meta_file.read_text()
+                if run_dir.name in meta_text:
+                    ubj = m_dir / "artifacts" / "model.ubj"
+                    if ubj.exists():
+                        model_path = str(ubj)
+                        break
+
+        if model_path is None:
+            # Fallback: check run artifacts directly
+            ubj = run_dir / "artifacts" / "model" / "model.ubj"
+            if ubj.exists():
+                model_path = str(ubj)
+
+        if model_path is None:
+            continue
+
+        # Read AUC metric
+        auc_file = run_dir / "metrics" / "cv_roc_auc_mean"
+        auc = 0.0
+        if auc_file.exists():
+            try:
+                parts = auc_file.read_text().strip().split()
+                auc = float(parts[1]) if len(parts) >= 2 else 0.0
+            except (ValueError, IndexError):
+                pass
+
+        # Keep best AUC per target
+        if target not in run_map or auc > run_map[target][2]:
+            run_map[target] = (run_dir.name, model_path, auc)
+
+    log.info(
+        "Found models for %d targets: %s",
+        len(run_map),
+        list(run_map.keys()),
+    )
+
+    feature_cols = _get_feature_cols(df)
+    X = df[feature_cols]
+    seasons = _recover_season_col(df)
+
+    for target_col, col_name in SCORE_TARGETS.items():
+        if target_col not in df.columns:
+            log.warning("Target %s not in data — skip", target_col)
+            continue
+
+        if target_col not in run_map:
+            log.warning(
+                "No saved model for target %s — skip",
+                target_col,
+            )
+            continue
+
+        run_id, model_path, auc = run_map[target_col]
+        log.info(
+            "Loading model for %s (run=%s, AUC=%.4f)",
+            col_name,
+            run_id[:8],
+            auc,
+        )
+
+        model = xgb.XGBClassifier()
+        model.load_model(model_path)
+
+        # Align features: the model was trained on a specific set;
+        # new features (e.g. depth_zone_land from ocean mask) may
+        # have been added since training.  Drop extras, add missing.
+        trained_feats = model.get_booster().feature_names
+        X_score = X.reindex(columns=trained_feats, fill_value=0)
+
+        probs = model.predict_proba(X_score)[:, 1]
+
+        result = pd.DataFrame(
+            {
+                "h3_cell": df["h3_cell"].values,
+                "season": seasons.values,
+                f"{col_name}_prob": probs,
+            }
+        )
+
+        SDM_PREDICTIONS_DIR.mkdir(parents=True, exist_ok=True)
+        out_path = SDM_PREDICTIONS_DIR / f"{col_name}_predictions.parquet"
+        result.to_parquet(out_path, index=False)
+        log.info(
+            "  Saved %s (%d rows, %.1f MB)",
+            out_path.name,
+            len(result),
+            out_path.stat().st_size / 1e6,
+        )
+
+    log.info("Fast grid scoring complete ✅")
 
 
 # ── Season AUC visualisation ───────────────────────────────
@@ -522,6 +788,8 @@ def main(
     target_col: str = "whale_present",
     tune: bool = False,
     n_trials: int = 50,
+    do_score: bool = False,
+    do_score_fast: bool = False,
 ) -> None:
     """Load data, optionally tune, train, evaluate, log."""
     matplotlib.use("Agg")
@@ -536,6 +804,20 @@ def main(
         ML_DIR.mkdir(parents=True, exist_ok=True)
         df.to_parquet(SDM_SEASONAL_FEATURES_FILE, index=False)
         log.info("Saved: %s", SDM_SEASONAL_FEATURES_FILE)
+
+    # ── Fast score mode: load saved models, predict ─────
+    if do_score_fast:
+        mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+        mlflow.set_experiment(EXPERIMENT_NAME)
+        score_fast(df)
+        return
+
+    # ── Score grid mode: train all targets, save OOF ────
+    if do_score:
+        mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+        mlflow.set_experiment(EXPERIMENT_NAME)
+        score_all_targets(df, params=None)
+        return
 
     # Validate target
     if target_col not in df.columns:
@@ -572,25 +854,37 @@ def main(
         mlflow.set_tag("target", target_col)
 
         if tune:
-            log.info("Running Optuna HP search (%d trials)…", n_trials)
+            log.info(
+                "Running Optuna HP search (%d trials)…",
+                n_trials,
+            )
             mlflow.set_tag("tuned", "true")
-            best_params = tune_hyperparameters(df, target_col, n_trials)
+            best_params = tune_hyperparameters(
+                df,
+                target_col,
+                n_trials,
+            )
         else:
             mlflow.set_tag("tuned", "false")
             best_params = None
 
-        model, metrics = train_single_model(
+        model, metrics, _oof = train_single_model(
             df,
             target_col=target_col,
             params=best_params,
             log_to_mlflow=True,
         )
 
-    log.info("Done. Final AUC: %.4f", metrics["cv_roc_auc_mean"])
+    log.info(
+        "Done. Final AUC: %.4f",
+        metrics["cv_roc_auc_mean"],
+    )
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train seasonal whale SDM")
+    parser = argparse.ArgumentParser(
+        description="Train seasonal whale SDM",
+    )
     parser.add_argument(
         "--target",
         type=str,
@@ -609,5 +903,27 @@ if __name__ == "__main__":
         default=50,
         help="Number of Optuna trials (default: 50)",
     )
+    parser.add_argument(
+        "--score-grid",
+        action="store_true",
+        help=(
+            "Score the full H3 grid with OOF predictions "
+            "for all ISDM-comparable species"
+        ),
+    )
+    parser.add_argument(
+        "--score-fast",
+        action="store_true",
+        help=(
+            "Score the grid using saved MLflow models "
+            "(no retraining — uses final models)"
+        ),
+    )
     args = parser.parse_args()
-    main(target_col=args.target, tune=args.tune, n_trials=args.n_trials)
+    main(
+        target_col=args.target,
+        tune=args.tune,
+        n_trials=args.n_trials,
+        do_score=args.score_grid,
+        do_score_fast=args.score_fast,
+    )

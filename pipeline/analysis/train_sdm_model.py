@@ -61,7 +61,6 @@ NON_FEATURE_COLS = {
     "cell_lon",
     "spatial_block",
     "cv_fold",
-    "is_land",
     # All possible targets
     "whale_present",
     "right_whale_present",

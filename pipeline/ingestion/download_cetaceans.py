@@ -9,7 +9,7 @@ cetaceans (whales, dolphins, porpoises). We filter to:
   - order = Cetartiodactyla
   - not dropped (data quality flag)
   - not absence records (presence-only)
-  - US coastal bounding box (lat 24-49, lon -130 to -65)
+  - US coastal bounding box (lat -2 to 52, lon -180 to -59)
 
 Run with:
     uv run python -m pipeline.ingestion.download_cetaceans
@@ -58,10 +58,10 @@ def extract_cetaceans() -> int:
     query = f"""
         COPY (
             SELECT
-                interpreted.scientificName  AS scientific_name,
-                interpreted.decimalLatitude  AS decimal_latitude,
-                interpreted.decimalLongitude AS decimal_longitude,
-                interpreted.eventDate        AS event_date,
+                interpreted.scientificName   AS "scientificName",
+                interpreted.decimalLatitude  AS "decimalLatitude",
+                interpreted.decimalLongitude AS "decimalLongitude",
+                interpreted.eventDate        AS "eventDate",
                 interpreted.date_year        AS date_year,
                 interpreted."order"          AS "order",
                 interpreted.family           AS family,
@@ -131,17 +131,20 @@ def preview_data() -> None:
     logger.info("Families:\n%s", family_df.to_string(index=False))
 
 
-def main() -> None:
+def main(*, force: bool = False) -> None:
     """Download and filter cetacean sightings from OBIS parquets."""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    if OUTPUT_FILE.exists():
+    if OUTPUT_FILE.exists() and not force:
         logger.info(
             "Cetacean parquet already exists at %s — skipping",
             OUTPUT_FILE,
         )
         preview_data()
         return
+    if OUTPUT_FILE.exists() and force:
+        OUTPUT_FILE.unlink()
+        logger.info("Removed existing file (--force)")
 
     # Check input files exist
     input_files = list(Path("data/raw/occurrence").glob("*.parquet"))
@@ -162,4 +165,11 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    _parser = argparse.ArgumentParser(description="Extract cetacean sightings")
+    _parser.add_argument(
+        "--force", action="store_true", help="Re-extract even if file exists"
+    )
+    _args = _parser.parse_args()
+    main(force=_args.force)

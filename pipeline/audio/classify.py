@@ -180,18 +180,30 @@ class WhaleAudioClassifier(ABC):
     def load(cls, model_dir: str | Path | None = None) -> WhaleAudioClassifier:
         """Load the best available classifier from disk.
 
-        Checks for XGBoost model first (lightweight), falls back to CNN.
+        Checks model_metadata.json ``backend`` field first so the
+        correct loader is used even when both model files exist.
+        Falls back to XGBoost-first if no metadata is present.
         """
         model_dir = Path(model_dir) if model_dir else AUDIO_MODEL_DIR
 
-        # Try XGBoost
         xgb_path = model_dir / "xgboost_audio_model.json"
+        cnn_path = model_dir / "cnn_audio_model.pt"
         meta_path = model_dir / "model_metadata.json"
+
+        # Respect the backend recorded in metadata (avoids
+        # loading XGBoost with CNN-written metadata or vice-versa)
+        if meta_path.exists():
+            with open(meta_path) as f:
+                meta = json.load(f)
+            backend = meta.get("backend", "")
+            if "cnn" in backend and cnn_path.exists():
+                return CNNAudioClassifier.from_disk(cnn_path, meta_path)
+            if "xgboost" in backend and xgb_path.exists():
+                return XGBoostAudioClassifier.from_disk(xgb_path, meta_path)
+
+        # Fallback: try XGBoost first (lightweight), then CNN
         if xgb_path.exists():
             return XGBoostAudioClassifier.from_disk(xgb_path, meta_path)
-
-        # Try CNN
-        cnn_path = model_dir / "cnn_audio_model.pt"
         if cnn_path.exists():
             return CNNAudioClassifier.from_disk(cnn_path, meta_path)
 
@@ -267,11 +279,21 @@ class XGBoostAudioClassifier(WhaleAudioClassifier):
         if meta_path.exists():
             with open(meta_path) as f:
                 meta = json.load(f)
-            feature_names = meta["feature_names"]
+            feature_names = meta.get("feature_names", None)
             label_encoder = {int(k): v for k, v in meta["label_encoder"].items()}
         else:
-            feature_names = list(model.feature_names or [])
+            feature_names = None
             label_encoder = {i: s for i, s in enumerate(WHALE_AUDIO_SPECIES)}
+
+        # Fall back to model-embedded feature names when metadata
+        # doesn't include them (e.g. CNN-written metadata file).
+        if not feature_names:
+            feature_names = list(model.feature_names or [])
+            if not feature_names:
+                log.warning(
+                    "No feature_names in metadata or model; "
+                    "classification may fail on column mismatch."
+                )
 
         log.info(
             "Loaded XGBoost audio model from %s  (%d features, %d classes)",
