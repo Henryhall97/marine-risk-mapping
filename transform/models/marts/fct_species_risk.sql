@@ -116,7 +116,10 @@ enriched as (
             when 'Humpback' then nr.nisi_humpback_risk
             when 'Sperm'   then nr.nisi_sperm_risk
             else null
-        end as nisi_species_risk
+        end as nisi_species_risk,
+
+        -- Ocean mask flag for filtering
+        coalesce(b.is_ocean, false)           as is_ocean
 
     from species_cells sc
     inner join {{ ref('int_hex_grid') }} g
@@ -207,3 +210,5 @@ select
     )::numeric, 4) as species_risk_score
 
 from enriched
+-- Exclude non-ocean cells (Natural Earth ocean mask)
+where is_ocean

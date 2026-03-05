@@ -119,8 +119,8 @@ base as (
         coalesce(m.mpa_count, 0)                   as mpa_count,
         coalesce(m.has_strict_protection, false)   as has_strict_protection,
 
-        -- ── Exclude land ─────────────────────────────
-        coalesce(b.is_land, false)                 as is_land
+        -- ── Exclude non-ocean ────────────────────────
+        coalesce(b.is_ocean, false)                 as is_ocean
 
     from grid_seasons gs
     left join {{ ref('int_cetacean_density_seasonal') }} c
@@ -189,4 +189,4 @@ select
     has_strict_protection
 
 from base
-where not is_land
+where is_ocean

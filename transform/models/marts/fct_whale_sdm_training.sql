@@ -103,8 +103,8 @@ with base as (
         t.avg_speed_knots,
         t.months_active,
 
-        -- ── Exclude land ─────────────────────────────
-        coalesce(b.is_land, false)                 as is_land
+        -- ── Exclude non-ocean ────────────────────────
+        coalesce(b.is_ocean, false)                 as is_ocean
 
     from {{ ref('int_hex_grid') }} g
     left join {{ ref('int_cetacean_density') }} c
@@ -135,4 +135,4 @@ with base as (
 )
 
 select * from base
-where not is_land
+where is_ocean

@@ -56,10 +56,11 @@ cleaned as (
 
     from source
 
-    -- Filter to cells that intersect US coastal waters
+    -- Filter to cells that intersect US waters
     -- Nisi grid is global — keep only relevant cells
-    where x between -130 and -60
-      and y between 24 and 50
+    -- Matches US_BBOX in pipeline/config.py
+    where x between -180 and -59
+      and y between -2 and 52
 
 )
 

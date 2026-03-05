@@ -62,5 +62,5 @@ left join {{ ref('int_cetacean_density') }} c
 left join {{ ref('int_mpa_coverage') }} m
     on t.h3_cell = m.h3_cell
 
--- Exclude land cells
-where coalesce(b.is_land, false) = false
+-- Exclude non-ocean cells (Natural Earth ocean mask)
+where coalesce(b.is_ocean, false) = true

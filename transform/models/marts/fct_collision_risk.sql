@@ -239,8 +239,8 @@ features as (
     left join {{ ref('int_ocean_covariates') }} oc
         on g.h3_cell = oc.h3_cell
 
-    -- Exclude land cells (GEBCO positive = above sea level)
-    where coalesce(b.is_land, false) = false
+    -- Exclude non-ocean cells (Natural Earth ocean mask)
+    where coalesce(b.is_ocean, false) = true
 
 ),
 

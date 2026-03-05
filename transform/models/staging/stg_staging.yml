@@ -17,12 +17,12 @@ models:
           - not_null
 
       - name: latitude
-        description: "Latitude WGS-84 (24–49, US waters)"
+        description: "Latitude WGS-84 (-2 to 52, US waters)"
         tests:
           - not_null
 
       - name: longitude
-        description: "Longitude WGS-84 (-130 to -65, US waters)"
+        description: "Longitude WGS-84 (-180 to -59, US waters)"
         tests:
           - not_null
 

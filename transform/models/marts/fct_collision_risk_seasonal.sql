@@ -162,8 +162,8 @@ features as (
     left join {{ ref('int_ocean_covariates_seasonal') }} oc
         on gs.h3_cell = oc.h3_cell and gs.season = oc.season
 
-    -- Exclude land cells
-    where coalesce(b.is_land, false) = false
+    -- Exclude non-ocean cells (Natural Earth ocean mask)
+    where coalesce(b.is_ocean, false) = true
 
 ),
 

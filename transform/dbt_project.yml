@@ -134,13 +134,17 @@ vars:
   proximity_w_protection: 0.25
 
   # Protection gap tiered scores (lower = better protected)
-  protection_sma_and_notake: 0.1
-  protection_sma_only: 0.2
-  protection_proposed_and_mpa: 0.3
-  protection_notake_only: 0.3
-  protection_proposed_only: 0.4
-  protection_strict_mpa: 0.5
-  protection_any_mpa: 0.7
+  # Proposed speed zones removed — they are not enforceable protection.
+  # SMAs are voluntary speed advisories with limited enforcement,
+  # so they provide a small bonus on top of MPA tiers but rank
+  # far below real spatial exclusions when standing alone.
+  protection_notake_and_sma: 0.10
+  protection_notake_only: 0.15
+  protection_strict_and_sma: 0.25
+  protection_strict_mpa: 0.35
+  protection_mpa_and_sma: 0.50
+  protection_any_mpa: 0.60
+  protection_sma_only: 0.80
   protection_none: 1.0
 
 seeds:

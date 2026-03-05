@@ -129,7 +129,7 @@ base as (
         coalesce(nr.nisi_hotspot_overlap, 0)        as nisi_hotspot_overlap,
 
         -- ══════ EXCLUSION FLAGS ══════════════════════
-        coalesce(b.is_land, false)                 as is_land
+        coalesce(b.is_ocean, false)                 as is_ocean
 
     from {{ ref('int_hex_grid') }} g
     left join {{ ref('int_ship_strike_density') }} ss
@@ -154,4 +154,4 @@ base as (
 )
 
 select * from base
-where not is_land
+where is_ocean

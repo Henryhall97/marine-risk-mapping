@@ -91,6 +91,18 @@ sources:
           - name: sample_count
             description: "Number of valid sample points (max 7)"
 
+      - name: ocean_mask
+        description: >
+          Natural Earth 1:10m ocean polygons (ne_10m_ocean) clipped to
+          the US coastal bounding box. Used by int_bathymetry to flag
+          H3 cells as ocean vs inland (Great Lakes, rivers, etc.).
+          Replaces the naive depth_m >= 0 heuristic.
+        columns:
+          - name: id
+            description: "Auto-generated primary key"
+          - name: geom
+            description: "Ocean polygon geometry (MultiPolygon, SRID 4326)"
+
       - name: cell_proximity
         description: >
           Nearest-neighbour distances between grid cells and key features.
@@ -253,3 +265,26 @@ sources:
             description: "Predicted P(humpback whale present) from ISDM model (0–1)"
           - name: isdm_sperm_whale
             description: "Predicted P(sperm whale present) from ISDM model (0–1)"
+
+      - name: ml_sdm_predictions
+        description: >
+          SDM (OBIS-trained) whale presence probabilities per H3 cell per
+          season.  Out-of-fold predictions from 5-fold spatial block CV —
+          each cell's probability comes from a model that never saw it
+          during training.  Loaded by pipeline/database/load_sdm_predictions.py.
+          Grain: one row per (h3_cell, season). ~7.3M rows.
+        columns:
+          - name: h3_cell
+            description: "H3 cell index (resolution 7, BIGINT)"
+          - name: season
+            description: "Season name: winter, spring, summer, fall"
+          - name: sdm_any_whale
+            description: "Predicted P(any whale present) from OBIS SDM (0–1)"
+          - name: sdm_blue_whale
+            description: "Predicted P(blue whale present) from OBIS SDM (0–1)"
+          - name: sdm_fin_whale
+            description: "Predicted P(fin whale present) from OBIS SDM (0–1)"
+          - name: sdm_humpback_whale
+            description: "Predicted P(humpback whale present) from OBIS SDM (0–1)"
+          - name: sdm_sperm_whale
+            description: "Predicted P(sperm whale present) from OBIS SDM (0–1)"

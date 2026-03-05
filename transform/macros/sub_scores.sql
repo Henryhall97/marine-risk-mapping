@@ -245,23 +245,33 @@
 
 -- ── Protection gap sub-score (0–1) ─────────────────────────
 -- Tiered CASE: lower score = better protected.
+--
+-- Proposed speed zones are EXCLUDED — they represent areas
+-- identified as risky, not areas that are actually protected.
+-- Including them inverted the signal: corridors deemed
+-- dangerous enough to warrant a proposal scored as "protected".
+--
+-- SMAs are voluntary speed advisories (limited enforcement),
+-- so they provide only a small bonus on top of real spatial
+-- protection (MPAs / no-take zones).  Standing alone, an SMA
+-- is scored only marginally better than no protection at all.
 
 {% macro protection_gap_score() %}
 case
-    when coalesce(in_current_sma, false) and coalesce(has_no_take_zone, false)
-        then {{ var('protection_sma_and_notake') }}
-    when coalesce(in_current_sma, false)
-        then {{ var('protection_sma_only') }}
-    when coalesce(in_proposed_zone, false) and in_mpa
-        then {{ var('protection_proposed_and_mpa') }}
+    when coalesce(has_no_take_zone, false) and coalesce(in_current_sma, false)
+        then {{ var('protection_notake_and_sma') }}
     when coalesce(has_no_take_zone, false)
         then {{ var('protection_notake_only') }}
-    when coalesce(in_proposed_zone, false)
-        then {{ var('protection_proposed_only') }}
+    when coalesce(has_strict_protection, false) and coalesce(in_current_sma, false)
+        then {{ var('protection_strict_and_sma') }}
     when coalesce(has_strict_protection, false)
         then {{ var('protection_strict_mpa') }}
+    when in_mpa and coalesce(in_current_sma, false)
+        then {{ var('protection_mpa_and_sma') }}
     when in_mpa
         then {{ var('protection_any_mpa') }}
+    when coalesce(in_current_sma, false)
+        then {{ var('protection_sma_only') }}
     else {{ var('protection_none') }}
 end
 {% endmacro %}

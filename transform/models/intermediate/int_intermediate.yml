@@ -363,7 +363,15 @@ models:
         description: "Number of valid raster samples (max 7, fewer at raster edges)"
 
       - name: is_land
-        description: "True if mean depth >= 0m (GEBCO positive = above sea level)"
+        description: "True if mean depth >= 0m (GEBCO positive = above sea level). Legacy — prefer is_ocean."
+        tests:
+          - not_null
+
+      - name: is_ocean
+        description: >
+          True if cell centroid falls within a Natural Earth ocean polygon.
+          Correctly excludes Great Lakes and inland water bodies that have
+          negative GEBCO depth. Authoritative ocean/land classification.
         tests:
           - not_null
 
@@ -886,6 +894,61 @@ models:
 
       - name: any_whale_prob
         description: "P(any whale present) = 1 - ∏(1 - P_i), independence assumption"
+
+    tests:
+      - unique:
+          column_name: "h3_cell || '-' || season"
+
+  # ── SDM (OBIS) Whale Predictions ────────────────────────
+  - name: int_sdm_whale_predictions
+    description: >
+      SDM (OBIS-trained) whale presence predictions per H3 cell per season.
+      Out-of-fold predictions from 5-fold spatial block CV — each cell's
+      probability comes from a model that never saw it during training.
+      Includes a directly trained any_whale aggregate plus 4 per-species
+      models and computed composites (max, mean, joint probability).
+      Enables direct comparison with ISDM (Nisi-trained) predictions.
+      Grain: one row per (h3_cell, season). ~7.3M rows.
+    config:
+      indexes:
+        - columns: ['h3_cell', 'season']
+    columns:
+      - name: h3_cell
+        description: "H3 cell index (resolution 7)"
+        tests:
+          - not_null
+
+      - name: season
+        description: "Season name: winter, spring, summer, fall"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['winter', 'spring', 'summer', 'fall']
+
+      - name: sdm_any_whale
+        description: "Directly trained P(any whale present) from OBIS SDM (0–1)"
+
+      - name: sdm_blue_whale
+        description: "Predicted P(blue whale present) from OBIS SDM (0–1)"
+
+      - name: sdm_fin_whale
+        description: "Predicted P(fin whale present) from OBIS SDM (0–1)"
+
+      - name: sdm_humpback_whale
+        description: "Predicted P(humpback whale present) from OBIS SDM (0–1)"
+
+      - name: sdm_sperm_whale
+        description: "Predicted P(sperm whale present) from OBIS SDM (0–1)"
+
+      - name: max_whale_prob
+        description: "Highest P(present) across 4 per-species SDM models"
+
+      - name: mean_whale_prob
+        description: "Average P(present) across 4 per-species SDM models"
+
+      - name: any_whale_prob_joint
+        description: "P(any whale) = 1 - ∏(1 - P_i), independence assumption across 4 species"
 
     tests:
       - unique:
