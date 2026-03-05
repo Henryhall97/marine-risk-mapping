@@ -15,9 +15,12 @@ from orchestration.constants import DB_CONFIG, PROJECT_ROOT
 def _run_script(
     context: AssetExecutionContext,
     script: str,
+    extra_args: list[str] | None = None,
 ) -> None:
     """Run a pipeline script from project root."""
     cmd = ["uv", "run", "python", script]
+    if extra_args:
+        cmd.extend(extra_args)
     context.log.info("Running: %s", " ".join(cmd))
     result = subprocess.run(
         cmd,
@@ -101,14 +104,18 @@ def postgis_schema(
     ],
     description=(
         "Load all raw data files into PostGIS tables. "
-        "Skips tables that already contain rows."
+        "Re-materialising truncates and reloads all tables (--force)."
     ),
 )
 def postgis_raw_data(
     context: AssetExecutionContext,
 ) -> MaterializeResult:
-    """Run load_data.py to populate PostGIS from parquet/CSV/shp."""
-    _run_script(context, "pipeline/database/load_data.py")
+    """Run load_data.py --force to populate PostGIS from parquet/CSV/shp.
+
+    Always uses --force so that re-materialisation refreshes data
+    (e.g. after a bbox change or new source download).
+    """
+    _run_script(context, "pipeline/database/load_data.py", ["--force"])
     counts = _get_table_counts()
     context.log.info("Table row counts: %s", counts)
     return MaterializeResult(metadata=counts)

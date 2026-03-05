@@ -17,9 +17,12 @@ from pipeline.config import (  # noqa: F401
     MPA_FILE,
     NISI_DIR,
     OCEAN_COVARIATES_FILE,
+    OCEAN_MASK_FILE,
+    PHOTO_MODEL_DIR,
     PROJECT_ROOT,
     SHIP_STRIKES_FILE,
     SMA_FILE,
     SPEED_ZONES_FILE,
     WHALE_AUDIO_RAW_DIR,
+    WHALE_PHOTO_RAW_DIR,
 )

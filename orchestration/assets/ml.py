@@ -26,8 +26,10 @@ from dagster import AssetExecutionContext, MaterializeResult, asset
 from orchestration.constants import (
     AUDIO_MODEL_DIR,
     ML_DIR,
+    PHOTO_MODEL_DIR,
     PROJECT_ROOT,
     WHALE_AUDIO_RAW_DIR,
+    WHALE_PHOTO_RAW_DIR,
 )
 
 
@@ -386,3 +388,92 @@ def audio_cnn_model(
         metadata["report_exists"] = True
 
     return MaterializeResult(metadata=metadata)
+
+
+# ═══════════════════════════════════════════════════════════
+# Photo classification
+# ═══════════════════════════════════════════════════════════
+
+
+@asset(
+    group_name="ingestion",
+    kinds={"python"},
+    description=(
+        "Download Happywhale Kaggle dataset and filter to 8 target "
+        "species (7 whales + other_cetacean). ~20K images after "
+        "filtering and capping."
+    ),
+)
+def raw_whale_photos(
+    context: AssetExecutionContext,
+) -> MaterializeResult:
+    """Download whale photo training data from Happywhale."""
+    _run_script(
+        context,
+        "pipeline/ingestion/download_whale_photos.py",
+    )
+
+    metadata = {
+        "dir": str(WHALE_PHOTO_RAW_DIR),
+        "dir_exists": WHALE_PHOTO_RAW_DIR.exists(),
+    }
+    if WHALE_PHOTO_RAW_DIR.exists():
+        n_images = len(list(WHALE_PHOTO_RAW_DIR.rglob("*.jpg")))
+        metadata["n_images"] = n_images
+
+    return MaterializeResult(metadata=metadata)
+
+
+@asset(
+    group_name="ml",
+    kinds={"python", "pytorch", "mlflow"},
+    deps=["raw_whale_photos"],
+    description=(
+        "Fine-tune an EfficientNet-B4 CNN for whale species "
+        "classification from photos. 8 classes (7 target species + "
+        "other_cetacean). Differential LR, CosineAnnealing, "
+        "early stopping on val macro F1."
+    ),
+)
+def photo_classifier_model(
+    context: AssetExecutionContext,
+) -> MaterializeResult:
+    """Train EfficientNet-B4 photo species classifier."""
+    _run_script(context, "pipeline/analysis/train_photo_classifier.py")
+
+    model_file = PHOTO_MODEL_DIR / "efficientnet_b4_whale.pt"
+    report_dir = ML_DIR / "artifacts" / "photo_classifier"
+    metadata = {
+        "mlflow_experiment": "whale_photo_classifier",
+        "model_exists": model_file.exists(),
+        "model_size_mb": _file_size_mb(model_file),
+    }
+    if report_dir.exists():
+        metadata["report_dir"] = str(report_dir)
+
+    return MaterializeResult(metadata=metadata)
+
+
+# ═══════════════════════════════════════════════════════════
+# Backend database migrations
+# ═══════════════════════════════════════════════════════════
+
+
+@asset(
+    group_name="database",
+    kinds={"postgres"},
+    deps=["postgis_schema"],
+    description=(
+        "Run backend database migrations: creates users, "
+        "sighting_submissions, reputation_events, and "
+        "user_credentials tables for the API."
+    ),
+)
+def backend_migrations(
+    context: AssetExecutionContext,
+) -> MaterializeResult:
+    """Run backend/migrations.py to create API-specific tables."""
+    _run_script(context, "backend/migrations.py")
+    return MaterializeResult(
+        metadata={"status": "migrations_applied"},
+    )

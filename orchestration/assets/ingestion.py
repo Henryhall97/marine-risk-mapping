@@ -1,8 +1,8 @@
 """Ingestion assets — download raw data from external sources.
 
 Each asset wraps one of the existing pipeline/ingestion scripts.
-All downloads are idempotent (skip-if-exists), so re-materialising
-is safe and fast when data is already on disk.
+All scripts are invoked with ``--force`` so re-materialising
+always re-downloads data, keeping the DAG truly refreshable.
 """
 
 import subprocess
@@ -15,6 +15,7 @@ from orchestration.constants import (
     MPA_FILE,
     NISI_DIR,
     OCEAN_COVARIATES_FILE,
+    OCEAN_MASK_FILE,
     PROJECT_ROOT,
     SHIP_STRIKES_FILE,
     SMA_FILE,
@@ -25,6 +26,7 @@ from orchestration.constants import (
 def _run_script(
     context: AssetExecutionContext,
     script: str,
+    extra_args: list[str] | None = None,
 ) -> None:
     """Run a pipeline script via `uv run python <script>` from project root.
 
@@ -32,6 +34,8 @@ def _run_script(
     Raises on non-zero exit code so the asset fails visibly.
     """
     cmd = ["uv", "run", "python", script]
+    if extra_args:
+        cmd.extend(extra_args)
     context.log.info("Running: %s", " ".join(cmd))
     result = subprocess.run(
         cmd,
@@ -59,7 +63,7 @@ def _run_script(
 )
 def raw_ais_data(context: AssetExecutionContext) -> MaterializeResult:
     """Download AIS vessel position data."""
-    _run_script(context, "pipeline/ingestion/download_ais.py")
+    _run_script(context, "pipeline/ingestion/download_ais.py", ["--force"])
     n_files = len(list(AIS_RAW_DIR.glob("*.parquet")))
     return MaterializeResult(
         metadata={"n_files": n_files, "dir": str(AIS_RAW_DIR)},
@@ -75,7 +79,11 @@ def raw_cetacean_data(
     context: AssetExecutionContext,
 ) -> MaterializeResult:
     """Download / filter cetacean sighting records."""
-    _run_script(context, "pipeline/ingestion/download_cetaceans.py")
+    _run_script(
+        context,
+        "pipeline/ingestion/download_cetaceans.py",
+        ["--force"],
+    )
     return MaterializeResult(
         metadata={
             "file": str(CETACEAN_FILE),
@@ -93,7 +101,7 @@ def raw_mpa_data(
     context: AssetExecutionContext,
 ) -> MaterializeResult:
     """Download Marine Protected Area boundaries."""
-    _run_script(context, "pipeline/ingestion/download_mpa.py")
+    _run_script(context, "pipeline/ingestion/download_mpa.py", ["--force"])
     return MaterializeResult(
         metadata={
             "file": str(MPA_FILE),
@@ -134,7 +142,11 @@ def raw_nisi_data(
     context: AssetExecutionContext,
 ) -> MaterializeResult:
     """Download Nisi et al. reference datasets."""
-    _run_script(context, "pipeline/ingestion/download_nisi_2024.py")
+    _run_script(
+        context,
+        "pipeline/ingestion/download_nisi_2024.py",
+        ["--force"],
+    )
     n_files = len(list(NISI_DIR.glob("*.csv")))
     return MaterializeResult(
         metadata={"n_files": n_files, "dir": str(NISI_DIR)},
@@ -153,7 +165,11 @@ def raw_ocean_covariates(
     context: AssetExecutionContext,
 ) -> MaterializeResult:
     """Download ocean covariate grids."""
-    _run_script(context, "pipeline/ingestion/download_ocean_covariates.py")
+    _run_script(
+        context,
+        "pipeline/ingestion/download_ocean_covariates.py",
+        ["--force"],
+    )
     return MaterializeResult(
         metadata={
             "file": str(OCEAN_COVARIATES_FILE),
@@ -171,7 +187,7 @@ def raw_sma_data(
     context: AssetExecutionContext,
 ) -> MaterializeResult:
     """Download Seasonal Management Area boundaries."""
-    _run_script(context, "pipeline/ingestion/download_sma.py")
+    _run_script(context, "pipeline/ingestion/download_sma.py", ["--force"])
     return MaterializeResult(
         metadata={
             "file": str(SMA_FILE),
@@ -200,5 +216,30 @@ def raw_speed_zones(
         metadata={
             "file": str(SPEED_ZONES_FILE),
             "exists": SPEED_ZONES_FILE.exists(),
+        },
+    )
+
+
+@asset(
+    group_name="ingestion",
+    kinds={"python"},
+    description=(
+        "Download Natural Earth 1:10m ocean polygon for land/ocean"
+        " mask. Clips to US coastal bbox."
+    ),
+)
+def raw_ocean_mask(
+    context: AssetExecutionContext,
+) -> MaterializeResult:
+    """Download Natural Earth ocean shapefile and clip to US bbox."""
+    _run_script(
+        context,
+        "pipeline/ingestion/download_ocean_mask.py",
+        extra_args=["--force"],
+    )
+    return MaterializeResult(
+        metadata={
+            "file": str(OCEAN_MASK_FILE),
+            "exists": OCEAN_MASK_FILE.exists(),
         },
     )

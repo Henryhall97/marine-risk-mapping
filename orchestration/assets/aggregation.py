@@ -185,3 +185,36 @@ def cell_proximity(
     )
     rows = _table_count("cell_proximity")
     return MaterializeResult(metadata={"rows": rows})
+
+
+# ── Macro overview (post-dbt) ────────────────────────────────
+
+
+@asset(
+    group_name="aggregation",
+    kinds={"python", "h3"},
+    deps=[
+        "fct_collision_risk",
+        "fct_collision_risk_seasonal",
+    ],
+    description=(
+        "Aggregate H3 res-7 risk scores to res-4 macro overview "
+        "for the coast-wide heatmap. ~14,176 cells × 5 seasons "
+        "= 70,880 rows in macro_risk_overview."
+    ),
+)
+def macro_risk_overview(
+    context: AssetExecutionContext,
+) -> MaterializeResult:
+    """Aggregate dbt marts to H3 res-4 for the macro API endpoint.
+
+    This runs *after* dbt build because it reads from
+    fct_collision_risk and fct_collision_risk_seasonal.
+    Runtime: ~2 minutes.
+    """
+    _run_script(
+        context,
+        "pipeline/aggregation/aggregate_macro_grid.py",
+    )
+    rows = _table_count("macro_risk_overview")
+    return MaterializeResult(metadata={"rows": rows})
