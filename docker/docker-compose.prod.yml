@@ -40,7 +40,8 @@ services:
     volumes:
       - postgis_data:/var/lib/postgresql/data
       # Bind-mount the dump folder so we can pg_restore from the host.
-      - ./db_dumps:/dumps:ro
+      # Path is relative to this compose file (docker/), so go up one level.
+      - ../db_dumps:/dumps:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-marine}"]
       interval: 10s
