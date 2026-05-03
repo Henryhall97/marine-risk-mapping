@@ -92,18 +92,39 @@ done
 echo "Dumping ${#TABLES[@]} tables to $OUT"
 echo "(skipping climate projections, raw AIS, and unused intermediates)"
 
-PGPASSWORD="${MR_DB_PASSWORD:-marine_dev}" pg_dump \
-    --host="${MR_DB_HOST:-localhost}" \
-    --port="${MR_DB_PORT:-5433}" \
-    --username="${MR_DB_USER:-marine}" \
-    --dbname="${MR_DB_NAME:-marine_risk}" \
-    --format=custom \
-    --compress=9 \
-    --no-owner \
-    --no-acl \
-    --verbose \
-    "${T_ARGS[@]}" \
-    -f "$OUT"
+# Run pg_dump inside the running PostGIS container so we don't need
+# postgresql-client installed on the host. The dump is written to a
+# path inside the container then copied out.
+CONTAINER="${MR_DB_CONTAINER:-marine_risk_postgis}"
+
+if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
+    echo "ERROR: container '${CONTAINER}' is not running."
+    echo "Start it with: cd docker && docker compose up -d"
+    exit 1
+fi
+
+DUMP_NAME="$(basename "$OUT")"
+echo "Running pg_dump inside container '${CONTAINER}'..."
+
+docker exec \
+    -e PGPASSWORD="${MR_DB_PASSWORD:-marine_dev}" \
+    "$CONTAINER" \
+    pg_dump \
+        --host=localhost \
+        --port=5432 \
+        --username="${MR_DB_USER:-marine}" \
+        --dbname="${MR_DB_NAME:-marine_risk}" \
+        --format=custom \
+        --compress=9 \
+        --no-owner \
+        --no-acl \
+        --verbose \
+        "${T_ARGS[@]}" \
+        -f "/tmp/${DUMP_NAME}"
+
+echo "Copying dump out of container..."
+docker cp "${CONTAINER}:/tmp/${DUMP_NAME}" "$OUT"
+docker exec "$CONTAINER" rm -f "/tmp/${DUMP_NAME}"
 
 echo
 echo "Done: $OUT"

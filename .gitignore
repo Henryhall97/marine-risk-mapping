@@ -97,3 +97,7 @@ AWSCLIV2.pkg
 frontend/public/wizard/*/raw/
 # NOAA original downloads (re-downloadable via scraper)
 frontend/public/wizard/species/noaa/
+
+# Production DB dumps (multi-GB, stored locally only)
+db_dumps/
+*.dump

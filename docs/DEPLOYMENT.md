@@ -53,41 +53,23 @@ Expect 2–4 GB. If much larger, a non-API table is included — audit `scripts/
 5. SSH key: paste your `~/.ssh/id_ed25519.pub`
 6. Note the public IPv4 (e.g. `49.12.34.56`)
 
-**DNS (Cloudflare or registrar):**
-- Add A record: `api.yourdomain.com` → `49.12.34.56`
-- Wait for propagation (usually <1 min on Cloudflare).
+**DNS (registrar / Cloudflare):**
+- Add A record: `api.whalewatch.uk` → `49.12.34.56`
+- Wait for propagation (usually <1 min on Cloudflare, ~5 min on most registrars).
+- Verify: `dig +short api.whalewatch.uk`
 
 ---
 
 ## 3. Server bootstrap
 
+One command does everything (installs Docker, configures firewall, clones repo):
+
 ```bash
 ssh root@49.12.34.56
-
-# System updates + Docker + git
-apt-get update && apt-get -y upgrade
-apt-get -y install ca-certificates curl gnupg git ufw
-install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \
-    gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-chmod a+r /etc/apt/keyrings/docker.gpg
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
-https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" \
-    > /etc/apt/sources.list.d/docker.list
-apt-get update
-apt-get -y install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-
-# Firewall
-ufw allow 22
-ufw allow 80
-ufw allow 443
-ufw --force enable
-
-# Clone the repo
-cd /opt
-git clone https://github.com/Henryhall97/marine-risk-mapping.git
-cd marine-risk-mapping
+curl -fsSL https://raw.githubusercontent.com/Henryhall97/marine-risk-mapping/main/scripts/bootstrap_vm.sh | bash
 ```
+
+When it finishes you'll be in `/opt/marine-risk-mapping` with Docker installed, firewall configured, and the repo cloned.
 
 ---
 
@@ -101,8 +83,8 @@ nano .env
 Fill in:
 - `POSTGRES_PASSWORD` — `openssl rand -base64 32`
 - `MR_JWT_SECRET` — `openssl rand -hex 32`
-- `MR_CORS_ORIGINS` — your Vercel URL(s) (set after frontend deploy)
-- `DOMAIN` — e.g. `api.yourdomain.com`
+- `MR_CORS_ORIGINS` — `https://whalewatch.uk,https://www.whalewatch.uk` (add the Vercel preview URL too once deployed)
+- `DOMAIN` — `api.whalewatch.uk`
 
 ---
 
@@ -127,20 +109,11 @@ scp -C ~/upload/marine_risk_prod_*.dump \
 cd /opt/marine-risk-mapping
 docker compose -f docker/docker-compose.prod.yml up -d postgis
 
-# Wait for healthy
-docker compose -f docker/docker-compose.prod.yml ps
-
-# Restore
-docker exec -i marine_risk_postgis_prod \
-    pg_restore -U marine -d marine_risk -j 4 --no-owner --no-acl \
-    /dumps/marine_risk_prod_*.dump
-
-# Sanity check
-docker exec marine_risk_postgis_prod \
-    psql -U marine -d marine_risk -c \
-    "SELECT count(*) FROM fct_collision_risk;"
-# → should print ~1.8M
+# Restore (helper script handles waiting + sanity checks)
+bash scripts/restore_prod_db.sh
 ```
+
+Expect ~5–10 minutes for the restore. The script prints row counts for `fct_collision_risk` (~1.8M), `fct_collision_risk_seasonal` (~7.3M), `macro_risk_overview` (~70K), and `species_crosswalk` (138) when finished.
 
 ---
 
@@ -158,9 +131,10 @@ Caddy will auto-issue a Let's Encrypt cert for `$DOMAIN` on first request (takes
 Test from your laptop:
 
 ```bash
-curl https://api.yourdomain.com/health
+curl https://api.whalewatch.uk/health
 # → {"status":"ok"}
-curl 'https://api.yourdomain.com/api/v1/risk/zones?lat_min=40&lat_max=41&lon_min=-71&lon_max=-70&limit=5'
+curl 'https://api.whalewatch.uk/api/v1/risk/zones?lat_min=40&lat_max=41&lon_min=-71&lon_max=-70&limit=5'
+curl 'https://api.whalewatch.uk/api/v1/species' | head -c 500
 ```
 
 ---
@@ -178,10 +152,11 @@ Or via the Vercel UI:
 2. **Framework preset:** Next.js
 3. **Root directory:** `frontend`
 4. **Environment variable:**
-   `NEXT_PUBLIC_API_URL` = `https://api.yourdomain.com`
+   `NEXT_PUBLIC_API_URL` = `https://api.whalewatch.uk`
 5. Deploy.
+6. **Custom domain:** Project Settings → Domains → add `whalewatch.uk` and `www.whalewatch.uk`. Vercel will show DNS records to add at your registrar (one A record + one CNAME). Vercel auto-provisions SSL.
 
-After deployment, copy the Vercel URL into the VM's `.env` `MR_CORS_ORIGINS` and restart:
+After custom domain is live, confirm `MR_CORS_ORIGINS` in the VM's `.env` includes `https://whalewatch.uk` and `https://www.whalewatch.uk` then restart:
 
 ```bash
 docker compose -f docker/docker-compose.prod.yml up -d backend
@@ -244,7 +219,7 @@ docker compose -f docker/docker-compose.prod.yml logs --tail=200 -f backend
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Caddy fails to get cert | DNS not propagated, port 80 blocked | `dig api.yourdomain.com`; check `ufw status` |
+| Caddy fails to get cert | DNS not propagated, port 80 blocked | `dig +short api.whalewatch.uk`; check `ufw status` |
 | Backend OOM kills | Photo classifier loads 1 GB on first request | Bump VM to 16 GB, or pre-warm by hitting `/api/v1/photo/classify` after deploy |
 | `psycopg2.OperationalError` | DB not ready | `docker compose ps` — Postgres healthcheck must pass |
 | Frontend shows CORS errors | `MR_CORS_ORIGINS` doesn't include Vercel URL | Add origin to `.env`, restart backend |
