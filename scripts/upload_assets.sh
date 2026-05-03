@@ -27,9 +27,18 @@ REMOTE_ROOT="/opt/marine-risk-mapping"
 #   -v  verbose
 #   -z  compress in flight (big speedup on photos/JSON, mild for GLB/PT)
 #   -h  human-readable sizes
-#   --info=progress2  single overall progress bar
+#   --progress  per-file progress (works with macOS's ancient rsync 2.6.9
+#               which lacks --info=progress2; install rsync via Homebrew
+#               for a nicer single-bar UI: `brew install rsync`)
 #   --delete  remove files on remote that no longer exist locally (safe within these dirs)
-RSYNC=(rsync -avzh --info=progress2 --delete)
+RSYNC=(rsync -avzh --progress --delete)
+
+# Pre-create destination parent directories on the remote (rsync won't
+# auto-create more than the final leaf dir).
+ssh "${REMOTE}" "mkdir -p \
+    ${REMOTE_ROOT}/frontend/public \
+    ${REMOTE_ROOT}/data/processed/ml \
+    ${REMOTE_ROOT}/data/uploads"
 
 echo "→ Syncing frontend public assets to ${REMOTE}:${REMOTE_ROOT}/frontend/public/"
 "${RSYNC[@]}" \
@@ -52,6 +61,13 @@ echo "→ Syncing ML classifier artefacts to ${REMOTE}:${REMOTE_ROOT}/data/proce
 "${RSYNC[@]}" \
     data/processed/ml/audio_classifier/ \
     "${REMOTE}:${REMOTE_ROOT}/data/processed/ml/audio_classifier/"
+
+echo "→ Syncing user-uploaded media (sighting photos, avatars, event covers, vessel photos)"
+# NOTE: no --delete on the uploads tree so we never wipe production-only
+# uploads that aren't on this laptop.
+rsync -avzh --progress \
+    data/uploads/ \
+    "${REMOTE}:${REMOTE_ROOT}/data/uploads/"
 
 echo "✓ Done. Restart the stack on the VM if it was already running:"
 echo "  ssh ${REMOTE} 'cd ${REMOTE_ROOT} && docker compose -f docker/docker-compose.prod.yml restart backend caddy'"

@@ -75,8 +75,9 @@ services:
       PORT: "8000"
     volumes:
       # User-uploaded media (sighting photos, audio, avatars, event covers).
-      # Persist outside the container so re-deploys don't lose them.
-      - mr_uploads:/app/data/uploads
+      # Bind-mounted from the host so we can rsync seed content in and so
+      # uploads survive `docker compose down -v`.
+      - ../data/uploads:/app/data/uploads
       # ML classifier artefacts (photo + audio). Rsync'd to the host via
       # scripts/upload_assets.sh; not baked into the image because they are
       # large + gitignored. Read-only — backend never writes to these.
@@ -109,7 +110,6 @@ services:
 
 volumes:
   postgis_data:
-  mr_uploads:
   caddy_data:
   caddy_config:
 
