@@ -33,6 +33,14 @@ data/
 *.pdf
 *.glb
 
+# Frontend public assets — small, project-owned graphics that should be
+# committed. Large/copyrighted dirs (models/, species/, wizard/) stay
+# ignored and are served from the API host (see scripts/upload_assets.sh).
+!frontend/public/whale_watch_logo.png
+!frontend/public/southern_right_wale.jpg
+!frontend/public/whale_detailed_smooth_icons/
+!frontend/public/whale_detailed_smooth_icons/*.png
+
 # dbt
 target/
 dbt_packages/
