@@ -111,6 +111,25 @@ def load_training_data(
         )
 
     df = pd.read_csv(manifest_path)
+    if "source" not in df.columns:
+        df["source"] = "happywhale"
+
+    # Optionally merge in iNaturalist supplementary photos
+    inat_manifest = WHALE_PHOTO_RAW_DIR / "inat_manifest.csv"
+    if inat_manifest.exists():
+        inat_df = pd.read_csv(inat_manifest)
+        if not inat_df.empty:
+            inat_df = inat_df.rename(columns={"photo_id": "individual_id"})
+            inat_df["image"] = inat_df["file_path"].apply(lambda p: Path(p).name)
+            keep = ["image", "species", "individual_id", "file_path", "source"]
+            inat_df = inat_df[[c for c in keep if c in inat_df.columns]]
+            df = pd.concat([df, inat_df], ignore_index=True)
+            log.info(
+                "Merged iNat manifest: +%d photos (now %d total)",
+                len(inat_df),
+                len(df),
+            )
+
     valid = df["file_path"].apply(lambda p: Path(p).exists())
     n_missing = (~valid).sum()
     if n_missing > 0:
@@ -118,9 +137,10 @@ def load_training_data(
         df = df[valid].reset_index(drop=True)
 
     log.info(
-        "Loaded manifest: %d images, %d species",
+        "Loaded manifest: %d images, %d species (sources: %s)",
         len(df),
         df["species"].nunique(),
+        df["source"].value_counts().to_dict(),
     )
     return df
 
