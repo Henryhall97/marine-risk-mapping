@@ -200,6 +200,13 @@ Single-stage EfficientNet-B4 fine-tuned from ImageNet weights classifies 8 whale
 # Download and filter Happywhale training images (requires Kaggle API key)
 uv run python pipeline/ingestion/download_whale_photos.py
 
+# Download supplemental iNaturalist photos (research-grade, no API key)
+# Adds gap species like sperm_whale + bowhead_whale and boosts low-volume taxa
+uv run python pipeline/ingestion/download_inat_photos.py --stage critical
+
+# Broad non-critical supplement pass
+uv run python pipeline/ingestion/download_inat_photos.py --stage broad
+
 # Train EfficientNet-B4 species classifier
 uv run python pipeline/analysis/train_photo_classifier.py
 
@@ -225,6 +232,10 @@ The remote launcher syncs `pipeline/`, `pyproject.toml`, `uv.lock`, and
 optionally `data/raw/whale_photos/` to the VM via `rsync`, installs `uv`
 remotely if needed, runs `uv sync`, executes the ArcFace trainer, and can
 pull the trained model directory back into `data/processed/ml/`.
+
+Note: audio downloads are only required for the audio classifier pipeline.
+If you are iterating on photo models (EfficientNet / ArcFace), you can skip
+`download_whale_audio.py` entirely.
 
 ## 📊 Data Sources
 

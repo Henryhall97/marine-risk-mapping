@@ -787,6 +787,12 @@ def main():
     parser = argparse.ArgumentParser(
         description="Download whale vocalisation training data",
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Companion photo pipeline: use "
+            "pipeline/ingestion/download_inat_photos.py for iNaturalist "
+            "image downloads. Audio downloads are only needed for "
+            "train_audio_classifier.py."
+        ),
     )
     parser.add_argument(
         "--source",
