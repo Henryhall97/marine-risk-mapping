@@ -1,5 +1,6 @@
 "use client";
 
+import { Suspense } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useAuth } from "@/contexts/AuthContext";
@@ -22,7 +23,7 @@ const SightingForm = dynamic(
   },
 );
 
-export default function ReportPage() {
+function ReportPageInner() {
   const { user, loading } = useAuth();
   const searchParams = useSearchParams();
   const eventId = searchParams.get("event_id") ?? undefined;
@@ -95,5 +96,19 @@ export default function ReportPage() {
         )}
       </main>
     </>
+  );
+}
+
+export default function ReportPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="min-h-screen bg-abyss-950 text-slate-100 flex items-center justify-center">
+          <div className="text-slate-400">Loading…</div>
+        </main>
+      }
+    >
+      <ReportPageInner />
+    </Suspense>
   );
 }

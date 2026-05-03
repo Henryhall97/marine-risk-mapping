@@ -8,7 +8,7 @@ import Link from "next/link";
 import dynamic from "next/dynamic";
 import Image from "next/image";
 import { useSearchParams, useRouter } from "next/navigation";
-import { Fragment, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, type ReactNode, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import type { MapSubmission } from "@/components/SubmissionMap";
 import {
   IconWhale,
@@ -1168,7 +1168,7 @@ const SPECIES_SUMMARIES: Record<
 
 type CommunityTab = "interactions" | "events";
 
-export default function CommunityPage() {
+function CommunityPageInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const { user, authHeader } = useAuth();
@@ -3870,5 +3870,19 @@ function WotWCommentBubble({ comment: c }: { comment: WotWComment }) {
         </p>
       </div>
     </div>
+  );
+}
+
+export default function CommunityPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="min-h-screen bg-abyss-950 text-slate-100 flex items-center justify-center">
+          <div className="text-slate-400">Loading...</div>
+        </main>
+      }
+    >
+      <CommunityPageInner />
+    </Suspense>
   );
 }

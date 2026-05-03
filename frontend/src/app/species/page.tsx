@@ -5,7 +5,7 @@ import { SonarPing } from "@/components/animations";
 import Image from "next/image";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import {
   IconWhale,
   IconMicroscope,
@@ -1286,7 +1286,7 @@ const DATA_SOURCES = [
 
 /* ── Page ───────────────────────────────────────────────── */
 
-export default function SpeciesCrosswalkPage() {
+function SpeciesCrosswalkPageInner() {
   const searchParams = useSearchParams();
   const [rows, setRows] = useState<CrosswalkEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -2030,5 +2030,19 @@ export default function SpeciesCrosswalkPage() {
         )}
       </div>
     </main>
+  );
+}
+
+export default function SpeciesCrosswalkPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="min-h-screen bg-abyss-950 text-slate-100 flex items-center justify-center">
+          <div className="text-slate-400">Loading...</div>
+        </main>
+      }
+    >
+      <SpeciesCrosswalkPageInner />
+    </Suspense>
   );
 }
