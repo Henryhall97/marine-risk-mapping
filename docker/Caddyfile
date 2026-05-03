@@ -6,7 +6,18 @@
 {$DOMAIN} {
     encode zstd gzip
 
-    # Pass through to the FastAPI backend.
+    # ── Static asset routes ──────────────────────────────────
+    # Frontend (Vercel) rewrites /models/*, /species/*, /wizard/*
+    # to /static/<dir>/*. We keep the path layout identical to
+    # frontend/public so local dev and prod stay in sync.
+    handle_path /static/* {
+        root * /srv/static
+        header Cache-Control "public, max-age=31536000, immutable"
+        header Access-Control-Allow-Origin "*"
+        file_server
+    }
+
+    # Pass everything else through to the FastAPI backend.
     reverse_proxy backend:8000 {
         # Long-running classifier endpoints can take 10s+; default 30s is fine.
         transport http {

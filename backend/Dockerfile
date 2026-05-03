@@ -63,12 +63,10 @@ COPY backend/ ./backend/
 COPY pipeline/ ./pipeline/
 COPY transform/dbt_project.yml ./transform/dbt_project.yml
 
-# ML model artifacts. These are bundled into the image so the API
-# is self-contained. Adds ~120MB.
-# (photo_classifier ~68MB, audio_classifier ~44MB — see DEPLOYMENT.md
-# if these grow and you want to externalise to S3.)
-COPY data/processed/ml/photo_classifier ./data/processed/ml/photo_classifier
-COPY data/processed/ml/audio_classifier ./data/processed/ml/audio_classifier
+# ML model artifacts (photo_classifier ~68 MB, audio_classifier ~44 MB) are
+# NOT baked into the image — they are large, gitignored, and rsync'd to the
+# host then bind-mounted at /app/data/processed/ml via docker-compose.prod.yml.
+# See scripts/upload_assets.sh and docs/DEPLOYMENT.md.
 
 # Run as non-root.
 RUN groupadd -r app && useradd -r -g app -d /app app && \

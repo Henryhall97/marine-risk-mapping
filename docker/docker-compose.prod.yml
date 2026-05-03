@@ -76,6 +76,10 @@ services:
       # User-uploaded media (sighting photos, audio, avatars, event covers).
       # Persist outside the container so re-deploys don't lose them.
       - mr_uploads:/app/data/uploads
+      # ML classifier artefacts (photo + audio). Rsync'd to the host via
+      # scripts/upload_assets.sh; not baked into the image because they are
+      # large + gitignored. Read-only — backend never writes to these.
+      - ../data/processed/ml:/app/data/processed/ml:ro
     networks:
       - mr_internal
       - mr_public
@@ -93,6 +97,10 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+      # Static assets (whale GLB models, species photos, wizard images) served
+      # at /static/* under the API domain. Bind-mount the host's frontend
+      # public folder read-only — same files Next.js dev serves locally.
+      - ../frontend/public:/srv/static:ro
     depends_on:
       - backend
     networks:

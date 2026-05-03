@@ -102,6 +102,30 @@ scp -C ~/upload/marine_risk_prod_*.dump \
 
 ---
 
+## 5b. Upload static assets + ML models
+
+The backend image **does not** bake in the ML classifiers, and the frontend **does not** bundle the whale GLBs / species photos / wizard images (gitignored due to size + copyright). They live on the host and are bind-mounted / served by Caddy.
+
+From your laptop, project root:
+
+```bash
+scripts/upload_assets.sh root@49.12.34.56
+```
+
+This rsyncs (totals ~580 MB):
+
+| Source (local) | Destination (VM) | Served via |
+|---|---|---|
+| `frontend/public/models/` | `/opt/marine-risk-mapping/frontend/public/models/` | Caddy `/static/models/*` |
+| `frontend/public/species/` | `…/frontend/public/species/` | Caddy `/static/species/*` |
+| `frontend/public/wizard/` | `…/frontend/public/wizard/` | Caddy `/static/wizard/*` |
+| `data/processed/ml/photo_classifier/` | `…/data/processed/ml/photo_classifier/` | Bind-mounted into `backend` container |
+| `data/processed/ml/audio_classifier/` | `…/data/processed/ml/audio_classifier/` | Bind-mounted into `backend` container |
+
+The Vercel build picks up the asset URLs automatically via `next.config.ts` rewrites — `/models/foo.glb` on the frontend transparently fetches `https://api.whalewatch.uk/static/models/foo.glb`.
+
+---
+
 ## 6. Start Postgres and restore
 
 ```bash

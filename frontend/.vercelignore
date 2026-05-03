@@ -1,0 +1,6 @@
+# Large/copyrighted assets are served from the API host's Caddy (/static/*),
+# not bundled into the Vercel deployment. See next.config.ts rewrites and
+# scripts/upload_assets.sh.
+public/models/
+public/species/
+public/wizard/
