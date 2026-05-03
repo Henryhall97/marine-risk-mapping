@@ -31,7 +31,7 @@ data/
 *.png
 *.jpg
 *.pdf
-•.glb
+*.glb
 
 # dbt
 target/
