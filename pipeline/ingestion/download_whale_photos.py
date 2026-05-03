@@ -40,6 +40,7 @@ from pipeline.config import (
     HAPPYWHALE_LABEL_FIXES,
     PHOTO_MAX_IMAGES_PER_SPECIES,
     PHOTO_OTHER_PER_SPECIES_CAP,
+    WHALE_PHOTO_BROAD_TARGET_SPECIES,
     WHALE_PHOTO_RAW_DIR,
     WHALE_PHOTO_TARGET_SPECIES,
 )
@@ -388,6 +389,16 @@ def main() -> None:
         default=PHOTO_MAX_IMAGES_PER_SPECIES,
         help=(f"Max images per species (default: {PHOTO_MAX_IMAGES_PER_SPECIES})"),
     )
+    parser.add_argument(
+        "--stage",
+        choices=["critical", "broad"],
+        default="critical",
+        help=(
+            "Download stage: 'critical' filters to the 7 ESA-listed large-whale "
+            "species (default). 'broad' includes ~10 additional dolphin/porpoise "
+            "species available in the Happywhale dataset."
+        ),
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -408,7 +419,16 @@ def main() -> None:
     df = load_and_clean_labels()
 
     # Step 3: Filter to target species
-    df = filter_target_species(df, max_per_species=args.max_per_species)
+    target_species = (
+        WHALE_PHOTO_BROAD_TARGET_SPECIES
+        if args.stage == "broad"
+        else WHALE_PHOTO_TARGET_SPECIES
+    )
+    df = filter_target_species(
+        df,
+        target_species=target_species,
+        max_per_species=args.max_per_species,
+    )
 
     # Step 4: Organise into species directories
     df = organise_images(df)

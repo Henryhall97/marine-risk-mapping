@@ -34,6 +34,16 @@ class CredentialInfo(BaseModel):
     description: str
     is_verified: bool = False
     verified_at: datetime | None = None
+    evidence_url: str | None = None
+
+
+class UserSearchResult(BaseModel):
+    """Lightweight user info for search / type-ahead."""
+
+    id: int
+    display_name: str
+    reputation_tier: str = "newcomer"
+    avatar_url: str | None = None
 
 
 class UserProfile(BaseModel):
@@ -42,11 +52,13 @@ class UserProfile(BaseModel):
     id: int
     email: str
     display_name: str
+    bio: str | None = None
     avatar_url: str | None = None
     created_at: datetime
     submission_count: int = 0
     reputation_score: int = 0
     reputation_tier: str = "newcomer"
+    is_moderator: bool = False
     credentials: list[CredentialInfo] = Field(default_factory=list)
 
 
@@ -70,11 +82,13 @@ class PublicProfile(BaseModel):
 
     id: int
     display_name: str
+    bio: str | None = None
     avatar_url: str | None = None
     created_at: datetime
     submission_count: int = 0
     verified_count: int = 0
     reputation_score: int = 0
     reputation_tier: str = "newcomer"
+    is_moderator: bool = False
     credentials: list[CredentialInfo] = Field(default_factory=list)
     species_breakdown: list[SpeciesCount] = Field(default_factory=list)

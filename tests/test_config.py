@@ -331,8 +331,9 @@ class TestAudioConstants:
     def test_species_list_length(self):
         from pipeline.config import WHALE_AUDIO_SPECIES
 
-        assert len(WHALE_AUDIO_SPECIES) == 9  # 8 real + unknown
-        assert "unknown_whale" in WHALE_AUDIO_SPECIES
+        # 9 ESA-listed species (incl. bowhead) + other_cetacean gatekeeper
+        assert len(WHALE_AUDIO_SPECIES) == 10
+        assert "other_cetacean" in WHALE_AUDIO_SPECIES
 
     def test_freq_bands_subset_of_species(self):
         from pipeline.config import WHALE_AUDIO_SPECIES, WHALE_FREQ_BANDS

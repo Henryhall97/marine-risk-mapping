@@ -93,7 +93,7 @@ aws s3 sync --no-sign-request s3://obis-open-data/occurrence/ ./occurrence/
 these parquets with pushdown predicates, filtering to:
 
 - Order = Cetartiodactyla (whales, dolphins, porpoises)
-- US coastal bounding box (lat 2°S–52°N, lon 180–59°W)
+- Study bounding box (lat 2°S–52°N, lon 180°W–59°W)
 - Presence records only (no absences, no dropped records)
 
 The filtered output (~364K sightings) is written to:

@@ -17,12 +17,12 @@ models:
           - not_null
 
       - name: latitude
-        description: "Latitude WGS-84 (-2 to 52, US waters)"
+        description: "Latitude WGS-84 (-2 to 52, study bbox)"
         tests:
           - not_null
 
       - name: longitude
-        description: "Longitude WGS-84 (-180 to -59, US waters)"
+        description: "Longitude WGS-84 (-180 to -59, study bbox)"
         tests:
           - not_null
 
@@ -129,9 +129,9 @@ models:
   # ── Nisi Risk Grid ─────────────────────────────────────
   - name: stg_nisi_risk_grid
     description: >
-      Nisi et al. (2024) 1-degree risk grid filtered to US coastal
-      waters. Contains published collision risk scores as external
-      benchmark.
+      Nisi et al. (2024) 1-degree risk grid filtered to the study
+      bounding box. Contains published collision risk scores as
+      external benchmark.
     columns:
       - name: lat
         description: "Grid cell latitude"
@@ -171,6 +171,54 @@ models:
           - accepted_values:
               arguments:
                 values: ['winter', 'spring', 'summer', 'fall']
+
+      - name: geom
+        description: "PostGIS POINT geometry (SRID 4326)"
+        tests:
+          - not_null
+
+  # ── CMIP6 Projected Ocean Covariates ───────────────────
+  - name: stg_cmip6_ocean_covariates
+    description: >
+      Cleaned CMIP6 climate-projected ocean environmental covariates.
+      SST, MLD, SLA, PP projected under SSP2-4.5 and SSP5-8.5 for
+      2030s–2080s. Same structure as stg_ocean_covariates with
+      additional scenario and decade columns.
+      Grain: one row per (lat, lon, season, scenario, decade).
+    columns:
+      - name: lat
+        description: "Grid cell latitude"
+        tests:
+          - not_null
+
+      - name: lon
+        description: "Grid cell longitude"
+        tests:
+          - not_null
+
+      - name: season
+        description: "Season name: winter, spring, summer, fall"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['winter', 'spring', 'summer', 'fall']
+
+      - name: scenario
+        description: "CMIP6 scenario: ssp245 or ssp585"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['ssp245', 'ssp585']
+
+      - name: decade
+        description: "Projection decade: 2030s, 2040s, 2060s, 2080s"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['2030s', '2040s', '2060s', '2080s']
 
       - name: geom
         description: "PostGIS POINT geometry (SRID 4326)"

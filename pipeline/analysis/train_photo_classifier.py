@@ -38,6 +38,7 @@ from pipeline.config import (
     MLFLOW_TRACKING_URI,
     PHOTO_BACKBONE_FREEZE_EPOCHS,
     PHOTO_BATCH_SIZE,
+    PHOTO_BROAD_MODEL_DIR,
     PHOTO_EARLY_STOP_PATIENCE,
     PHOTO_EPOCHS,
     PHOTO_IMAGE_SIZE,
@@ -45,6 +46,9 @@ from pipeline.config import (
     PHOTO_LR_BACKBONE,
     PHOTO_LR_HEAD,
     PHOTO_MODEL_DIR,
+    PHOTO_RARE_EMBEDDINGS_DIR,
+    WHALE_PHOTO_BROAD_TARGET_SPECIES,
+    WHALE_PHOTO_RARE_SPECIES,
     WHALE_PHOTO_RAW_DIR,
     WHALE_PHOTO_SPECIES,
 )
@@ -102,12 +106,23 @@ def train_model(
     patience: int = PHOTO_EARLY_STOP_PATIENCE,
     tune: bool = False,
     n_trials: int = 30,
+    model_dir: Path | None = None,
+    experiment_name: str | None = None,
 ) -> None:
     """Train EfficientNet-B4 on whale photos.
 
     Uses 80/20 stratified split, weighted random sampling,
     differential LR, cosine annealing, and early stopping.
     Logs everything to MLflow.
+
+    Parameters
+    ----------
+    model_dir :
+        Directory to save model + metadata.  Defaults to
+        ``PHOTO_MODEL_DIR`` (critical stage).  Pass
+        ``PHOTO_BROAD_MODEL_DIR`` for the broad stage.
+    experiment_name :
+        MLflow experiment name.  Defaults to ``EXPERIMENT_NAME``.
     """
     import mlflow
     import torch
@@ -134,11 +149,13 @@ def train_model(
     )
 
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-    mlflow.set_experiment(EXPERIMENT_NAME)
+    mlflow.set_experiment(experiment_name or EXPERIMENT_NAME)
 
     # ── Encode labels ────────────────────────────────────────
+    # Fit on the species actually present in df (works for both critical
+    # and broad stages, since the caller pre-filters the manifest).
     le = LabelEncoder()
-    le.fit(WHALE_PHOTO_SPECIES)
+    le.fit(sorted(df["species"].unique()))
     labels = le.transform(df["species"].values)
     label_map = {i: s for i, s in enumerate(le.classes_)}
     n_classes = len(label_map)
@@ -505,15 +522,16 @@ def train_model(
         mlflow.log_artifact(str(ARTIFACTS_DIR / "per_class_metrics.csv"))
 
         # Save model
+        save_dir = model_dir or PHOTO_MODEL_DIR
         classifier = WhalePhotoClassifier(
             model=model,
             label_encoder=label_map,
         )
-        model_path = classifier.save()
+        model_path = classifier.save(save_dir)
         mlflow.log_artifact(str(model_path))
-        mlflow.log_artifact(str(PHOTO_MODEL_DIR / "model_metadata.json"))
+        mlflow.log_artifact(str(save_dir / "model_metadata.json"))
 
-        log.info("Model saved to %s", PHOTO_MODEL_DIR)
+        log.info("Model saved to %s", save_dir)
 
 
 # ── Optuna tuning ───────────────────────────────────────────
@@ -766,6 +784,17 @@ def main() -> None:
         help="Number of Optuna trials (default: 30)",
     )
     parser.add_argument(
+        "--stage",
+        choices=["critical", "broad", "rare"],
+        default="critical",
+        help=(
+            "Training stage: 'critical' trains the 8-class ESA-species model "
+            "(default). 'broad' trains the 19-class non-critical cetacean model. "
+            "'rare' builds mean EfficientNet-B4 embedding vectors for rare "
+            "species from the trained broad model backbone."
+        ),
+    )
+    parser.add_argument(
         "--evaluate-only",
         action="store_true",
         help="Load existing model and evaluate on val data",
@@ -808,6 +837,80 @@ def main() -> None:
         )
         return
 
+    # ── Stage routing ──────────────────────────────────────────────
+    if args.stage == "rare":
+        # Build mean embedding library from broad model backbone
+        log.info(
+            "Stage: rare — building mean embedding library "
+            "from broad EfficientNet-B4 backbone"
+        )
+        from pipeline.photo.classify import (
+            RareEmbeddingPhotoClassifier,
+            WhalePhotoClassifier,
+        )
+
+        broad_clf = WhalePhotoClassifier.load(PHOTO_BROAD_MODEL_DIR)
+        rare_species = WHALE_PHOTO_RARE_SPECIES
+
+        # Build dict of species → list[Path] from manifest
+        images_by_species: dict[str, list[Path]] = {
+            sp: [Path(p) for p in df[df["species"] == sp]["file_path"].tolist()]
+            for sp in rare_species
+            if sp in df["species"].values
+        }
+        missing_rare = set(rare_species) - set(images_by_species)
+        if missing_rare:
+            log.warning(
+                "Rare species not found in manifest: %s — download their images first.",
+                ", ".join(sorted(missing_rare)),
+            )
+        if not images_by_species:
+            log.error(
+                "No rare-species images found in manifest. "
+                "Run download_whale_photos.py --stage rare."
+            )
+            return
+
+        embedder = RareEmbeddingPhotoClassifier(library={})
+        embedder.build_library(
+            model=broad_clf.model,
+            images_by_species=images_by_species,
+            save_dir=PHOTO_RARE_EMBEDDINGS_DIR,
+        )
+        log.info(
+            "Rare embedding library built for %d species → %s",
+            len(images_by_species),
+            PHOTO_RARE_EMBEDDINGS_DIR,
+        )
+        elapsed = time.time() - t0
+        log.info("Rare stage complete in %.1f s", elapsed)
+        return
+
+    if args.stage == "broad":
+        stage_model_dir = PHOTO_BROAD_MODEL_DIR
+        stage_experiment = EXPERIMENT_NAME + "_broad"
+        # Filter manifest to broad species only
+        broad_species = [
+            s for s in WHALE_PHOTO_BROAD_TARGET_SPECIES if s != "unknown_cetacean"
+        ]
+        df = df[df["species"].isin(broad_species)].reset_index(drop=True)
+        log.info(
+            "Stage: broad — %d images, %d species",
+            len(df),
+            df["species"].nunique(),
+        )
+    else:
+        stage_model_dir = PHOTO_MODEL_DIR
+        stage_experiment = EXPERIMENT_NAME
+        # Filter manifest to critical species only
+        critical_species = [s for s in WHALE_PHOTO_SPECIES if s != "other_cetacean"]
+        df = df[df["species"].isin(critical_species)].reset_index(drop=True)
+        log.info(
+            "Stage: critical — %d images, %d species",
+            len(df),
+            df["species"].nunique(),
+        )
+
     # Train
     train_model(
         df,
@@ -817,11 +920,13 @@ def main() -> None:
         lr_backbone=args.lr_backbone,
         tune=args.tune,
         n_trials=args.n_trials,
+        model_dir=stage_model_dir,
+        experiment_name=stage_experiment,
     )
 
     elapsed = time.time() - t0
     log.info("Training complete in %.1f s", elapsed)
-    log.info("Model saved to %s", PHOTO_MODEL_DIR)
+    log.info("Model saved to %s", stage_model_dir)
 
 
 if __name__ == "__main__":

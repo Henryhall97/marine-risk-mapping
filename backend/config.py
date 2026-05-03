@@ -6,7 +6,14 @@ settings (pagination limits, CORS origins, rate limits).
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from pipeline.config import DB_CONFIG, US_BBOX  # noqa: F401 — re-exported
+
+# ── Project root ────────────────────────────────────────────
+# Anchor all data paths to the repo root so the server works
+# regardless of which directory uvicorn is launched from.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # ── Database ────────────────────────────────────────────────
 DATABASE_URL = (

@@ -36,17 +36,25 @@ class BathymetryListResponse(BaseModel):
 
 
 class OceanCovariateCell(BaseModel):
-    """Ocean covariate data for a single H3 cell (optionally seasonal)."""
+    """Ocean covariate data for a single H3 cell (optionally seasonal/projected)."""
 
     h3_cell: int
     cell_lat: float
     cell_lon: float
     season: str | None = None
+    scenario: str | None = None
+    decade: str | None = None
     sst: float | None = None
     sst_sd: float | None = None
     mld: float | None = None
     sla: float | None = None
     pp_upper_200m: float | None = None
+    # Delta fields (present only in mode=change)
+    delta_sst: float | None = None
+    delta_sst_sd: float | None = None
+    delta_mld: float | None = None
+    delta_sla: float | None = None
+    delta_pp: float | None = None
 
 
 class OceanCovariateListResponse(BaseModel):
@@ -101,6 +109,8 @@ class SdmPredictionCell(BaseModel):
     sdm_fin_whale: float | None = None
     sdm_humpback_whale: float | None = None
     sdm_sperm_whale: float | None = None
+    sdm_right_whale: float | None = None
+    sdm_minke_whale: float | None = None
     max_whale_prob: float | None = None
     mean_whale_prob: float | None = None
     any_whale_prob_joint: float | None = None
@@ -312,13 +322,28 @@ class MLRiskZoneDetail(MLRiskZoneSummary):
     """Full ML risk detail for a single H3 cell."""
 
     scores: MLRiskScores
+    # Ensembled species probabilities (ISDM+SDM avg for 4 shared,
+    # SDM-only for right+minke)
+    blue_whale_prob: float | None = None
+    fin_whale_prob: float | None = None
+    humpback_whale_prob: float | None = None
+    sperm_whale_prob: float | None = None
+    right_whale_prob: float | None = None
+    minke_whale_prob: float | None = None
     any_whale_prob: float | None = None
     max_whale_prob: float | None = None
     mean_whale_prob: float | None = None
+    # Raw diagnostic predictions
     isdm_blue_whale: float | None = None
     isdm_fin_whale: float | None = None
     isdm_humpback_whale: float | None = None
     isdm_sperm_whale: float | None = None
+    sdm_blue_whale: float | None = None
+    sdm_fin_whale: float | None = None
+    sdm_humpback_whale: float | None = None
+    sdm_sperm_whale: float | None = None
+    sdm_right_whale: float | None = None
+    sdm_minke_whale: float | None = None
 
 
 class MLRiskListResponse(BaseModel):
@@ -557,3 +582,151 @@ class TrafficDensityListResponse(BaseModel):
     offset: int
     limit: int
     data: list[TrafficDensityCell]
+
+
+# ── SDM projections (CMIP6 climate) ────────────────────────
+
+
+class SdmProjectionCell(BaseModel):
+    """Projected whale habitat probability for one (cell, season, scenario, decade)."""
+
+    h3_cell: int
+    cell_lat: float
+    cell_lon: float
+    season: str | None = None
+    scenario: str
+    decade: str
+    sdm_any_whale: float | None = None
+    sdm_blue_whale: float | None = None
+    sdm_fin_whale: float | None = None
+    sdm_humpback_whale: float | None = None
+    sdm_sperm_whale: float | None = None
+    sdm_right_whale: float | None = None
+    sdm_minke_whale: float | None = None
+    # Delta fields (only populated when mode=change)
+    delta_any_whale: float | None = None
+    delta_blue_whale: float | None = None
+    delta_fin_whale: float | None = None
+    delta_humpback_whale: float | None = None
+    delta_sperm_whale: float | None = None
+    delta_right_whale: float | None = None
+    delta_minke_whale: float | None = None
+
+
+class SdmProjectionListResponse(BaseModel):
+    """Paginated SDM projection layer."""
+
+    total: int
+    offset: int
+    limit: int
+    data: list[SdmProjectionCell]
+
+
+class ProjectionSummaryRow(BaseModel):
+    """Summary statistics for one (scenario, decade, season)."""
+
+    scenario: str
+    decade: str
+    season: str
+    cell_count: int
+    mean_prob: float | None = None
+    median_prob: float | None = None
+    high_prob_cells: int | None = None
+    max_prob: float | None = None
+
+
+class ProjectionSummaryResponse(BaseModel):
+    """Projection change summary across scenarios and decades."""
+
+    data: list[ProjectionSummaryRow]
+
+
+# ── ISDM projections (CMIP6 climate) ───────────────────────
+
+
+class IsdmProjectionCell(BaseModel):
+    """Projected ISDM whale habitat probability."""
+
+    h3_cell: int
+    cell_lat: float
+    cell_lon: float
+    season: str | None = None
+    scenario: str
+    decade: str
+    isdm_blue_whale: float | None = None
+    isdm_fin_whale: float | None = None
+    isdm_humpback_whale: float | None = None
+    isdm_sperm_whale: float | None = None
+    # Delta fields (only populated when mode=change)
+    delta_blue_whale: float | None = None
+    delta_fin_whale: float | None = None
+    delta_humpback_whale: float | None = None
+    delta_sperm_whale: float | None = None
+
+
+class IsdmProjectionListResponse(BaseModel):
+    """Paginated ISDM projection layer."""
+
+    total: int
+    offset: int
+    limit: int
+    data: list[IsdmProjectionCell]
+
+
+# ── Projected ML risk (CMIP6 climate) ──────────────────────
+
+
+class ProjectedMLRiskCell(BaseModel):
+    """Projected ML risk for a single H3 cell under a climate scenario."""
+
+    h3_cell: int
+    cell_lat: float | None = None
+    cell_lon: float | None = None
+    season: str | None = None
+    scenario: str
+    decade: str
+    risk_score: float
+    risk_category: str
+    # Sub-scores (6 — no proximity in projections)
+    interaction_score: float | None = None
+    traffic_score: float | None = None
+    whale_ml_score: float | None = None
+    strike_score: float | None = None
+    protection_gap: float | None = None
+    reference_risk_score: float | None = None
+    # Ensembled whale predictions (6 species)
+    any_whale_prob: float | None = None
+    blue_whale_prob: float | None = None
+    fin_whale_prob: float | None = None
+    humpback_whale_prob: float | None = None
+    sperm_whale_prob: float | None = None
+    right_whale_prob: float | None = None
+    minke_whale_prob: float | None = None
+    # Delta vs current (only when mode=change)
+    delta_risk_score: float | None = None
+    delta_interaction_score: float | None = None
+    delta_whale_ml_score: float | None = None
+
+
+class ProjectedMLRiskListResponse(BaseModel):
+    """Paginated projected ML risk."""
+
+    total: int
+    offset: int
+    limit: int
+    data: list[ProjectedMLRiskCell]
+
+
+class ProjectedMLRiskStatsResponse(BaseModel):
+    """Aggregate projected risk statistics."""
+
+    total_cells: int
+    avg_risk_score: float
+    max_risk_score: float
+    min_risk_score: float
+    avg_current_risk_score: float | None = None
+    avg_delta_risk_score: float | None = None
+    category_counts: dict[str, int] = Field(
+        default_factory=dict,
+        description="Count of cells per risk category",
+    )

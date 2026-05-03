@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
 
+from backend.config import PROJECT_ROOT
 from backend.models.macro import MacroCell, MacroOverviewResponse
 from backend.services.macro import get_macro_overview
 
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/macro", tags=["macro"])
 
-CONTOUR_PATH = Path("data/processed/macro/bathymetry_contours.geojson")
+CONTOUR_PATH = PROJECT_ROOT / "data/processed/macro/bathymetry_contours.geojson"
 
 # Cache the contour GeoJSON in memory (static data, loaded once)
 _contour_cache: dict | None = None
@@ -27,17 +27,29 @@ def macro_overview(
         "annual",
         description=("Season filter: annual, winter, spring, summer, fall"),
     ),
+    scenario: str | None = Query(
+        None,
+        description="Climate scenario: ssp245 or ssp585 (omit for current)",
+    ),
+    decade: str | None = Query(
+        None,
+        description="Projection decade: 2030s, 2040s, 2060s, 2080s (omit for current)",
+    ),
 ) -> MacroOverviewResponse:
     """Coast-wide risk overview at H3 res-4 (~57 km² hexagons).
 
     Returns all coarse cells for the requested season in a single
     response (typically ~5 500 cells).  No bbox or pagination needed.
+
+    For climate projections, pass both ``scenario`` and ``decade``.
     """
-    rows = get_macro_overview(season)
+    rows = get_macro_overview(season, scenario, decade)
     data = [MacroCell(**r) for r in rows]
     return MacroOverviewResponse(
         total=len(data),
         season=season,
+        scenario=scenario,
+        decade=decade,
         data=data,
     )
 

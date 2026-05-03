@@ -36,6 +36,8 @@ SDM_SPECIES = {
     "sdm_fin_whale": "sdm_fin_whale_predictions.parquet",
     "sdm_humpback_whale": "sdm_humpback_whale_predictions.parquet",
     "sdm_sperm_whale": "sdm_sperm_whale_predictions.parquet",
+    "sdm_right_whale": "sdm_right_whale_predictions.parquet",
+    "sdm_minke_whale": "sdm_minke_whale_predictions.parquet",
 }
 
 CREATE_TABLE = """
@@ -47,6 +49,8 @@ CREATE TABLE IF NOT EXISTS ml_sdm_predictions (
     sdm_fin_whale         DOUBLE PRECISION,
     sdm_humpback_whale    DOUBLE PRECISION,
     sdm_sperm_whale       DOUBLE PRECISION,
+    sdm_right_whale       DOUBLE PRECISION,
+    sdm_minke_whale       DOUBLE PRECISION,
     PRIMARY KEY (h3_cell, season)
 );
 """

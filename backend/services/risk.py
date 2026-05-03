@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from backend.services.database import fetch_all, fetch_one, fetch_scalar
@@ -100,6 +101,93 @@ def get_risk_zone_detail(h3_cell: int) -> dict[str, Any] | None:
     """Full detail for a single H3 cell from fct_collision_risk."""
     query = "SELECT * FROM fct_collision_risk WHERE h3_cell = %s"
     return fetch_one(query, (h3_cell,))
+
+
+# ── Nearest-cell fallback ──────────────────────────────────
+
+_NEAREST_RADII_DEG = [2.0, 8.0, 20.0]
+
+
+def _haversine_km(
+    lat1: float,
+    lon1: float,
+    lat2: float,
+    lon2: float,
+) -> float:
+    """Great-circle distance between two points in km."""
+    r = 6371.0
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(math.radians(lat1))
+        * math.cos(math.radians(lat2))
+        * math.sin(dlon / 2) ** 2
+    )
+    return r * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def find_nearest_risk_cell(
+    lat: float,
+    lon: float,
+) -> dict[str, Any] | None:
+    """Find nearest *fct_collision_risk* cell to *lat*/*lon*.
+
+    Uses progressive bbox expansion for efficiency,
+    returning the row dict augmented with ``distance_km``.
+    """
+    order_expr = (
+        "power(cell_lat - %(lat)s, 2)"
+        " + power("
+        "(cell_lon - %(lon)s)"
+        " * cos(radians(%(lat)s)), 2)"
+    )
+
+    for radius in _NEAREST_RADII_DEG:
+        query = (
+            "SELECT * FROM fct_collision_risk "
+            "WHERE cell_lat "
+            "BETWEEN %(lat_min)s AND %(lat_max)s "
+            "AND cell_lon "
+            "BETWEEN %(lon_min)s AND %(lon_max)s "
+            f"ORDER BY {order_expr} LIMIT 1"
+        )
+        params: dict[str, Any] = {
+            "lat": lat,
+            "lon": lon,
+            "lat_min": lat - radius,
+            "lat_max": lat + radius,
+            "lon_min": lon - radius,
+            "lon_max": lon + radius,
+        }
+        row = fetch_one(query, params)
+        if row:
+            dist = _haversine_km(
+                lat,
+                lon,
+                row["cell_lat"],
+                row["cell_lon"],
+            )
+            return {
+                **row,
+                "distance_km": round(dist, 1),
+            }
+
+    # Global fallback — no bbox constraint
+    query = f"SELECT * FROM fct_collision_risk ORDER BY {order_expr} LIMIT 1"
+    row = fetch_one(query, {"lat": lat, "lon": lon})
+    if row:
+        dist = _haversine_km(
+            lat,
+            lon,
+            row["cell_lat"],
+            row["cell_lon"],
+        )
+        return {
+            **row,
+            "distance_km": round(dist, 1),
+        }
+    return None
 
 
 def get_risk_stats(

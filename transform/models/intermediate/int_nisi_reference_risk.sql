@@ -2,6 +2,13 @@
 -- Spatially joins each H3 hex cell to the nearest Nisi risk
 -- grid cell to pull in their published risk scores as a
 -- benchmark/reference layer.
+
+{{ config(
+    indexes=[
+        {'columns': ['h3_cell']},
+    ]
+) }}
+
 --
 -- Nisi's grid is 1-degree — much coarser than our H3 res-7
 -- (~1.2km). We use ST_DWithin with a 1-degree threshold to

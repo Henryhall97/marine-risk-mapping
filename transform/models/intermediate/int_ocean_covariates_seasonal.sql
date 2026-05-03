@@ -2,6 +2,13 @@
 -- Spatially joins seasonal ocean environmental data to the H3 hex grid
 -- using nearest-neighbour matching — same approach as int_ocean_covariates
 -- but at (h3_cell, season) grain.
+
+{{ config(
+    indexes=[
+        {'columns': ['h3_cell', 'season']},
+    ]
+) }}
+
 --
 -- Ocean covariates now carry a season column (climatological seasonal
 -- means from 2019–2024), so SST, MLD, SLA, and PP all vary by season.

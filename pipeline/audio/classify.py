@@ -1,23 +1,29 @@
 """Whale species audio classifier.
 
-Two classification backends:
-  1. **XGBoost (default)** — trained on acoustic feature vectors extracted by
-     ``preprocess.py``.  Lightweight, consistent with the project's ML stack.
-  2. **CNN (optional)** — a mel-spectrogram image classifier using a fine-tuned
-     ResNet18 (requires torch + torchvision).
+Three-pass classification pipeline:
+  1. **Critical (Pass 1)** — 9-class high-precision model covering ESA-listed
+     large whales + bowhead.  Escalates when the top prediction is
+     ``other_cetacean`` OR max segment confidence < 0.65.
+  2. **Broad (Pass 2)** — ~14-class model covering non-critical cetaceans
+     (dolphins, pilot whales, beluga, etc.).  Escalates when the top
+     prediction is ``unknown_cetacean`` OR max segment confidence < 0.50.
+  3. **Rare (Pass 3)** — cosine-similarity embedding lookup against a library
+     of mean feature vectors for rare species.  Returns ranked
+     ``possible_matches`` with similarity scores; never emits a definitive
+     classification.
 
-Both backends expose the same ``WhaleAudioClassifier`` interface so callers
-don't need to know which is active.
+Two XGBoost / CNN backends are available for passes 1 and 2:
+  - **XGBoost (default)** — acoustic feature vectors
+  - **CNN (optional)** — mel-spectrogram ResNet18 (requires torch)
 
 Usage
 -----
-    from pipeline.audio.classify import WhaleAudioClassifier
+    from pipeline.audio.classify import ThreePassAudioClassifier
 
-    clf = WhaleAudioClassifier.load()           # loads best available model
-    results = clf.predict("recording.wav")      # list[dict] per segment
-    enriched = clf.classify_and_enrich(          # + H3 risk context
-        "recording.wav", lat=42.3, lon=-70.5
-    )
+    clf = ThreePassAudioClassifier.load()
+    result = clf.predict("recording.wav")
+    # result["classifier_stage"] in {"critical", "broad", "rare"}
+    # result["possible_matches"]   — populated only when stage == "rare"
 """
 
 from __future__ import annotations
@@ -32,8 +38,12 @@ import numpy as np
 import pandas as pd
 
 from pipeline.config import (
+    AUDIO_BROAD_CONFIDENCE_THRESHOLD,
+    AUDIO_BROAD_MODEL_DIR,
+    AUDIO_CRITICAL_CONFIDENCE_THRESHOLD,
     AUDIO_MODEL_DIR,
     AUDIO_N_MELS,
+    AUDIO_RARE_EMBEDDINGS_DIR,
     AUDIO_SAMPLE_RATE,
     AUDIO_SEGMENT_DURATION,
     AUDIO_SEGMENT_HOP,
@@ -478,6 +488,449 @@ class CNNAudioClassifier(WhaleAudioClassifier):
 
         log.info("Saved CNN audio model to %s", model_dir)
         return model_path
+
+
+# ── Rare-species embedding classifier (Pass 3) ──────────────────────────────
+
+
+class RareEmbeddingAudioClassifier:
+    """Cosine-similarity embedding lookup for rare cetacean species.
+
+    Rather than a softmax classifier, this class maintains a library of
+    **mean feature vectors** — one per rare species — built from the broad
+    model backbone.  At inference time the query segment's feature vector is
+    compared to each library vector via cosine similarity and a ranked list of
+    ``possible_matches`` is returned.
+
+    Similarity labels
+    -----------------
+    - ``"possible match"`` : cosine similarity ≥ 0.80
+    - ``"weak match"``     : cosine similarity ≥ 0.65
+    - ``"unlikely"``       : cosine similarity < 0.65
+
+    This is deliberately not a hard classification — the result surfaces
+    uncertainty to the end user.
+    """
+
+    SIMILARITY_POSSIBLE: float = 0.80
+    SIMILARITY_WEAK: float = 0.65
+
+    def __init__(self, library: dict[str, np.ndarray]) -> None:
+        """Construct from a pre-loaded embedding library.
+
+        Parameters
+        ----------
+        library : dict mapping species name → 1-D mean feature vector.
+        """
+        self.library = library
+        # Normalise once for fast cosine similarity
+        self._normed = {
+            sp: vec / (np.linalg.norm(vec) + 1e-10) for sp, vec in library.items()
+        }
+
+    @classmethod
+    def load(
+        cls, embeddings_dir: str | Path | None = None
+    ) -> RareEmbeddingAudioClassifier:
+        """Load mean embedding vectors from ``{species}_mean_embedding.npy``
+        files saved during rare-stage training.
+        """
+        embeddings_dir = Path(embeddings_dir or AUDIO_RARE_EMBEDDINGS_DIR)
+        if not embeddings_dir.exists():
+            raise FileNotFoundError(
+                f"Rare audio embeddings directory not found: {embeddings_dir}. "
+                "Run train_audio_classifier.py --stage rare first."
+            )
+        library: dict[str, np.ndarray] = {}
+        for npy_path in sorted(embeddings_dir.glob("*_mean_embedding.npy")):
+            species = npy_path.stem.replace("_mean_embedding", "")
+            library[species] = np.load(npy_path)
+        if not library:
+            raise FileNotFoundError(
+                f"No *_mean_embedding.npy files found in {embeddings_dir}."
+            )
+        log.info(
+            "Loaded rare audio embeddings for %d species: %s",
+            len(library),
+            ", ".join(sorted(library)),
+        )
+        return cls(library)
+
+    def build_library(
+        self,
+        features_by_species: dict[str, pd.DataFrame],
+        save_dir: str | Path | None = None,
+    ) -> None:
+        """Compute and optionally save mean embedding vectors.
+
+        Parameters
+        ----------
+        features_by_species :
+            Dict mapping species name → DataFrame of acoustic feature rows
+            (same columns used by the broad XGBoost model).
+        save_dir :
+            If provided, saves ``{species}_mean_embedding.npy`` files here.
+        """
+        save_dir = Path(save_dir or AUDIO_RARE_EMBEDDINGS_DIR)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        for sp, df in features_by_species.items():
+            vec = df.to_numpy().mean(axis=0).astype(np.float32)
+            self.library[sp] = vec
+            self._normed[sp] = vec / (np.linalg.norm(vec) + 1e-10)
+            np.save(save_dir / f"{sp}_mean_embedding.npy", vec)
+            log.info(
+                "Rare embedding saved: %s  (%d dims, %d segments)",
+                sp,
+                len(vec),
+                len(df),
+            )
+
+    def predict_segment(
+        self, feature_row: pd.Series | np.ndarray
+    ) -> list[dict[str, Any]]:
+        """Rank rare species by cosine similarity to a single feature vector.
+
+        Returns
+        -------
+        List of dicts (sorted descending by similarity)::
+
+            [
+              {"species": "amazon_river_dolphin",
+               "similarity": 0.87,
+               "confidence_label": "possible match"},
+              ...
+            ]
+        """
+        if isinstance(feature_row, pd.Series):
+            query = feature_row.to_numpy().astype(np.float32)
+        else:
+            query = np.asarray(feature_row, dtype=np.float32)
+        query_norm = query / (np.linalg.norm(query) + 1e-10)
+
+        matches = []
+        for sp, normed_lib in self._normed.items():
+            # Align length defensively (feature sets may differ slightly)
+            min_len = min(len(query_norm), len(normed_lib))
+            similarity = float(np.dot(query_norm[:min_len], normed_lib[:min_len]))
+            if similarity >= self.SIMILARITY_WEAK:
+                label = (
+                    "possible match"
+                    if similarity >= self.SIMILARITY_POSSIBLE
+                    else "weak match"
+                )
+            else:
+                label = "unlikely"
+            matches.append(
+                {
+                    "species": sp,
+                    "similarity": round(similarity, 4),
+                    "confidence_label": label,
+                }
+            )
+        return sorted(matches, key=lambda x: x["similarity"], reverse=True)
+
+    def predict(self, features: pd.DataFrame) -> list[dict[str, Any]]:
+        """Aggregate rare-species predictions across all segments.
+
+        Returns the top candidate per segment combined into a consensus
+        ranked list with mean similarity, plus the per-segment detail.
+        """
+        per_segment = [
+            self.predict_segment(features.iloc[i]) for i in range(len(features))
+        ]
+        # Aggregate: mean similarity per species across all segments
+        agg: dict[str, list[float]] = {}
+        for seg_matches in per_segment:
+            for m in seg_matches:
+                agg.setdefault(m["species"], []).append(m["similarity"])
+        consensus = []
+        for sp, sims in agg.items():
+            mean_sim = float(np.mean(sims))
+            label = (
+                "possible match"
+                if mean_sim >= self.SIMILARITY_POSSIBLE
+                else ("weak match" if mean_sim >= self.SIMILARITY_WEAK else "unlikely")
+            )
+            consensus.append(
+                {
+                    "species": sp,
+                    "similarity": round(mean_sim, 4),
+                    "confidence_label": label,
+                }
+            )
+        consensus.sort(key=lambda x: x["similarity"], reverse=True)
+        return consensus
+
+
+# ── Three-pass classifier ────────────────────────────────────────────────────
+
+
+class ThreePassAudioClassifier:
+    """Three-stage cetacean audio classifier.
+
+    **Pass 1 — critical** (ESA-listed large whales + bowhead)
+        Escalates when: ``top_pred == "other_cetacean"``
+        OR ``max_conf < AUDIO_CRITICAL_CONFIDENCE_THRESHOLD`` (default 0.65).
+
+    **Pass 2 — broad** (non-critical cetaceans: dolphins, pilot whales, etc.)
+        Escalates when: ``top_pred == "unknown_cetacean"``
+        OR ``max_conf < AUDIO_BROAD_CONFIDENCE_THRESHOLD`` (default 0.50).
+
+    **Pass 3 — rare** (embedding similarity lookup)
+        Returns a ranked ``possible_matches`` list; never emits a definitive
+        species label.  ``classifier_stage`` is set to ``"rare"``.
+
+    The result dict always includes:
+        - ``classifier_stage``     : ``"critical" | "broad" | "rare"``
+        - ``escalated``            : bool
+        - ``max_confidence``       : float (0.0 for rare stage)
+        - ``critical_max_confidence`` : float | None
+        - ``broad_max_confidence`` : float | None
+        - ``possible_matches``     : list[dict] (only when stage=="rare")
+    """
+
+    def __init__(
+        self,
+        critical: WhaleAudioClassifier,
+        broad: WhaleAudioClassifier,
+        rare: RareEmbeddingAudioClassifier | None = None,
+        critical_threshold: float = AUDIO_CRITICAL_CONFIDENCE_THRESHOLD,
+        broad_threshold: float = AUDIO_BROAD_CONFIDENCE_THRESHOLD,
+    ) -> None:
+        self.critical = critical
+        self.broad = broad
+        self.rare = rare
+        self.critical_threshold = critical_threshold
+        self.broad_threshold = broad_threshold
+
+    @classmethod
+    def load(
+        cls,
+        critical_dir: str | Path | None = None,
+        broad_dir: str | Path | None = None,
+        rare_dir: str | Path | None = None,
+        critical_threshold: float | None = None,
+        broad_threshold: float | None = None,
+    ) -> ThreePassAudioClassifier:
+        """Load all three passes from disk.
+
+        Rare embeddings are optional — if the directory does not exist the
+        rare pass is disabled and Pass 2 results are always final.
+        """
+        critical = WhaleAudioClassifier.load(critical_dir)
+        broad = WhaleAudioClassifier.load(broad_dir or AUDIO_BROAD_MODEL_DIR)
+
+        rare: RareEmbeddingAudioClassifier | None = None
+        try:
+            rare = RareEmbeddingAudioClassifier.load(rare_dir)
+        except FileNotFoundError:
+            log.info(
+                "Rare audio embeddings not found — Pass 3 disabled. "
+                "Run train_audio_classifier.py --stage rare to enable."
+            )
+
+        return cls(
+            critical=critical,
+            broad=broad,
+            rare=rare,
+            critical_threshold=(
+                critical_threshold
+                if critical_threshold is not None
+                else AUDIO_CRITICAL_CONFIDENCE_THRESHOLD
+            ),
+            broad_threshold=(
+                broad_threshold
+                if broad_threshold is not None
+                else AUDIO_BROAD_CONFIDENCE_THRESHOLD
+            ),
+        )
+
+    # ── helpers ───────────────────────────────────────────────
+
+    @staticmethod
+    def _majority_species(segments: list[dict[str, Any]]) -> str:
+        """Return the most-common predicted species across segments."""
+        preds = [
+            s["predicted_species"]
+            for s in segments
+            if s["predicted_species"] not in ("other_cetacean", "unknown_cetacean")
+        ]
+        if not preds:
+            return "unknown_cetacean"
+        return pd.Series(preds).mode().iloc[0]
+
+    def _should_escalate_critical(
+        self,
+        segments: list[dict[str, Any]],
+        max_conf: float,
+    ) -> bool:
+        """Escalate from Pass 1 to Pass 2."""
+        majority = self._majority_species(segments)
+        return majority == "other_cetacean" or max_conf < self.critical_threshold
+
+    def _should_escalate_broad(
+        self,
+        segments: list[dict[str, Any]],
+        max_conf: float,
+    ) -> bool:
+        """Escalate from Pass 2 to Pass 3."""
+        majority = self._majority_species(segments)
+        return majority == "unknown_cetacean" or max_conf < self.broad_threshold
+
+    # ── main predict ─────────────────────────────────────────
+
+    def predict(
+        self,
+        audio_path: str | Path,
+        species_filter: str | None = None,
+    ) -> dict[str, Any]:
+        """Run three-pass classification on an audio file.
+
+        Returns
+        -------
+        dict with keys:
+            segments (list[dict]), classifier_stage, escalated, max_confidence,
+            critical_max_confidence, broad_max_confidence, possible_matches
+        """
+        base: dict[str, Any] = {
+            "segments": [],
+            "classifier_stage": "critical",
+            "escalated": False,
+            "max_confidence": 0.0,
+            "critical_max_confidence": None,
+            "broad_max_confidence": None,
+            "possible_matches": [],
+        }
+
+        # ── Pass 1: critical ─────────────────────────────────
+        critical_segs = self.critical.predict(audio_path, species_filter=species_filter)
+        if not critical_segs:
+            return base
+
+        crit_max = max(s["confidence"] for s in critical_segs)
+        base["critical_max_confidence"] = crit_max
+
+        if not self._should_escalate_critical(critical_segs, crit_max):
+            return {
+                **base,
+                "segments": critical_segs,
+                "max_confidence": crit_max,
+            }
+
+        log.info(
+            "Three-pass audio: critical max=%.3f, majority='%s' → escalating to broad",
+            crit_max,
+            self._majority_species(critical_segs),
+        )
+
+        # ── Pass 2: broad ────────────────────────────────────
+        broad_segs = self.broad.predict(audio_path, species_filter=species_filter)
+        broad_max = max(s["confidence"] for s in broad_segs) if broad_segs else 0.0
+        base["broad_max_confidence"] = broad_max
+
+        if not self._should_escalate_broad(broad_segs, broad_max):
+            return {
+                **base,
+                "segments": broad_segs,
+                "classifier_stage": "broad",
+                "escalated": True,
+                "max_confidence": broad_max,
+            }
+
+        log.info(
+            "Three-pass audio: broad max=%.3f, majority='%s' → escalating to rare",
+            broad_max,
+            self._majority_species(broad_segs),
+        )
+
+        # ── Pass 3: rare (embedding similarity) ─────────────
+        if self.rare is None:
+            log.warning(
+                "Three-pass audio: rare pass not loaded — returning broad result"
+            )
+            return {
+                **base,
+                "segments": broad_segs,
+                "classifier_stage": "broad",
+                "escalated": True,
+                "max_confidence": broad_max,
+            }
+
+        # Extract features from segments for cosine similarity
+        from pipeline.audio.preprocess import preprocess_file
+
+        raw_segs = preprocess_file(audio_path, species_filter=species_filter)
+        possible_matches: list[dict[str, Any]] = []
+        if raw_segs:
+            feat_df = pd.DataFrame([seg["features"] for seg in raw_segs])
+            possible_matches = self.rare.predict(feat_df)
+            log.info(
+                "Three-pass audio: rare pass top match '%s' (sim=%.3f, %s)",
+                possible_matches[0]["species"] if possible_matches else "none",
+                possible_matches[0]["similarity"] if possible_matches else 0.0,
+                (
+                    possible_matches[0]["confidence_label"]
+                    if possible_matches
+                    else "n/a"
+                ),
+            )
+
+        return {
+            **base,
+            "segments": broad_segs,  # best available segment detail
+            "classifier_stage": "rare",
+            "escalated": True,
+            "max_confidence": 0.0,  # no softmax confidence at rare stage
+            "possible_matches": possible_matches,
+        }
+
+    def classify_and_enrich(
+        self,
+        audio_path: str | Path,
+        lat: float,
+        lon: float,
+        species_filter: str | None = None,
+    ) -> dict[str, Any]:
+        """Three-pass classify + H3 risk context enrichment.
+
+        Returns
+        -------
+        dict — three-pass predict result merged with:
+            file, lat, lon, h3_cell, h3_hex, dominant_species, risk_context
+        """
+        import h3
+
+        result = self.predict(audio_path, species_filter=species_filter)
+
+        segs = result["segments"]
+        dominant = self._majority_species(segs) if segs else "unknown_cetacean"
+        # At rare stage, surface the top possible match species instead
+        if result["classifier_stage"] == "rare" and result["possible_matches"]:
+            top = result["possible_matches"][0]
+            if top["confidence_label"] != "unlikely":
+                dominant = top["species"]
+
+        h3_cell = h3.latlng_to_cell(lat, lon, H3_RESOLUTION)
+        h3_int = int(h3_cell, 16)
+        risk_context = _lookup_risk_context(h3_int)
+
+        return {
+            "file": str(Path(audio_path).name),
+            "lat": lat,
+            "lon": lon,
+            "h3_cell": h3_int,
+            "h3_hex": h3_cell,
+            "dominant_species": dominant,
+            "n_segments": len(segs),
+            **result,
+            "risk_context": risk_context,
+        }
+
+
+# ── Backward-compatibility alias ─────────────────────────────────────────────
+# Existing code that imports TwoPassAudioClassifier will continue to work;
+# it now resolves to the three-pass implementation.
+TwoPassAudioClassifier = ThreePassAudioClassifier
 
 
 # ── Helpers ─────────────────────────────────────────────────

@@ -15,6 +15,8 @@ from backend.models.layers import (
     SeasonalSpeciesListResponse,
 )
 from backend.models.species import (
+    CrosswalkEntry,
+    CrosswalkResponse,
     SpeciesInfo,
     SpeciesListResponse,
     SpeciesRiskCell,
@@ -38,6 +40,19 @@ def list_species():
     rows = species_svc.list_species()
     data = [SpeciesInfo(**r) for r in rows]
     return SpeciesListResponse(total=len(data), data=data)
+
+
+@router.get("/crosswalk", response_model=CrosswalkResponse)
+def get_crosswalk():
+    """Return the full species crosswalk table.
+
+    Shows how species map across OBIS (scientific_name),
+    Nisi ISDM (nisi_species), and NMFS ship-strike
+    (strike_species) naming systems.
+    """
+    rows = species_svc.list_crosswalk()
+    data = [CrosswalkEntry(**r) for r in rows]
+    return CrosswalkResponse(total=len(data), data=data)
 
 
 @router.get("/risk", response_model=SpeciesRiskListResponse)

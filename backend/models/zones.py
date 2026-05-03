@@ -103,3 +103,117 @@ class MPAListDetailResponse(BaseModel):
     offset: int
     limit: int
     data: list[MarineProtectedArea]
+
+
+# ── Biologically Important Areas ────────────────────────────
+
+
+class BiologicallyImportantArea(BaseModel):
+    """A NOAA CetMap Biologically Important Area."""
+
+    id: int
+    bia_id: str | None = None
+    region: str | None = None
+    sci_name: str | None = None
+    cmn_name: str | None = None
+    bia_name: str | None = None
+    bia_type: str | None = Field(
+        None,
+        description="BIA category: Feeding, Reproduction, Migration, etc.",
+    )
+    bia_months: str | None = Field(
+        None,
+        description="Active months as comma-separated numbers (e.g. '03,04,11,12')",
+    )
+    geometry: dict[str, Any] = Field(
+        ..., description="GeoJSON Polygon/MultiPolygon geometry"
+    )
+
+
+class BIAListResponse(BaseModel):
+    """Paginated BIA features."""
+
+    total: int
+    offset: int
+    limit: int
+    data: list[BiologicallyImportantArea]
+
+
+# ── Critical Habitat ────────────────────────────────────────
+
+
+class CriticalHabitat(BaseModel):
+    """An ESA Critical Habitat designation for a whale species."""
+
+    id: int
+    species_label: str
+    sci_name: str | None = None
+    cmn_name: str | None = None
+    list_status: str | None = None
+    ch_status: str | None = Field(
+        None,
+        description="Final or Proposed",
+    )
+    unit: str | None = None
+    area_sq_km: float | None = None
+    is_proposed: bool = False
+    geometry: dict[str, Any] = Field(
+        ..., description="GeoJSON Polygon/MultiPolygon geometry"
+    )
+
+
+class CriticalHabitatListResponse(BaseModel):
+    """Critical Habitat features (small dataset — light pagination)."""
+
+    total: int
+    data: list[CriticalHabitat]
+
+
+# ── Shipping Lanes ──────────────────────────────────────────
+
+
+class ShippingLane(BaseModel):
+    """A shipping lane or routing regulation polygon."""
+
+    id: int
+    zone_type: str
+    name: str | None = None
+    description: str | None = None
+    geometry: dict[str, Any] = Field(..., description="GeoJSON Polygon geometry")
+
+
+class ShippingLaneListResponse(BaseModel):
+    """Paginated shipping lane features."""
+
+    total: int
+    offset: int
+    limit: int
+    data: list[ShippingLane]
+
+
+# ── Slow Zones ──────────────────────────────────────────────
+
+
+class SlowZone(BaseModel):
+    """An active Right Whale Slow Zone / DMA."""
+
+    id: int
+    zone_name: str
+    zone_type: str | None = None
+    effective_start: str | None = None
+    effective_end: str | None = None
+    speed_limit_kn: int | None = 10
+    voluntary: bool = True
+    duration_days: int | None = 15
+    is_expired: bool | None = Field(
+        None,
+        description="Whether this zone has expired based on effective_end.",
+    )
+    geometry: dict[str, Any] = Field(..., description="GeoJSON Polygon geometry")
+
+
+class SlowZoneListResponse(BaseModel):
+    """All active slow zones (small dataset — no pagination)."""
+
+    total: int
+    data: list[SlowZone]

@@ -1,0 +1,332 @@
+{
+  "existing_aphia_ids": {
+    "Balaena mysticetus": 137086,
+    "Balaenoptera": 137013,
+    "Balaenoptera acutorostrata": 137087,
+    "Balaenoptera borealis": 137088,
+    "Balaenoptera brydei": 242603,
+    "Balaenoptera edeni": 137089,
+    "Balaenoptera physalus": 137091,
+    "Balaenopteridae": 136979,
+    "Berardius bairdii": 242608,
+    "Cephalorhynchus heavisidii": 254978,
+    "Cetacea": 2688,
+    "Delphinapterus leucas": 137115,
+    "Delphinidae": 136980,
+    "Delphinus": 137015,
+    "Delphinus delphis": 137094,
+    "Eschrichtius": 137027,
+    "Eschrichtius robustus": 137112,
+    "Eubalaena": 159022,
+    "Eubalaena australis": 220222,
+    "Eubalaena glacialis": 159023,
+    "Eubalaena japonica": 254974,
+    "Feresa": 137016,
+    "Feresa attenuata": 137095,
+    "Globicephala": 137017,
+    "Globicephala macrorhynchus": 137096,
+    "Globicephala melas": 137097,
+    "Grampus griseus": 137098,
+    "Hyperoodon": 137033,
+    "Hyperoodon ampullatus": 343899,
+    "Indopacetus pacificus": 231418,
+    "Inia geoffrensis": 254960,
+    "Kogia": 159024,
+    "Kogia breviceps": 137113,
+    "Kogia sima": 159025,
+    "Lagenodelphis hosei": 137099,
+    "Lagenorhynchus albirostris": 137101,
+    "Leucopleurus acutus": 1571853,
+    "Lissodelphis borealis": 254975,
+    "Megaptera novaeangliae": 137092,
+    "Mesoplodon": 137034,
+    "Mesoplodon carlhubbsi": 254990,
+    "Mesoplodon europaeus": 137123,
+    "Mesoplodon mirus": 137126,
+    "Mesoplodon peruvianus": 231409,
+    "Mysticeti": 148724,
+    "Neophocaena phocaenoides": 254985,
+    "Odontoceti": 148723,
+    "Orcinus orca": 137102,
+    "Peponocephala electra": 137103,
+    "Phocoena": 137031,
+    "Phocoena phocoena": 137117,
+    "Phocoena sinus": 343897,
+    "Phocoenidae": 136984,
+    "Phocoenoides": 254986,
+    "Phocoenoides dalli": 254987,
+    "Physeter macrocephalus": 137119,
+    "Pseudorca crassidens": 137104,
+    "Sagmatias obliquidens": 1571909,
+    "Sotalia guianensis": 344009,
+    "Sousa plumbea": 383586,
+    "Stenella attenuata": 137105,
+    "Stenella clymene": 137106,
+    "Stenella coeruleoalba": 137107,
+    "Stenella frontalis": 137108,
+    "Stenella longirostris": 137109,
+    "Steno bredanensis": 137110,
+    "Tursiops": 137026,
+    "Tursiops truncatus": 137111,
+    "Ziphiidae": 136986,
+    "Ziphius": 137035,
+    "Ziphius cavirostris": 137127
+  },
+  "missing_species": {
+    "Balaenoptera bonaerensis": {
+      "aphia_id": 231405,
+      "family": "Balaenopteridae",
+      "genus": "Balaenoptera",
+      "is_baleen": true
+    },
+    "Balaenoptera omurai": {
+      "aphia_id": 343896,
+      "family": "Balaenopteridae",
+      "genus": "Balaenoptera",
+      "is_baleen": true
+    },
+    "Balaenoptera ricei": {
+      "aphia_id": 1576133,
+      "family": "Balaenopteridae",
+      "genus": "Balaenoptera",
+      "is_baleen": true
+    },
+    "Berardius arnuxii": {
+      "aphia_id": 242606,
+      "family": "Ziphiidae",
+      "genus": "Berardius",
+      "is_baleen": false
+    },
+    "Berardius minimus": {
+      "aphia_id": 1576136,
+      "family": "Ziphiidae",
+      "genus": "Berardius",
+      "is_baleen": false
+    },
+    "Caperea marginata": {
+      "aphia_id": 231424,
+      "family": "Neobalaenidae",
+      "genus": "Caperea",
+      "is_baleen": true
+    },
+    "Cephalorhynchus commersonii": {
+      "aphia_id": 254976,
+      "family": "Delphinidae",
+      "genus": "Cephalorhynchus",
+      "is_baleen": false
+    },
+    "Cephalorhynchus eutropia": {
+      "aphia_id": 254977,
+      "family": "Delphinidae",
+      "genus": "Cephalorhynchus",
+      "is_baleen": false
+    },
+    "Cephalorhynchus hectori": {
+      "aphia_id": 254979,
+      "family": "Delphinidae",
+      "genus": "Cephalorhynchus",
+      "is_baleen": false
+    },
+    "Hyperoodon planifrons": {
+      "aphia_id": 343900,
+      "family": "Ziphiidae",
+      "genus": "Hyperoodon",
+      "is_baleen": false
+    },
+    "Inia araguaiaensis": {
+      "aphia_id": 751685,
+      "family": "Iniidae",
+      "genus": "Inia",
+      "is_baleen": false
+    },
+    "Inia boliviensis": {
+      "aphia_id": 384210,
+      "family": "Iniidae",
+      "genus": "Inia",
+      "is_baleen": false
+    },
+    "Lagenorhynchus obscurus": {
+      "aphia_id": 231434,
+      "family": "Delphinidae",
+      "genus": "Lagenorhynchus",
+      "is_baleen": false
+    },
+    "Lissodelphis peronii": {
+      "aphia_id": 231414,
+      "family": "Delphinidae",
+      "genus": "Lissodelphis",
+      "is_baleen": false
+    },
+    "Mesoplodon bowdoini": {
+      "aphia_id": 231430,
+      "family": "Ziphiidae",
+      "genus": "Mesoplodon",
+      "is_baleen": false
+    },
+    "Mesoplodon eueu": {
+      "aphia_id": 1567463,
+      "family": "Ziphiidae",
+      "genus": "Mesoplodon",
+      "is_baleen": false
+    },
+    "Mesoplodon grayi": {
+      "aphia_id": 137124,
+      "family": "Ziphiidae",
+      "genus": "Mesoplodon",
+      "is_baleen": false
+    },
+    "Mesoplodon hectori": {
+      "aphia_id": 137125,
+      "family": "Ziphiidae",
+      "genus": "Mesoplodon",
+      "is_baleen": false
+    },
+    "Mesoplodon hotaula": {
+      "aphia_id": 384422,
+      "family": "Ziphiidae",
+      "genus": "Mesoplodon",
+      "is_baleen": false
+    },
+    "Mesoplodon layardii": {
+      "aphia_id": 231429,
+      "family": "Ziphiidae",
+      "genus": "Mesoplodon",
+      "is_baleen": false
+    },
+    "Mesoplodon perrini": {
+      "aphia_id": 254992,
+      "family": "Ziphiidae",
+      "genus": "Mesoplodon",
+      "is_baleen": false
+    },
+    "Mesoplodon stejnegeri": {
+      "aphia_id": 254991,
+      "family": "Ziphiidae",
+      "genus": "Mesoplodon",
+      "is_baleen": false
+    },
+    "Mesoplodon traversii": {
+      "aphia_id": 254993,
+      "family": "Ziphiidae",
+      "genus": "Mesoplodon",
+      "is_baleen": false
+    },
+    "Monodon monoceros": {
+      "aphia_id": 137116,
+      "family": "Monodontidae",
+      "genus": "Monodon",
+      "is_baleen": false
+    },
+    "Neophocaena asiaeorientalis": {
+      "aphia_id": 446125,
+      "family": "Phocoenidae",
+      "genus": "Neophocaena",
+      "is_baleen": false
+    },
+    "Orcaella brevirostris": {
+      "aphia_id": 148732,
+      "family": "Delphinidae",
+      "genus": "Orcaella",
+      "is_baleen": false
+    },
+    "Orcaella heinsohni": {
+      "aphia_id": 343990,
+      "family": "Delphinidae",
+      "genus": "Orcaella",
+      "is_baleen": false
+    },
+    "Phocoena dioptrica": {
+      "aphia_id": 254971,
+      "family": "Phocoenidae",
+      "genus": "Phocoena",
+      "is_baleen": false
+    },
+    "Phocoena spinipinnis": {
+      "aphia_id": 343898,
+      "family": "Phocoenidae",
+      "genus": "Phocoena",
+      "is_baleen": false
+    },
+    "Platanista gangetica": {
+      "aphia_id": 254967,
+      "family": "Platanistidae",
+      "genus": "Platanista",
+      "is_baleen": false
+    },
+    "Pontoporia blainvillei": {
+      "aphia_id": 254964,
+      "family": "Pontoporiidae",
+      "genus": "Pontoporia",
+      "is_baleen": false
+    },
+    "Sotalia fluviatilis": {
+      "aphia_id": 254982,
+      "family": "Delphinidae",
+      "genus": "Sotalia",
+      "is_baleen": false
+    },
+    "Sousa chinensis": {
+      "aphia_id": 220226,
+      "family": "Delphinidae",
+      "genus": "Sousa",
+      "is_baleen": false
+    },
+    "Sousa sahulensis": {
+      "aphia_id": 816452,
+      "family": "Delphinidae",
+      "genus": "Sousa",
+      "is_baleen": false
+    },
+    "Sousa teuszii": {
+      "aphia_id": 254970,
+      "family": "Delphinidae",
+      "genus": "Sousa",
+      "is_baleen": false
+    },
+    "Tasmacetus shepherdi": {
+      "aphia_id": 231433,
+      "family": "Ziphiidae",
+      "genus": "Tasmacetus",
+      "is_baleen": false
+    },
+    "Tursiops aduncus": {
+      "aphia_id": 254983,
+      "family": "Delphinidae",
+      "genus": "Tursiops",
+      "is_baleen": false
+    },
+    "Tursiops australis": {
+      "aphia_id": 584858,
+      "family": "Delphinidae",
+      "genus": "Tursiops",
+      "is_baleen": false
+    },
+    "Tursiops erebennus": {
+      "aphia_id": 1806367,
+      "family": "Delphinidae",
+      "genus": "Tursiops",
+      "is_baleen": false
+    }
+  },
+  "families": {
+    "Balaenidae": 136978,
+    "Balaenopteridae": 136979,
+    "Eschrichtiidae": 136981,
+    "Neobalaenidae": 231385,
+    "Delphinidae": 136980,
+    "Phocoenidae": 136984,
+    "Physeteridae": 136985,
+    "Kogiidae": 136982,
+    "Ziphiidae": 136986,
+    "Monodontidae": 136983,
+    "Platanistidae": 254965,
+    "Pontoporiidae": 342635,
+    "Iniidae": 254958,
+    "Lipotidae": 254963
+  },
+  "higher_taxa": {
+    "Cetacea": 2688,
+    "Mysticeti": 148724,
+    "Odontoceti": 148723
+  }
+}

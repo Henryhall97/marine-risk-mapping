@@ -189,3 +189,240 @@ def count_mpa_features(
     where = " AND ".join(where_parts)
     query = f"SELECT count(*) FROM marine_protected_areas WHERE {where}"
     return fetch_scalar(query, params) or 0
+
+
+# ── Biologically Important Areas ────────────────────────────
+
+
+def _make_bbox_filter(
+    params: dict[str, Any],
+) -> str:
+    """Return an ST_Intersects WHERE fragment using the bbox params."""
+    return (
+        "ST_Intersects("
+        "  geom, "
+        "  ST_MakeEnvelope("
+        "    %(lon_min)s, %(lat_min)s, "
+        "    %(lon_max)s, %(lat_max)s, 4326"
+        "  )"
+        ")"
+    )
+
+
+def get_bia_features(
+    lat_min: float,
+    lat_max: float,
+    lon_min: float,
+    lon_max: float,
+    bia_type: str | None = None,
+    species: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    """Return BIA polygons intersecting a bounding box."""
+    params: dict[str, Any] = {
+        "lat_min": lat_min,
+        "lat_max": lat_max,
+        "lon_min": lon_min,
+        "lon_max": lon_max,
+    }
+    where_parts = [_make_bbox_filter(params)]
+
+    if bia_type:
+        where_parts.append("bia_type = %(bia_type)s")
+        params["bia_type"] = bia_type
+    if species:
+        where_parts.append(
+            "(lower(sci_name) LIKE %(sp)s OR lower(cmn_name) LIKE %(sp)s)"
+        )
+        params["sp"] = f"%{species.lower()}%"
+
+    where = " AND ".join(where_parts)
+    params["limit"] = limit
+    params["offset"] = offset
+
+    query = (
+        "SELECT "
+        "  id, bia_id, region, sci_name, cmn_name, "
+        "  bia_name, bia_type, bia_months, "
+        "  ST_AsGeoJSON(ST_MakeValid(geom))::json AS geometry "
+        "FROM cetacean_bia "
+        f"WHERE {where} "
+        "ORDER BY bia_type, cmn_name "
+        "LIMIT %(limit)s OFFSET %(offset)s"
+    )
+    rows = fetch_all(query, params)
+    for row in rows:
+        if isinstance(row.get("geometry"), str):
+            row["geometry"] = json.loads(row["geometry"])
+    return rows
+
+
+def count_bia_features(
+    lat_min: float,
+    lat_max: float,
+    lon_min: float,
+    lon_max: float,
+    bia_type: str | None = None,
+    species: str | None = None,
+) -> int:
+    """Count BIAs intersecting a bounding box."""
+    params: dict[str, Any] = {
+        "lat_min": lat_min,
+        "lat_max": lat_max,
+        "lon_min": lon_min,
+        "lon_max": lon_max,
+    }
+    where_parts = [_make_bbox_filter(params)]
+    if bia_type:
+        where_parts.append("bia_type = %(bia_type)s")
+        params["bia_type"] = bia_type
+    if species:
+        where_parts.append(
+            "(lower(sci_name) LIKE %(sp)s OR lower(cmn_name) LIKE %(sp)s)"
+        )
+        params["sp"] = f"%{species.lower()}%"
+    where = " AND ".join(where_parts)
+    return (
+        fetch_scalar(
+            f"SELECT count(*) FROM cetacean_bia WHERE {where}",
+            params,
+        )
+        or 0
+    )
+
+
+# ── Critical Habitat ────────────────────────────────────────
+
+
+def get_critical_habitat(
+    species: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return all whale Critical Habitat polygons.
+
+    Small dataset (31 rows) — no bbox needed; return all
+    and let the frontend render only visible ones.
+    """
+    where_parts: list[str] = []
+    params: dict[str, Any] = {}
+
+    if species:
+        where_parts.append("(species_label LIKE %(sp)s OR lower(sci_name) LIKE %(sp)s)")
+        params["sp"] = f"%{species.lower()}%"
+
+    where = (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
+
+    query = (
+        "SELECT "
+        "  id, species_label, sci_name, cmn_name, "
+        "  list_status, ch_status, unit, area_sq_km, "
+        "  is_proposed, "
+        "  ST_AsGeoJSON(ST_MakeValid(geom))::json AS geometry "
+        "FROM whale_critical_habitat"
+        f"{where} "
+        "ORDER BY species_label"
+    )
+    rows = fetch_all(query, params)
+    for row in rows:
+        if isinstance(row.get("geometry"), str):
+            row["geometry"] = json.loads(row["geometry"])
+    return rows
+
+
+# ── Shipping Lanes ──────────────────────────────────────────
+
+
+def get_shipping_lanes(
+    lat_min: float,
+    lat_max: float,
+    lon_min: float,
+    lon_max: float,
+    zone_type: str | None = None,
+    limit: int = 200,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    """Return shipping lane polygons intersecting a bounding box."""
+    params: dict[str, Any] = {
+        "lat_min": lat_min,
+        "lat_max": lat_max,
+        "lon_min": lon_min,
+        "lon_max": lon_max,
+    }
+    where_parts = [_make_bbox_filter(params)]
+
+    if zone_type:
+        where_parts.append("zone_type = %(zone_type)s")
+        params["zone_type"] = zone_type
+
+    where = " AND ".join(where_parts)
+    params["limit"] = limit
+    params["offset"] = offset
+
+    query = (
+        "SELECT "
+        "  id, zone_type, name, description, "
+        "  ST_AsGeoJSON(geom)::json AS geometry "
+        "FROM shipping_lanes "
+        f"WHERE {where} "
+        "ORDER BY zone_type, name "
+        "LIMIT %(limit)s OFFSET %(offset)s"
+    )
+    rows = fetch_all(query, params)
+    for row in rows:
+        if isinstance(row.get("geometry"), str):
+            row["geometry"] = json.loads(row["geometry"])
+    return rows
+
+
+def count_shipping_lanes(
+    lat_min: float,
+    lat_max: float,
+    lon_min: float,
+    lon_max: float,
+    zone_type: str | None = None,
+) -> int:
+    """Count shipping lanes intersecting a bounding box."""
+    params: dict[str, Any] = {
+        "lat_min": lat_min,
+        "lat_max": lat_max,
+        "lon_min": lon_min,
+        "lon_max": lon_max,
+    }
+    where_parts = [_make_bbox_filter(params)]
+    if zone_type:
+        where_parts.append("zone_type = %(zone_type)s")
+        params["zone_type"] = zone_type
+    where = " AND ".join(where_parts)
+    return (
+        fetch_scalar(
+            f"SELECT count(*) FROM shipping_lanes WHERE {where}",
+            params,
+        )
+        or 0
+    )
+
+
+# ── Slow Zones ──────────────────────────────────────────────
+
+
+def get_slow_zones() -> list[dict[str, Any]]:
+    """Return all Right Whale Slow Zones with expiry flag.
+
+    Small dataset (≤10 rows) — no bbox or pagination needed.
+    """
+    query = (
+        "SELECT "
+        "  id, zone_name, zone_type, "
+        "  effective_start::text AS effective_start, "
+        "  effective_end::text AS effective_end, "
+        "  speed_limit_kn, voluntary, duration_days, "
+        "  (effective_end < CURRENT_DATE) AS is_expired, "
+        "  ST_AsGeoJSON(geom)::json AS geometry "
+        "FROM right_whale_slow_zones "
+        "ORDER BY effective_end DESC"
+    )
+    rows = fetch_all(query)
+    for row in rows:
+        if isinstance(row.get("geometry"), str):
+            row["geometry"] = json.loads(row["geometry"])
+    return rows

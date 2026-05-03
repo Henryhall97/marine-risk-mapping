@@ -99,10 +99,44 @@
       + {{ w_reference }}   * reference_risk_score
     )::numeric, 4)
 
+{% elif weight_set == 'ml_projected' %}
+    {#-- Climate-projected ML risk: 6 sub-scores (no proximity).
+         Proximity removed because its whale-proximity component
+         measures distance to *current* sightings — stale under
+         future projections.  Remaining weights renormalized
+         from the 'ml' set: w_i / (1 - 0.15). --#}
+    {% set w_interaction = var('risk_ml_projected_weight_interaction') %}
+    {% set w_traffic     = var('risk_ml_projected_weight_traffic') %}
+    {% set w_whale_ml    = var('risk_ml_projected_weight_whale_ml') %}
+    {% set w_strike      = var('risk_ml_projected_weight_strike') %}
+    {% set w_prot_gap    = var('risk_ml_projected_weight_protection_gap') %}
+    {% set w_reference   = var('risk_ml_projected_weight_reference') %}
+
+    {% set weight_sum = w_interaction + w_traffic + w_whale_ml
+                      + w_strike + w_prot_gap + w_reference %}
+
+    {#-- Allow ±0.01 tolerance for rounding of renormalized weights --#}
+    {% if ((weight_sum * 10000) | round - 9999) | abs > 2 %}
+        {{ exceptions.raise_compiler_error(
+            "ML projected risk weights sum to "
+            ~ weight_sum ~ ", expected ~1.0. "
+            ~ "Check risk_ml_projected_weight_* vars in dbt_project.yml."
+        ) }}
+    {% endif %}
+
+    round((
+        {{ w_interaction }} * interaction_score
+      + {{ w_traffic }}     * traffic_score
+      + {{ w_whale_ml }}    * whale_ml_score
+      + {{ w_strike }}      * strike_score
+      + {{ w_prot_gap }}    * protection_gap
+      + {{ w_reference }}   * reference_risk_score
+    )::numeric, 4)
+
 {% else %}
     {{ exceptions.raise_compiler_error(
         "Unknown weight_set '" ~ weight_set ~ "'. "
-        ~ "Use 'standard' or 'ml'."
+        ~ "Use 'standard', 'ml', or 'ml_projected'."
     ) }}
 {% endif %}
 

@@ -11,12 +11,13 @@ service layer independent of Pydantic models.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any
 
 from psycopg2.extras import RealDictCursor
-from psycopg2.pool import ThreadedConnectionPool
+from psycopg2.pool import PoolError, ThreadedConnectionPool
 
 from backend.config import DATABASE_URL
 
@@ -24,6 +25,10 @@ log = logging.getLogger(__name__)
 
 # Module-level pool — initialised by init_pool(), closed by close_pool()
 _pool: ThreadedConnectionPool | None = None
+
+# Retry settings for transient pool exhaustion
+_POOL_RETRY_ATTEMPTS = 5
+_POOL_RETRY_BASE_DELAY = 0.05  # 50 ms, doubles each attempt
 
 
 def init_pool(min_conn: int = 2, max_conn: int = 10) -> None:
@@ -47,10 +52,35 @@ def close_pool() -> None:
 
 @contextmanager
 def get_conn() -> Generator:
-    """Yield a connection from the pool, auto-return on exit."""
+    """Yield a connection from the pool, auto-return on exit.
+
+    Retries with exponential back-off when the pool is transiently
+    exhausted (e.g. many concurrent map-tile fetches).
+    """
     if _pool is None:
         raise RuntimeError("DB pool not initialised — call init_pool() first")
-    conn = _pool.getconn()
+
+    conn = None
+    for attempt in range(_POOL_RETRY_ATTEMPTS):
+        try:
+            conn = _pool.getconn()
+            break
+        except PoolError:
+            if attempt == _POOL_RETRY_ATTEMPTS - 1:
+                log.error(
+                    "Connection pool exhausted after %d retries",
+                    _POOL_RETRY_ATTEMPTS,
+                )
+                raise
+            delay = _POOL_RETRY_BASE_DELAY * (2**attempt)
+            log.warning(
+                "Pool exhausted — retry %d/%d in %.0f ms",
+                attempt + 1,
+                _POOL_RETRY_ATTEMPTS,
+                delay * 1000,
+            )
+            time.sleep(delay)
+
     try:
         yield conn
     finally:

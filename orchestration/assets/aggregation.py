@@ -196,6 +196,9 @@ def cell_proximity(
     deps=[
         "fct_collision_risk",
         "fct_collision_risk_seasonal",
+        "fct_collision_risk_ml",
+        "int_ml_whale_predictions",
+        "int_sdm_whale_predictions",
     ],
     description=(
         "Aggregate H3 res-7 risk scores to res-4 macro overview "

@@ -3,6 +3,12 @@
 -- Mirrors int_ml_whale_predictions but for the OBIS-trained SDM rather than
 -- the Nisi-trained ISDM.  Predictions are out-of-fold (OOF) from 5-fold
 -- spatial block CV — each cell's probability comes from a model that never
+
+{{ config(
+    indexes=[
+        {'columns': ['h3_cell', 'season']},
+    ]
+) }}
 -- saw it during training.  This makes them directly comparable to ISDM scores.
 --
 -- Key difference from ISDM:
@@ -25,7 +31,9 @@ with predictions as (
         sdm_blue_whale,
         sdm_fin_whale,
         sdm_humpback_whale,
-        sdm_sperm_whale
+        sdm_sperm_whale,
+        sdm_right_whale,
+        sdm_minke_whale
     from {{ source('marine_risk', 'ml_sdm_predictions') }}
 
 )
@@ -42,22 +50,28 @@ select
     p.sdm_fin_whale,
     p.sdm_humpback_whale,
     p.sdm_sperm_whale,
+    p.sdm_right_whale,
+    p.sdm_minke_whale,
 
-    -- Composite: maximum across the 4 per-species models
+    -- Composite: maximum across the 6 per-species models
     greatest(
         p.sdm_blue_whale,
         p.sdm_fin_whale,
         p.sdm_humpback_whale,
-        p.sdm_sperm_whale
+        p.sdm_sperm_whale,
+        p.sdm_right_whale,
+        p.sdm_minke_whale
     ) as max_whale_prob,
 
-    -- Composite: mean across the 4 per-species models
+    -- Composite: mean across the 6 per-species models
     (
         coalesce(p.sdm_blue_whale, 0)
       + coalesce(p.sdm_fin_whale, 0)
       + coalesce(p.sdm_humpback_whale, 0)
       + coalesce(p.sdm_sperm_whale, 0)
-    ) / 4.0 as mean_whale_prob,
+      + coalesce(p.sdm_right_whale, 0)
+      + coalesce(p.sdm_minke_whale, 0)
+    ) / 6.0 as mean_whale_prob,
 
     -- Composite: P(any whale) = 1 - ∏(1 - P_i) via independence
     -- Compare this with sdm_any_whale (directly trained) to see
@@ -67,6 +81,8 @@ select
       * (1.0 - coalesce(p.sdm_fin_whale, 0))
       * (1.0 - coalesce(p.sdm_humpback_whale, 0))
       * (1.0 - coalesce(p.sdm_sperm_whale, 0))
+      * (1.0 - coalesce(p.sdm_right_whale, 0))
+      * (1.0 - coalesce(p.sdm_minke_whale, 0))
     ) as any_whale_prob_joint
 
 from predictions p

@@ -2,6 +2,13 @@
 -- Uses pre-computed H3 cell assignments from the Python h3
 -- library (pipeline/aggregation/assign_cetacean_h3.py) rather
 -- than expensive PostGIS spatial joins.
+
+{{ config(
+    indexes=[
+        {'columns': ['h3_cell']},
+    ]
+) }}
+
 --
 -- Each sighting gets an exact H3 cell via h3.latlng_to_cell(),
 -- so cells are correct even when no vessel traffic exists nearby.

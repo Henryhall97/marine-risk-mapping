@@ -739,9 +739,11 @@ models:
       ML-enhanced seasonal collision risk per H3 cell. Same 7-sub-score
       architecture as fct_collision_risk_seasonal but replaces the raw-sighting
       cetacean sub-score with ML-predicted whale presence probabilities from
-      ISDM models (int_ml_whale_predictions). The whale_ml_score uses three
-      composites: any_whale_prob (50%), max_whale_prob (30%), mean_whale_prob
-      (20%). Also computes a whale×traffic interaction metric. Percentile
+      an ISDM+SDM ensemble. For the 4 species shared by both models (blue,
+      fin, humpback, sperm), per-cell probabilities are averaged. For species
+      only in SDM (right whale, minke), SDM predictions are used directly.
+      Composites (any/max/mean) are computed across all 6 ensembled species.
+      Raw ISDM and SDM predictions are retained for diagnostics. Percentile
       ranking is done WITHIN each season. Land cells excluded. ~7.3M rows.
     config:
       indexes:
@@ -783,7 +785,7 @@ models:
           ML-enhanced composite collision risk (0–1). 7 sub-scores:
           interaction (30%), traffic (15%), whale_ml (15%), proximity (15%),
           strike (10%), protection_gap (10%), reference (5%). No habitat
-          sub-score — ISDM already encodes env covariates in P(whale).
+          sub-score — ISDM/SDM already encode env covariates in P(whale).
         tests:
           - not_null
 
@@ -812,7 +814,7 @@ models:
 
       - name: whale_ml_score
         description: >
-          ML whale exposure sub-score (0–1), weight 15%. ISDM-predicted
+          ML whale exposure sub-score (0–1), weight 15%. ISDM+SDM ensemble
           whale presence independent of traffic co-occurrence.
         tests:
           - not_null
@@ -837,26 +839,62 @@ models:
         tests:
           - not_null
 
-      - name: isdm_blue_whale
-        description: "ISDM predicted P(blue whale present) (0–1)"
+      - name: blue_whale_prob
+        description: "Ensembled P(blue whale present): avg(ISDM, SDM)"
 
-      - name: isdm_fin_whale
-        description: "ISDM predicted P(fin whale present) (0–1)"
+      - name: fin_whale_prob
+        description: "Ensembled P(fin whale present): avg(ISDM, SDM)"
 
-      - name: isdm_humpback_whale
-        description: "ISDM predicted P(humpback whale present) (0–1)"
+      - name: humpback_whale_prob
+        description: "Ensembled P(humpback whale present): avg(ISDM, SDM)"
 
-      - name: isdm_sperm_whale
-        description: "ISDM predicted P(sperm whale present) (0–1)"
+      - name: sperm_whale_prob
+        description: "Ensembled P(sperm whale present): avg(ISDM, SDM)"
+
+      - name: right_whale_prob
+        description: "P(right whale present): SDM-only (no ISDM counterpart)"
+
+      - name: minke_whale_prob
+        description: "P(minke whale present): SDM-only (no ISDM counterpart)"
 
       - name: any_whale_prob
-        description: "P(any whale present) = 1 - ∏(1 - P_i)"
+        description: "P(any whale present) = 1 - ∏(1 - P_i) across 6 ensembled species"
 
       - name: max_whale_prob
-        description: "Highest P(present) across 4 species"
+        description: "Highest P(present) across 6 ensembled species"
 
       - name: mean_whale_prob
-        description: "Average P(present) across 4 species"
+        description: "Average P(present) across 6 ensembled species"
+
+      - name: isdm_blue_whale
+        description: "Raw ISDM predicted P(blue whale present) — diagnostic"
+
+      - name: isdm_fin_whale
+        description: "Raw ISDM predicted P(fin whale present) — diagnostic"
+
+      - name: isdm_humpback_whale
+        description: "Raw ISDM predicted P(humpback whale present) — diagnostic"
+
+      - name: isdm_sperm_whale
+        description: "Raw ISDM predicted P(sperm whale present) — diagnostic"
+
+      - name: sdm_blue_whale
+        description: "Raw SDM predicted P(blue whale present) — diagnostic"
+
+      - name: sdm_fin_whale
+        description: "Raw SDM predicted P(fin whale present) — diagnostic"
+
+      - name: sdm_humpback_whale
+        description: "Raw SDM predicted P(humpback whale present) — diagnostic"
+
+      - name: sdm_sperm_whale
+        description: "Raw SDM predicted P(sperm whale present) — diagnostic"
+
+      - name: sdm_right_whale
+        description: "Raw SDM predicted P(right whale present) — diagnostic"
+
+      - name: sdm_minke_whale
+        description: "Raw SDM predicted P(minke whale present) — diagnostic"
 
       - name: whale_traffic_interaction
         description: >
@@ -868,7 +906,7 @@ models:
         description: "True if seasonal vessel traffic data exists for this cell"
 
       - name: has_ml_predictions
-        description: "True if ISDM predictions exist for this cell"
+        description: "True if ISDM or SDM predictions exist for this cell"
 
       - name: in_mpa
         description: "True if any MPA polygon overlaps this cell"
@@ -891,3 +929,142 @@ models:
     tests:
       - unique:
           column_name: "h3_cell || '-' || season"
+
+  - name: fct_collision_risk_ml_projected
+    description: >
+      Climate-projected ML-enhanced collision risk per H3 cell. Projects
+      the ML risk score into future decades (2030s–2080s) under CMIP6
+      scenarios (SSP2-4.5, SSP5-8.5). Uses 6 sub-scores (proximity
+      removed — its whale-distance component is stale under habitat
+      shifts). Whale predictions are an ISDM+SDM ensemble: avg for
+      4 shared species (blue, fin, humpback, sperm), SDM-only for
+      right whale + minke. Gives 6-species coverage.
+      Percentile-ranked within (scenario, decade, season). ~58M rows.
+    config:
+      indexes:
+        - columns: ['h3_cell', 'season', 'scenario', 'decade']
+        - columns: ['scenario', 'decade', 'season']
+        - columns: ['risk_score']
+    columns:
+      - name: h3_cell
+        description: "H3 cell index (resolution 7)"
+        tests:
+          - not_null
+
+      - name: season
+        description: "Season name: winter, spring, summer, fall"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['winter', 'spring', 'summer', 'fall']
+
+      - name: scenario
+        description: "CMIP6 scenario: ssp245 or ssp585"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['ssp245', 'ssp585']
+
+      - name: decade
+        description: "Projection decade: 2030s, 2040s, 2060s, 2080s"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['2030s', '2040s', '2060s', '2080s']
+
+      - name: risk_score
+        description: >
+          Projected ML composite collision risk (0–1). 6 sub-scores
+          (no proximity). Whale sub-scores from ISDM+SDM ensemble.
+          Weights renormalized from the ML set: w_i / (1 - 0.15).
+        tests:
+          - not_null
+
+      - name: risk_category
+        description: "Risk bucket: critical/high/medium/low/minimal"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['critical', 'high', 'medium', 'low', 'minimal']
+
+      - name: interaction_score
+        description: >
+          Projected whale×traffic interaction (0–1), weight ~35%.
+          Percentile-ranked ensemble_P(whale) × current_traffic_score.
+        tests:
+          - not_null
+
+      - name: traffic_score
+        description: "Current traffic sub-score (0–1), weight ~18% — unchanged"
+
+      - name: whale_ml_score
+        description: >
+          Projected whale ML exposure (0–1), weight ~18%. Percentile-ranked
+          ensembled 6-species whale probabilities.
+        tests:
+          - not_null
+
+      - name: strike_score
+        description: "Current strike sub-score (0–1), weight ~12% — unchanged"
+
+      - name: protection_gap
+        description: "Current protection gap (0–1), weight ~12% — unchanged"
+
+      - name: reference_risk_score
+        description: "Current Nisi reference (0–1), weight ~6% — unchanged"
+
+      - name: blue_whale_prob
+        description: "Ensembled P(blue whale) = avg(ISDM, SDM) (0–1)"
+
+      - name: fin_whale_prob
+        description: "Ensembled P(fin whale) = avg(ISDM, SDM) (0–1)"
+
+      - name: humpback_whale_prob
+        description: "Ensembled P(humpback whale) = avg(ISDM, SDM) (0–1)"
+
+      - name: sperm_whale_prob
+        description: "Ensembled P(sperm whale) = avg(ISDM, SDM) (0–1)"
+
+      - name: right_whale_prob
+        description: "Projected P(right whale) from SDM only (0–1)"
+
+      - name: minke_whale_prob
+        description: "Projected P(minke whale) from SDM only (0–1)"
+
+      - name: any_whale_prob
+        description: "Ensemble P(any whale) = 1 - ∏(1 - P_i) across 6 species"
+
+      - name: max_whale_prob
+        description: "Highest ensembled P(present) across 6 species"
+
+      - name: mean_whale_prob
+        description: "Average ensembled P(present) across 6 species"
+
+      - name: isdm_blue_whale
+        description: "Raw ISDM P(blue whale) — diagnostic"
+
+      - name: isdm_fin_whale
+        description: "Raw ISDM P(fin whale) — diagnostic"
+
+      - name: isdm_humpback_whale
+        description: "Raw ISDM P(humpback whale) — diagnostic"
+
+      - name: isdm_sperm_whale
+        description: "Raw ISDM P(sperm whale) — diagnostic"
+
+      - name: sdm_right_whale
+        description: "Raw SDM P(right whale) — diagnostic"
+
+      - name: sdm_minke_whale
+        description: "Raw SDM P(minke whale) — diagnostic"
+
+      - name: whale_traffic_interaction
+        description: "Diagnostic: ensemble_P(any whale) × current_traffic_score"
+
+    tests:
+      - unique:
+          column_name: "h3_cell || '-' || season || '-' || scenario || '-' || decade"

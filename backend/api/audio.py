@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from backend.models.audio import (
     AudioClassificationResponse,
@@ -17,6 +19,7 @@ from backend.models.audio import (
 from backend.services import audio as audio_svc
 
 router = APIRouter(prefix="/audio", tags=["audio"])
+limiter = Limiter(key_func=get_remote_address)
 logger = logging.getLogger(__name__)
 
 _ALLOWED_CONTENT_TYPES = {
@@ -32,22 +35,24 @@ _MAX_FILE_SIZE_MB = 100  # audio files can be larger than images
 
 
 @router.post("/classify", response_model=AudioClassificationResponse)
-async def classify_audio(
+@limiter.limit("10/minute")
+def classify_audio(
+    request: Request,
     file: UploadFile = File(  # noqa: B008
         ...,
         description="Underwater audio recording (WAV/FLAC/MP3/AIF)",
     ),
-    lat: float = Form(
-        ...,
+    lat: float | None = Form(
+        None,
         ge=-90,
         le=90,
-        description="Recording latitude (WGS-84, required)",
+        description="Recording latitude (WGS-84, optional)",
     ),
-    lon: float = Form(
-        ...,
+    lon: float | None = Form(
+        None,
         ge=-180,
         le=180,
-        description="Recording longitude (WGS-84, required)",
+        description="Recording longitude (WGS-84, optional)",
     ),
 ):
     """Classify whale species from an underwater audio recording.
@@ -55,8 +60,8 @@ async def classify_audio(
     Segments the audio into 4-second windows (2s hop), extracts
     acoustic features, and classifies each segment independently.
     Returns per-segment predictions plus a dominant species across
-    all segments. GPS coordinates are **required** (audio files
-    have no EXIF metadata).
+    all segments. GPS coordinates are optional — when provided the
+    response includes H3 risk context.
     """
     # Validate content type
     if file.content_type and file.content_type not in _ALLOWED_CONTENT_TYPES:
@@ -67,7 +72,7 @@ async def classify_audio(
         )
 
     # Read and validate size
-    audio_bytes = await file.read()
+    audio_bytes = file.file.read()
     size_mb = len(audio_bytes) / (1024 * 1024)
     if size_mb > _MAX_FILE_SIZE_MB:
         raise HTTPException(
@@ -80,12 +85,18 @@ async def classify_audio(
 
     # Classify
     try:
-        result = audio_svc.classify_audio(
-            audio_bytes=audio_bytes,
-            filename=file.filename or "upload.wav",
-            lat=lat,
-            lon=lon,
-        )
+        if lat is not None and lon is not None:
+            result = audio_svc.classify_audio(
+                audio_bytes=audio_bytes,
+                filename=file.filename or "upload.wav",
+                lat=lat,
+                lon=lon,
+            )
+        else:
+            result = audio_svc.classify_audio_only(
+                audio_bytes=audio_bytes,
+                filename=file.filename or "upload.wav",
+            )
     except FileNotFoundError as exc:
         raise HTTPException(
             503,
@@ -109,9 +120,9 @@ async def classify_audio(
 
     return AudioClassificationResponse(
         filename=result["filename"],
-        lat=result["lat"],
-        lon=result["lon"],
-        h3_cell=result["h3_cell"],
+        lat=result.get("lat"),
+        lon=result.get("lon"),
+        h3_cell=result.get("h3_cell"),
         dominant_species=result["dominant_species"],
         n_segments=result["n_segments"],
         segments=segments,

@@ -7,14 +7,25 @@ import logging
 from fastapi import APIRouter, Header, HTTPException, Query
 
 from backend.models.submissions import (
+    ActivityDay,
     CommentCreate,
     CommentListResponse,
     CommentResponse,
     CommentUpdate,
+    CommunityStats,
+    CommunityStatsResponse,
+    CommunityVoteRequest,
+    MapSighting,
+    MapSightingResponse,
+    ModeratorVerifyRequest,
+    RecentActivity,
     SubmissionDetail,
     SubmissionListResponse,
     SubmissionSummary,
+    TopContributor,
     VerifyRequest,
+    VoteResponse,
+    WhaleOfTheWeek,
 )
 from backend.services import auth as auth_svc
 from backend.services import submissions as sub_svc
@@ -22,6 +33,35 @@ from backend.services import submissions as sub_svc
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/submissions", tags=["submissions"])
+
+
+# ── Community stats (public, no auth) ────────────────────────
+
+
+@router.get(
+    "/community-stats",
+    response_model=CommunityStatsResponse,
+)
+def community_stats() -> CommunityStatsResponse:
+    """Aggregate community statistics, activity feed, and leaderboard."""
+    raw_stats = sub_svc.get_community_stats()
+    raw_activity = sub_svc.get_recent_activity(limit=8)
+    raw_leaders = sub_svc.get_top_contributors(limit=10)
+    raw_histogram = sub_svc.get_activity_histogram(days=30)
+    raw_wotw = sub_svc.get_whale_of_the_week()
+    return CommunityStatsResponse(
+        stats=CommunityStats(**raw_stats),
+        recent_activity=[RecentActivity(**r) for r in raw_activity],
+        top_contributors=[TopContributor(**r) for r in raw_leaders],
+        activity_histogram=[
+            ActivityDay(
+                date=str(r["date"]),
+                count=r["count"],
+            )
+            for r in raw_histogram
+        ],
+        whale_of_the_week=(WhaleOfTheWeek(**raw_wotw) if raw_wotw else None),
+    )
 
 
 def _require_auth(authorization: str | None) -> int:
@@ -60,14 +100,86 @@ def list_public_submissions(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     status: str | None = Query(default=None),
+    species: str | None = Query(
+        default=None,
+        description="Filter by model_species or species_guess",
+    ),
+    lat_min: float | None = Query(default=None, ge=-90, le=90),
+    lat_max: float | None = Query(default=None, ge=-90, le=90),
+    lon_min: float | None = Query(default=None, ge=-180, le=180),
+    lon_max: float | None = Query(default=None, ge=-180, le=180),
+    since: str | None = Query(
+        default=None,
+        description="ISO date (YYYY-MM-DD) — only submissions on/after",
+    ),
+    until: str | None = Query(
+        default=None,
+        description="ISO date (YYYY-MM-DD) — only submissions on/before",
+    ),
+    exclude_user_id: int | None = Query(
+        default=None,
+        description="Exclude submissions from this user (for review queue)",
+    ),
 ) -> SubmissionListResponse:
     """Browse public submissions for community verification."""
-    rows, total = sub_svc.get_public_submissions(limit, offset, status)
+    rows, total = sub_svc.get_public_submissions(
+        limit,
+        offset,
+        status,
+        exclude_user_id=exclude_user_id,
+        species=species,
+        lat_min=lat_min,
+        lat_max=lat_max,
+        lon_min=lon_min,
+        lon_max=lon_max,
+        since=since,
+        until=until,
+    )
     return SubmissionListResponse(
         submissions=[SubmissionSummary(**r) for r in rows],
         total=total,
         limit=limit,
         offset=offset,
+    )
+
+
+# ── Map sightings (spatial, lightweight) ─────────────────────
+
+
+@router.get(
+    "/map-sightings",
+    response_model=MapSightingResponse,
+)
+def map_sightings(
+    lat_min: float = Query(..., ge=-90, le=90),
+    lat_max: float = Query(..., ge=-90, le=90),
+    lon_min: float = Query(..., ge=-180, le=180),
+    lon_max: float = Query(..., ge=-180, le=180),
+    species: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    limit: int = Query(default=2000, ge=1, le=5000),
+) -> MapSightingResponse:
+    """Lightweight spatial query for rendering sightings on the map.
+
+    Returns minimal fields: position, species, verification status,
+    media flags, and timestamp. Filtered by bounding box."""
+    if lat_min >= lat_max or lon_min >= lon_max:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid bbox: min must be < max",
+        )
+    rows = sub_svc.get_map_sightings(
+        lat_min,
+        lat_max,
+        lon_min,
+        lon_max,
+        species=species,
+        status=status,
+        limit=limit,
+    )
+    return MapSightingResponse(
+        total=len(rows),
+        data=[MapSighting(**r) for r in rows],
     )
 
 
@@ -123,12 +235,81 @@ def verify_submission(
     body: VerifyRequest,
     authorization: str | None = Header(default=None),
 ) -> SubmissionDetail:
-    """Verify, reject, or dispute a public submission."""
+    """Legacy verify — routes to moderator or community automatically."""
     verifier_id = _require_auth(authorization)
 
     try:
         result = sub_svc.verify_submission(
             submission_id, verifier_id, body.status, body.notes
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+    if not result:
+        raise HTTPException(
+            status_code=404,
+            detail="Submission not found or not public",
+        )
+    return SubmissionDetail(**result)
+
+
+# ── Moderator verification ───────────────────────────────────
+
+
+@router.post(
+    "/{submission_id}/moderate",
+    response_model=SubmissionDetail,
+)
+def moderate_submission(
+    submission_id: str,
+    body: ModeratorVerifyRequest,
+    authorization: str | None = Header(default=None),
+) -> SubmissionDetail:
+    """Moderator-only: set authoritative verified/rejected status."""
+    mod_id = _require_auth(authorization)
+
+    try:
+        result = sub_svc.moderator_verify(
+            submission_id, mod_id, body.status, body.notes
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+    if not result:
+        raise HTTPException(
+            status_code=404,
+            detail="Submission not found or not public",
+        )
+    return SubmissionDetail(**result)
+
+
+# ── Community voting ─────────────────────────────────────────
+
+
+@router.post(
+    "/{submission_id}/vote",
+    response_model=SubmissionDetail,
+)
+def cast_vote(
+    submission_id: str,
+    body: CommunityVoteRequest,
+    authorization: str | None = Header(default=None),
+) -> SubmissionDetail:
+    """Cast or update a community vote (agree / disagree / refine)."""
+    voter_id = _require_auth(authorization)
+
+    try:
+        result = sub_svc.community_vote(
+            submission_id,
+            voter_id,
+            body.vote,
+            body.notes,
+            body.species_suggestion,
+            body.suggested_rank,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -139,6 +320,18 @@ def verify_submission(
             detail="Submission not found or not public",
         )
     return SubmissionDetail(**result)
+
+
+@router.get(
+    "/{submission_id}/votes",
+    response_model=list[VoteResponse],
+)
+def list_votes(
+    submission_id: str,
+) -> list[VoteResponse]:
+    """List all community votes for a submission."""
+    rows = sub_svc.get_submission_votes(submission_id)
+    return [VoteResponse(**r) for r in rows]
 
 
 # ── User's public submissions (for public profiles) ─────────

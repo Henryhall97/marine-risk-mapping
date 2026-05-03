@@ -37,7 +37,7 @@ from pipeline.config import DB_CONFIG
 # 1° longitude ≈ 111 * cos(37°) ≈ 88.7 km
 # We use a proper haversine in post-processing, but KDTree needs
 # Cartesian coordinates, so we project to approximate km.
-REF_LAT = 37.0  # degrees — centre of US coastal range
+REF_LAT = 37.0  # degrees — centre of study-area latitude range
 KM_PER_DEG_LAT = 111.0
 KM_PER_DEG_LON = 111.0 * np.cos(np.radians(REF_LAT))
 

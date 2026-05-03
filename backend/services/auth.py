@@ -99,8 +99,9 @@ def register_user(email: str, display_name: str, password: str) -> dict[str, Any
 def authenticate_user(email: str, password: str) -> dict[str, Any] | None:
     """Verify credentials. Returns user dict or None."""
     row = fetch_one(
-        "SELECT id, email, display_name, password_hash, created_at, "
-        "reputation_score, reputation_tier, avatar_filename "
+        "SELECT id, email, display_name, bio, password_hash, "
+        "created_at, reputation_score, reputation_tier, "
+        "avatar_filename, is_moderator "
         "FROM users WHERE email = %s AND is_active = TRUE",
         (email,),
     )
@@ -121,11 +122,13 @@ def authenticate_user(email: str, password: str) -> dict[str, Any] | None:
         "id": row["id"],
         "email": row["email"],
         "display_name": row["display_name"],
+        "bio": row["bio"],
         "avatar_url": _avatar_url(row["id"], row["avatar_filename"]),
         "created_at": row["created_at"],
         "submission_count": sub_count,
         "reputation_score": row["reputation_score"],
         "reputation_tier": row["reputation_tier"],
+        "is_moderator": row["is_moderator"],
         "credentials": rep_svc.get_user_credentials(row["id"]),
     }
 
@@ -133,8 +136,9 @@ def authenticate_user(email: str, password: str) -> dict[str, Any] | None:
 def get_user_by_id(user_id: int) -> dict[str, Any] | None:
     """Fetch user profile by ID."""
     row = fetch_one(
-        "SELECT id, email, display_name, created_at, "
-        "reputation_score, reputation_tier, avatar_filename "
+        "SELECT id, email, display_name, bio, created_at, "
+        "reputation_score, reputation_tier, avatar_filename, "
+        "is_moderator "
         "FROM users WHERE id = %s AND is_active = TRUE",
         (user_id,),
     )
@@ -157,8 +161,9 @@ def get_user_by_id(user_id: int) -> dict[str, Any] | None:
 def get_public_profile(user_id: int) -> dict[str, Any] | None:
     """Fetch a public profile (no email) for another user."""
     row = fetch_one(
-        "SELECT id, display_name, created_at, "
-        "reputation_score, reputation_tier, avatar_filename "
+        "SELECT id, display_name, bio, created_at, "
+        "reputation_score, reputation_tier, avatar_filename, "
+        "is_moderator "
         "FROM users WHERE id = %s AND is_active = TRUE",
         (user_id,),
     )
@@ -216,6 +221,57 @@ def update_avatar(user_id: int, filename: str | None) -> None:
             (filename, user_id),
         )
         conn.commit()
+
+
+def update_bio(user_id: int, bio: str | None) -> None:
+    """Set or clear the user's profile bio/summary."""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE users SET bio = %s WHERE id = %s",
+            (bio, user_id),
+        )
+        conn.commit()
+
+
+# ── User search ──────────────────────────────────────────────
+
+
+def search_users(
+    query: str,
+    limit: int = 10,
+    exclude_ids: list[int] | None = None,
+) -> list[dict[str, Any]]:
+    """Search active users by display name (case-insensitive prefix/contains).
+
+    Returns lightweight results suitable for crew-invite type-ahead.
+    Optionally excludes a set of user IDs (e.g. existing crew).
+    """
+    q = f"%{query}%"
+    sql = (
+        "SELECT id, display_name, reputation_tier, avatar_filename "
+        "FROM users WHERE is_active = TRUE "
+        "AND display_name ILIKE %s "
+    )
+    params: list[Any] = [q]
+    if exclude_ids:
+        placeholders = ",".join("%s" for _ in exclude_ids)
+        sql += f"AND id NOT IN ({placeholders}) "
+        params.extend(exclude_ids)
+    sql += "ORDER BY display_name LIMIT %s"
+    params.append(limit)
+
+    rows = fetch_all(sql, tuple(params))
+    results: list[dict[str, Any]] = []
+    for r in rows:
+        results.append(
+            {
+                "id": r["id"],
+                "display_name": r["display_name"],
+                "reputation_tier": r["reputation_tier"],
+                "avatar_url": _avatar_url(r["id"], r.pop("avatar_filename", None)),
+            }
+        )
+    return results
 
 
 # ── Token extraction helper ──────────────────────────────────

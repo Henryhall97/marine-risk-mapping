@@ -1,6 +1,14 @@
 -- Intermediate model: vessel traffic per hex cell per month
 -- Selects key traffic metrics from the AIS H3 summary for
 -- the downstream risk model.
+
+{{ config(
+    indexes=[
+        {'columns': ['h3_cell']},
+        {'columns': ['h3_cell', 'month']},
+    ]
+) }}
+
 --
 -- Uses vessel-weighted (vw_) metrics where available — these
 -- correct for AIS ping-rate bias where Class A ships broadcast

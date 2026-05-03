@@ -99,8 +99,8 @@ BALEEN_FAMILIES: tuple[str, ...] = (
     "Eschrichtiidae",  # Gray whale
 )
 
-# ── US coastal bounding box ─────────────────────────────────
-# Covers all US waters plus adjacent AIS-dense corridors:
+# ── Study bounding box ──────────────────────────────────────
+# Covers CONUS, Alaska, Hawaii, Caribbean & adjacent corridors:
 # south to the Galápagos (~1.4°S), east to Barbados (~59.5°W),
 # north to the Aleutians/Kodiak (~52°N), west to the Aleutian chain.
 # Note: ocean covariates intentionally use a wider box
@@ -140,6 +140,11 @@ SPEED_ZONES_FILE = (
 SMA_DIR = RAW_DIR / "mpa" / "seasonal_management_areas"
 SMA_FILE = SMA_DIR / "seasonal_management_areas.geojson"
 
+BIA_FILE = RAW_DIR / "zones" / "cetacean_bia.parquet"
+CRITICAL_HABITAT_FILE = RAW_DIR / "zones" / "whale_critical_habitat.parquet"
+SHIPPING_LANES_FILE = RAW_DIR / "zones" / "shipping_lanes_regulations.parquet"
+SLOW_ZONES_FILE = RAW_DIR / "zones" / "right_whale_slow_zones.geojson"
+
 OCEAN_MASK_FILE = RAW_DIR / "ocean_mask" / "ocean_mask.parquet"
 
 SHIP_STRIKES_PDF = RAW_DIR / "cetacean" / "noaa_23127_DS1.pdf"  # MANUAL
@@ -157,6 +162,16 @@ NISI_ISDM_FILES = {
 
 OCEAN_DIR = RAW_DIR / "ocean"
 OCEAN_COVARIATES_FILE = OCEAN_DIR / "ocean_covariates.parquet"
+
+# ── CMIP6 climate projections ──────────────────────────────
+CMIP6_DIR = RAW_DIR / "cmip6"
+CMIP6_PROJECTIONS_FILE = CMIP6_DIR / "cmip6_projections.parquet"
+CMIP6_SCENARIOS: list[str] = ["ssp245", "ssp585"]
+CMIP6_DECADES: list[str] = ["2030s", "2040s", "2060s", "2080s"]
+
+# ── SDM projections (scored on CMIP6 covariates) ───────────
+SDM_PROJECTIONS_DIR = PROCESSED_DIR / "ml" / "sdm_projections"
+ISDM_PROJECTIONS_DIR = PROCESSED_DIR / "ml" / "isdm_projections"
 
 # MANUAL: see docs/manual_data_acquisition.md
 BATHYMETRY_RASTER = RAW_DIR / "bathymetry" / "gebco_2025_n52.0_s-2.0_w-180.0_e-59.0.tif"
@@ -330,7 +345,11 @@ AUDIO_N_MFCC = 20  # MFCC coefficients
 AUDIO_FMIN = 10  # Hz — captures blue whale infrasonic
 AUDIO_FMAX = 8000  # Hz — upper bound for most cetacean calls
 
-# Target species labels (order matters for model output indices)
+# ── Audio species lists — three-pass design ─────────────────
+# Pass 1 (critical): 9 ESA-listed species + other_cetacean gatekeeper.
+# other_cetacean is trained on clips from broad species so the model
+# learns "not a large whale" as a coherent category, not just a residual.
+# Bowhead included: ESA-listed, strong acoustic signal in WMMSDB (306 clips).
 WHALE_AUDIO_SPECIES: list[str] = [
     "right_whale",
     "humpback_whale",
@@ -340,7 +359,44 @@ WHALE_AUDIO_SPECIES: list[str] = [
     "minke_whale",
     "sei_whale",
     "killer_whale",
-    "unknown_whale",
+    "bowhead_whale",
+    "other_cetacean",  # gatekeeper — triggers escalation to broad pass
+]
+
+# Pass 2 (broad): ~15 non-critical cetacean species.
+# Critically: NO overlap with WHALE_AUDIO_SPECIES (no double-learning).
+# Non-cetaceans (walrus, seals, manatee) are excluded from training classes
+# but their clips can be used as hard negatives in unknown_cetacean.
+# Harbor porpoise and Dall's porpoise excluded — primary vocalizations
+# are ultrasonic (100-150 kHz), outside our AUDIO_FMAX=8000 Hz pipeline.
+WHALE_AUDIO_BROAD_SPECIES: list[str] = [
+    "spotted_dolphin",  # S. attenuata — 860 clips
+    "long_finned_pilot_whale",  # G. melaena — 700 clips
+    "atlantic_white_sided_dolphin",  # L. acutus — 493 clips
+    "spinner_dolphin",  # S. longirostris — 487 clips
+    "striped_dolphin",  # S. coeruleoalba — 332 clips
+    "rissos_dolphin",  # Grampus griseus — 331 clips
+    "clymene_dolphin",  # S. clymene — 312 clips
+    "common_dolphin",  # D. delphis — 282 clips
+    "atlantic_spotted_dolphin",  # S. frontalis — 244 clips
+    "short_finned_pilot_whale",  # G. macrorhynchus — 224 clips
+    "bottlenose_dolphin",  # T. truncatus — 168 clips
+    "beluga",  # D. leucas — 133 clips
+    "narwhal",  # M. monoceros — 72 clips
+    "gray_whale",  # E. robustus — 32 clips (augmented)
+    "unknown_cetacean",  # catch-all for broad pass
+]
+
+# Pass 3 (rare): species with 5-19 WMMSDB clips — too few for a softmax
+# head but usable for cosine-similarity retrieval against mean embeddings
+# computed from the broad model backbone.
+# Clips for non-cetaceans (seals, walrus) are intentionally omitted.
+WHALE_AUDIO_RARE_SPECIES: list[str] = [
+    "amazon_river_dolphin",  # Inia geoffrensis — 30 clips
+    "heavisides_dolphin",  # Cephalorhynchus heavisidii — 14 clips
+    "tucuxi",  # Sotalia fluviatilis — 12 clips
+    "melon_headed_whale",  # Peponocephala electra — 9 clips (audio)
+    "lagenodelphis_dolphin",  # Lagenodelphis hosei — 7 clips
 ]
 
 # Species-specific frequency bands (Hz) for bandpass pre-filtering
@@ -385,21 +441,8 @@ PHOTO_BACKBONE_FREEZE_EPOCHS = 2  # freeze backbone for first N epochs (head war
 PHOTO_IMAGENET_MEAN = (0.485, 0.456, 0.406)
 PHOTO_IMAGENET_STD = (0.229, 0.224, 0.225)
 
-# Target species labels (7 target + 1 catch-all for non-target cetaceans)
-# Note: sperm_whale excluded — not present in Happywhale Kaggle dataset
-WHALE_PHOTO_SPECIES: list[str] = [
-    "right_whale",
-    "humpback_whale",
-    "fin_whale",
-    "blue_whale",
-    "minke_whale",
-    "sei_whale",
-    "killer_whale",
-    "other_cetacean",
-]
-
-# The 7 target species (before adding other_cetacean)
-# sperm_whale not in Happywhale dataset (deep divers, rarely surface-photographed)
+# The 7 critical target species (before adding other_cetacean gatekeeper).
+# sperm_whale not in Happywhale dataset (deep divers, rarely surface-photographed).
 WHALE_PHOTO_TARGET_SPECIES: list[str] = [
     "right_whale",
     "humpback_whale",
@@ -418,3 +461,99 @@ HAPPYWHALE_LABEL_FIXES: dict[str, str] = {
     "bottlenose_dolpin": "bottlenose_dolphin",
     "southern_right_whale": "right_whale",
 }
+
+# Confidence thresholds for pass escalation.
+# Critical → broad if: top_pred == "other_cetacean" OR max_conf < threshold.
+# Broad → rare if: top_pred == "unknown_cetacean" OR max_conf < threshold.
+AUDIO_CRITICAL_CONFIDENCE_THRESHOLD: float = 0.65
+AUDIO_BROAD_CONFIDENCE_THRESHOLD: float = 0.50
+
+# Output directories for multi-pass audio models.
+AUDIO_BROAD_MODEL_DIR = ML_DIR / "audio_classifier_broad"
+AUDIO_RARE_EMBEDDINGS_DIR = ML_DIR / "audio_classifier_rare"
+
+# ── Photo species lists — three-pass design ──────────────────
+# Pass 1 (critical): 7 ESA-listed species + other_cetacean gatekeeper.
+# Note: sperm_whale excluded — absent from Happywhale dataset (deep divers).
+# Note: bowhead excluded from photo critical — absent from Happywhale.
+WHALE_PHOTO_SPECIES: list[str] = [
+    "right_whale",
+    "humpback_whale",
+    "fin_whale",
+    "blue_whale",
+    "minke_whale",
+    "sei_whale",
+    "killer_whale",
+    "other_cetacean",  # gatekeeper — triggers escalation to broad pass
+]
+
+# Pass 2 (broad): all Happywhale species with >= 50 images that are NOT
+# in the critical list. Confirmed from audit: 18 species, 32,116 images.
+# No overlap with WHALE_PHOTO_SPECIES.
+WHALE_PHOTO_BROAD_TARGET_SPECIES: list[str] = [
+    "bottlenose_dolphin",  # 10,781 images
+    "beluga",  # 7,443 images
+    "false_killer_whale",  # 3,326 images
+    "dusky_dolphin",  # 3,139 images
+    "spinner_dolphin",  # 1,700 images
+    "melon_headed_whale",  # 1,689 images  ← was missing from old list
+    "gray_whale",  # 1,123 images
+    "short_finned_pilot_whale",  # 745 images
+    "spotted_dolphin",  # 490 images
+    "common_dolphin",  # 347 images
+    "cuviers_beaked_whale",  # 341 images  ← was missing from old list
+    "long_finned_pilot_whale",  # 238 images  ← was missing from old list
+    "white_sided_dolphin",  # 229 images  ← was missing from old list
+    "brydes_whale",  # 154 images  ← was missing from old list
+    "pantropic_spotted_dolphin",  # 145 images  ← was missing from old list
+    "commersons_dolphin",  # 90 images   ← was missing from old list
+    "pygmy_killer_whale",  # 76 images   ← was missing from old list
+    "rough_toothed_dolphin",  # 60 images   ← was missing from old list
+    "unknown_cetacean",  # catch-all for broad pass
+]
+
+# Pass 3 (rare): only frasiers_dolphin (14 images) falls here from Happywhale.
+# Embedding similarity against broad model backbone representations.
+WHALE_PHOTO_RARE_SPECIES: list[str] = [
+    "frasiers_dolphin",  # 14 images in Happywhale
+]
+
+# Confidence thresholds for photo pass escalation.
+PHOTO_CRITICAL_CONFIDENCE_THRESHOLD: float = 0.65
+PHOTO_BROAD_CONFIDENCE_THRESHOLD: float = 0.50
+
+# Output directories for multi-pass photo models.
+PHOTO_BROAD_MODEL_DIR = ML_DIR / "photo_classifier_broad"
+PHOTO_RARE_EMBEDDINGS_DIR = ML_DIR / "photo_classifier_rare"
+
+# ── ArcFace photo classifier (Kaggle Happywhale 1st-place approach) ──────────
+# Sub-centre ArcFace with dynamic margins + GeM multi-scale pooling.
+# Backbone via timm.  Gallery-based KNN inference blended with logit scores.
+# Reference: Abe & Yamaguchi (2022), https://github.com/knshnb/kaggle-happywhale-1st-place
+ARCFACE_IMAGE_SIZE: int = 448  # richer features than B4's 224 px
+ARCFACE_BACKBONE: str = "tf_efficientnet_b7"  # best single-model from paper
+ARCFACE_OUT_INDICES: tuple[int, int] = (3, 4)  # last two backbone stages
+ARCFACE_N_CENTER: int = 2  # sub-centre k — handles fluke/dorsal/flank modes
+ARCFACE_GEM_P: float = 3.0  # GeM pooling exponent (fixed, not learned)
+ARCFACE_S: float = 30.0  # ArcFace scale factor
+ARCFACE_MARGIN_POWER: float = -0.5  # dynamic: margin ∝ n_samples^power
+ARCFACE_MARGIN_COEF: float = 0.45  # margin scaling coefficient
+ARCFACE_MARGIN_CONS: float = 0.05  # margin additive constant
+ARCFACE_LR_BACKBONE: float = 1.6e-3  # warmup cosine — backbone param group
+ARCFACE_LR_HEAD: float = 1.6e-2  # 10× backbone (head converges faster)
+ARCFACE_BATCH_SIZE: int = 16
+ARCFACE_EPOCHS: int = 30
+ARCFACE_EARLY_STOP_PATIENCE: int = 7  # val macro-F1 patience
+ARCFACE_WARMUP_RATIO: float = 0.1  # fraction of epochs for LR warmup
+ARCFACE_KNN_RATIO: float = 0.5  # blend: KNN × ratio + logit × (1 − ratio)
+ARCFACE_KNN_NEIGHBORS: int = 50  # top-K gallery neighbours per query
+ARCFACE_MODEL_DIR = ML_DIR / "photo_classifier_arcface"
+ARCFACE_BROAD_MODEL_DIR = ML_DIR / "photo_classifier_arcface_broad"
+
+# ── iNaturalist photo download ────────────────────────────────────────────────
+# Research-grade cetacean photos from iNaturalist Open Data.
+# Supplements Happywhale Kaggle dataset — adds sperm_whale + bowhead_whale
+# (absent from Happywhale) and extra gallery images for underrepresented species.
+INAT_MAX_PER_SPECIES: int = 500  # default cap for broad species
+INAT_REQUEST_DELAY: float = 0.7  # seconds between API pages (≤60 req/min)
+INAT_PHOTO_SIZE: str = "large"  # iNat size token: large = 1024 px long edge

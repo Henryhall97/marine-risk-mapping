@@ -77,7 +77,7 @@ def sample_h3_df():
     """DataFrame with H3 cells for spatial block testing."""
     import h3
 
-    # 50 random US coastal points → H3 cells
+    # 50 random study-area points → H3 cells
     rng = np.random.default_rng(123)
     lats = rng.uniform(25.0, 48.0, size=50)
     lons = rng.uniform(-128.0, -67.0, size=50)

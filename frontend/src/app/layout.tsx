@@ -18,9 +18,28 @@ const jakarta = Plus_Jakarta_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "Whale Watch",
-  description: "Whale–vessel collision risk visualization for US coastal waters",
+  title: {
+    default: "Whale Watch",
+    template: "%s — Whale Watch",
+  },
+  description:
+    "Map whale–vessel collision risk across CONUS, Alaska, Hawaii, and Caribbean waters. AI species classification from photos and audio. Community-powered sighting verification.",
   icons: { icon: "/whale_watch_logo.png" },
+  openGraph: {
+    title: "Whale Watch",
+    description:
+      "Map whale–vessel collision risk across CONUS, Alaska, Hawaii, and Caribbean waters. AI species classification from photos and audio.",
+    siteName: "Whale Watch",
+    images: [{ url: "/whale_watch_logo.png", width: 480, height: 320 }],
+    type: "website",
+  },
+  twitter: {
+    card: "summary",
+    title: "Whale Watch",
+    description:
+      "Map whale–vessel collision risk. AI species classification from photos and audio.",
+    images: ["/whale_watch_logo.png"],
+  },
 };
 
 export default function RootLayout({
@@ -31,6 +50,7 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${inter.variable} ${jakarta.variable}`}>
       <body className="bg-abyss-950 font-body text-slate-200 antialiased">
+
         {/* Global watermark */}
         <div
           className="pointer-events-none fixed inset-0 z-0 opacity-[0.025]"

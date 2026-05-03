@@ -1,12 +1,26 @@
 "use client";
 
 import { API_BASE } from "@/lib/config";
+import { useAuth } from "@/contexts/AuthContext";
 import UserAvatar from "@/components/UserAvatar";
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { useParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
 import type { MapSubmission } from "@/components/SubmissionMap";
+import {
+  IconAnchor,
+  IconCheck,
+  IconEye,
+  IconMap,
+  IconMicroscope,
+  IconRefresh,
+  IconShield,
+  IconStar,
+  IconThumbDown,
+  IconThumbUp,
+  IconUser,
+} from "@/components/icons/MarineIcons";
 
 const SubmissionMap = dynamic(() => import("@/components/SubmissionMap"), {
   ssr: false,
@@ -22,12 +36,14 @@ const SubmissionMap = dynamic(() => import("@/components/SubmissionMap"), {
 interface PublicProfile {
   id: number;
   display_name: string;
+  bio: string | null;
   avatar_url: string | null;
   created_at: string;
   submission_count: number;
   verified_count: number;
   reputation_score: number;
   reputation_tier: string;
+  is_moderator: boolean;
   credentials: Credential[];
   species_breakdown: SpeciesCount[];
 }
@@ -62,14 +78,17 @@ interface SubmissionSummary {
   submitter_name: string | null;
   submitter_id: number | null;
   submitter_tier: string | null;
+  community_agree: number;
+  community_disagree: number;
+  moderator_status: string | null;
 }
 
-const TIER_STYLE: Record<string, { color: string; bg: string; icon: string }> = {
-  newcomer: { color: "text-slate-400", bg: "bg-abyss-800 border-ocean-800", icon: "🌱" },
-  observer: { color: "text-ocean-400", bg: "bg-ocean-900/30 border-ocean-800", icon: "👁️" },
-  contributor: { color: "text-green-400", bg: "bg-green-900/30 border-green-800", icon: "⭐" },
-  expert: { color: "text-purple-400", bg: "bg-purple-900/30 border-purple-800", icon: "🔬" },
-  authority: { color: "text-yellow-400", bg: "bg-yellow-900/30 border-yellow-800", icon: "👑" },
+const TIER_STYLE: Record<string, { color: string; bg: string; icon: ReactNode }> = {
+  newcomer: { color: "text-slate-400", bg: "bg-abyss-800 border-ocean-800", icon: <IconUser className="inline h-3.5 w-3.5" /> },
+  observer: { color: "text-ocean-400", bg: "bg-ocean-900/30 border-ocean-800", icon: <IconEye className="inline h-3.5 w-3.5" /> },
+  contributor: { color: "text-green-400", bg: "bg-green-900/30 border-green-800", icon: <IconStar className="inline h-3.5 w-3.5" /> },
+  expert: { color: "text-purple-400", bg: "bg-purple-900/30 border-purple-800", icon: <IconMicroscope className="inline h-3.5 w-3.5" /> },
+  authority: { color: "text-yellow-400", bg: "bg-yellow-900/30 border-yellow-800", icon: <IconAnchor className="inline h-3.5 w-3.5" /> },
 };
 
 const TIER_THRESHOLDS = [
@@ -90,11 +109,22 @@ const CREDENTIAL_LABELS: Record<string, string> = {
   other: "Other",
 };
 
-const STATUS_BADGE: Record<string, string> = {
-  unverified: "bg-abyss-700 text-slate-300",
-  verified: "bg-green-900/60 text-green-300",
-  rejected: "bg-red-900/60 text-red-300",
-  disputed: "bg-yellow-900/60 text-yellow-300",
+const STATUS_STYLE: Record<string, { bg: string; dot: string; text: string }> = {
+  unverified: { bg: "bg-slate-500/10", dot: "bg-slate-400", text: "text-slate-300" },
+  verified: { bg: "bg-emerald-500/15", dot: "bg-emerald-400", text: "text-emerald-300" },
+  community_verified: { bg: "bg-green-500/15", dot: "bg-green-400", text: "text-green-300" },
+  under_review: { bg: "bg-blue-500/15", dot: "bg-blue-400", text: "text-blue-300" },
+  rejected: { bg: "bg-red-500/15", dot: "bg-red-400", text: "text-red-300" },
+  disputed: { bg: "bg-yellow-500/15", dot: "bg-yellow-400", text: "text-yellow-300" },
+};
+
+const STATUS_LABELS: Record<string, string> = {
+  unverified: "Unverified",
+  verified: "Mod Verified",
+  community_verified: "Community Verified",
+  under_review: "Under Review",
+  rejected: "Rejected",
+  disputed: "Disputed",
 };
 
 const RISK_COLOR: Record<string, string> = {
@@ -122,6 +152,8 @@ const BAR_COLORS = [
 
 export default function UserProfilePage() {
   const params = useParams();
+  const router = useRouter();
+  const { user: authUser } = useAuth();
   const userId = params.id as string;
   const [profile, setProfile] = useState<PublicProfile | null>(null);
   const [submissions, setSubmissions] = useState<SubmissionSummary[]>([]);
@@ -131,6 +163,13 @@ export default function UserProfilePage() {
   const [error, setError] = useState<string | null>(null);
   const [showMap, setShowMap] = useState(false);
   const PAGE_SIZE = 15;
+
+  // Redirect to /profile if viewing own profile
+  useEffect(() => {
+    if (authUser && String(authUser.id) === userId) {
+      router.replace("/profile");
+    }
+  }, [authUser, userId, router]);
 
   useEffect(() => {
     (async () => {
@@ -220,7 +259,7 @@ export default function UserProfilePage() {
           href="/community"
           className="mb-4 inline-block text-sm text-slate-400 hover:text-white"
         >
-          ← Community sightings
+          ← Community interactions
         </Link>
 
         {/* Profile header */}
@@ -239,6 +278,14 @@ export default function UserProfilePage() {
                   <h1 className="text-2xl font-bold text-white">
                     {profile.display_name}
                   </h1>
+                  {profile.is_moderator && (
+                    <span
+                      className="inline-flex items-center gap-1 rounded-full border border-amber-700/60 bg-amber-900/30 px-2.5 py-0.5 text-xs font-semibold text-amber-300"
+                      title="Platform Moderator"
+                    >
+                      <IconShield className="h-3.5 w-3.5" /> Moderator
+                    </span>
+                  )}
                   <span
                     className={`rounded-full border px-2.5 py-0.5 text-xs font-medium ${tier.bg} ${tier.color}`}
                   >
@@ -249,6 +296,11 @@ export default function UserProfilePage() {
                   Member since{" "}
                   {new Date(profile.created_at).toLocaleDateString()}
                 </p>
+                {profile.bio && (
+                  <p className="mt-2 text-sm leading-relaxed text-slate-300">
+                    {profile.bio}
+                  </p>
+                )}
               </div>
             </div>
 
@@ -265,7 +317,7 @@ export default function UserProfilePage() {
                     }`}
                     title={c.description}
                   >
-                    {c.is_verified ? "✓ " : "⏳ "}
+                    {c.is_verified ? <IconCheck className="inline h-3.5 w-3.5" /> : <IconRefresh className="inline h-3.5 w-3.5" />}
                     {CREDENTIAL_LABELS[c.credential_type] ?? c.credential_type}
                   </span>
                 ))}
@@ -300,7 +352,7 @@ export default function UserProfilePage() {
 
         {/* Stats row */}
         <div className="mb-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
-          <StatCard label="Sightings" value={String(profile.submission_count)} />
+          <StatCard label="Interactions" value={String(profile.submission_count)} />
           <StatCard
             label="Verified"
             value={String(profile.verified_count)}
@@ -346,7 +398,7 @@ export default function UserProfilePage() {
         {/* Submissions header + map toggle */}
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-lg font-semibold text-white">
-            Public Sightings
+            Public Interactions
           </h2>
           <div className="flex gap-1 rounded-lg border border-ocean-800 bg-abyss-900 p-1">
             <button
@@ -359,11 +411,11 @@ export default function UserProfilePage() {
             </button>
             <button
               onClick={() => setShowMap(true)}
-              className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+              className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
                 showMap ? "bg-ocean-600 text-white" : "text-slate-400 hover:text-white"
               }`}
             >
-              🗺 Map
+              <IconMap className="h-3.5 w-3.5" /> Map
             </button>
           </div>
         </div>
@@ -410,11 +462,24 @@ export default function UserProfilePage() {
                               {s.risk_category}
                             </span>
                           )}
-                          <span
-                            className={`rounded-full px-2 py-0.5 text-xs ${STATUS_BADGE[s.verification_status] ?? STATUS_BADGE.unverified}`}
-                          >
-                            {s.verification_status}
-                          </span>
+                          {(() => {
+                            const st = STATUS_STYLE[s.verification_status] ?? STATUS_STYLE.unverified;
+                            return (
+                              <span
+                                className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${st.bg} ${st.text}`}
+                              >
+                                <span className={`h-1.5 w-1.5 rounded-full ${st.dot}`} />
+                                {s.moderator_status ? <><IconShield className="inline h-3.5 w-3.5" />{" "}</> : null}
+                                {STATUS_LABELS[s.verification_status] ?? s.verification_status}
+                              </span>
+                            );
+                          })()}
+                          {(s.community_agree > 0 || s.community_disagree > 0) && (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-abyss-800/60 px-2 py-0.5 text-[11px] text-slate-400">
+                              <span className="inline-flex items-center gap-0.5 text-green-400"><IconThumbUp className="h-3.5 w-3.5" />{s.community_agree}</span>
+                              <span className="inline-flex items-center gap-0.5 text-red-400"><IconThumbDown className="h-3.5 w-3.5" />{s.community_disagree}</span>
+                            </span>
+                          )}
                           {s.interaction_type && (
                             <span className="rounded-full border border-ocean-800 px-2 py-0.5 text-xs text-slate-500">
                               {s.interaction_type.replace(/_/g, " ")}

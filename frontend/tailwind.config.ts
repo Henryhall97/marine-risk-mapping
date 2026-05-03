@@ -60,6 +60,11 @@ const config: Config = {
         "fade-in-up": "fade-in-up 0.6s ease-out forwards",
         "scale-in": "scale-in 0.5s ease-out forwards",
         "ripple": "ripple 0.6s ease-out",
+        "tail-flick": "tail-flick 4s ease-in-out infinite",
+        "dive": "dive-down 3s ease-in-out infinite",
+        "pod-swim": "pod-swim 5s ease-in-out infinite",
+        "slide-in-right": "slide-in-right 0.4s ease-out forwards",
+        "cta-wiggle": "cta-wiggle 2s ease-in-out infinite",
       },
       keyframes: {
         wave: {
@@ -94,6 +99,17 @@ const config: Config = {
         ripple: {
           "0%": { transform: "scale(0)", opacity: "0.5" },
           "100%": { transform: "scale(4)", opacity: "0" },
+        },
+        "slide-in-right": {
+          "0%": { opacity: "0", transform: "translateX(24px)" },
+          "100%": { opacity: "1", transform: "translateX(0)" },
+        },
+        "cta-wiggle": {
+          "0%, 100%": { transform: "rotate(0deg) translateY(0)" },
+          "20%": { transform: "rotate(-6deg) translateX(-3px)" },
+          "40%": { transform: "rotate(0deg) translateY(0)" },
+          "60%": { transform: "rotate(6deg) translateX(3px)" },
+          "80%": { transform: "rotate(0deg) translateY(0)" },
         },
       },
       /* ── Backdrop / glass helpers ──────────────────────── */

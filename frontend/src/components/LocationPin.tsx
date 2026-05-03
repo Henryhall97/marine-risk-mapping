@@ -1,13 +1,14 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useCallback } from "react";
 import DeckGL from "@deck.gl/react";
 import { Map } from "react-map-gl/maplibre";
 import { ScatterplotLayer, TextLayer } from "@deck.gl/layers";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { MAP_STYLE } from "@/lib/config";
+import { IconPin } from "@/components/icons/MarineIcons";
 
-/* ── Offline reverse-geocoder for US coastal waters ─────── */
+/* ── Offline reverse-geocoder for the study area ────────── */
 
 interface CoastalRegion {
   name: string;
@@ -102,6 +103,10 @@ interface Props {
   zoom?: number;
   /** Allow zoom / pan (default false — static preview). */
   interactive?: boolean;
+  /** Callback when user clicks the map to set a new location. */
+  onLocationChange?: (lat: number, lon: number) => void;
+  /** Override map tile style URL (default: dark-matter from config). */
+  mapStyle?: string;
 }
 
 /**
@@ -115,7 +120,10 @@ export default function LocationPin({
   height = 200,
   zoom = 5,
   interactive = false,
+  onLocationChange,
+  mapStyle: mapStyleOverride,
 }: Props) {
+  const resolvedMapStyle = mapStyleOverride ?? MAP_STYLE;
   const viewState = useMemo(
     () => ({
       latitude: lat,
@@ -179,31 +187,50 @@ export default function LocationPin({
     [data, label],
   );
 
+  const handleMapClick = useCallback(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (info: any) => {
+      if (!onLocationChange || !info.coordinate) return;
+      const [clickLon, clickLat] = info.coordinate as [number, number];
+      onLocationChange(clickLat, clickLon);
+    },
+    [onLocationChange],
+  );
+
   return (
     <div
       className="relative overflow-hidden rounded-xl border border-ocean-800"
-      style={{ height }}
+      style={{ height, cursor: onLocationChange ? "crosshair" : undefined }}
     >
       <DeckGL
         initialViewState={viewState}
         controller={interactive ? { scrollZoom: true, dragPan: true, doubleClickZoom: true, touchZoom: true, touchRotate: false, dragRotate: false } : false}
         layers={layers}
+        onClick={onLocationChange ? handleMapClick : undefined}
+        getCursor={onLocationChange ? () => "crosshair" : undefined}
         style={{ position: "relative", width: "100%", height: "100%" }}
       >
-        <Map mapStyle={MAP_STYLE} />
+        <Map mapStyle={resolvedMapStyle} />
       </DeckGL>
 
       {/* Location name + coordinates badge */}
       <div className="absolute bottom-2 left-2 flex items-center gap-2">
         <div className="rounded-md bg-black/70 px-2.5 py-1.5 backdrop-blur-sm">
-          <p className="text-[11px] font-semibold text-white leading-tight">
-            📍 {regionName}
+          <p className="flex items-center gap-1 text-[11px] font-semibold text-white leading-tight">
+            <IconPin className="h-3 w-3" /> {regionName}
           </p>
           <p className="text-[10px] text-slate-400 leading-tight">
             {lat.toFixed(4)}°, {lon.toFixed(4)}°
           </p>
         </div>
       </div>
+
+      {/* Click-to-set instruction */}
+      {onLocationChange && (
+        <div className="absolute right-2 top-2 rounded-md bg-ocean-600/80 px-2 py-1 text-[10px] font-medium text-white backdrop-blur-sm">
+          Click map to set pin
+        </div>
+      )}
     </div>
   );
 }

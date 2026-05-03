@@ -37,9 +37,9 @@ class AudioClassificationResponse(BaseModel):
     """Full response from the audio classification endpoint."""
 
     filename: str
-    lat: float
-    lon: float
-    h3_cell: int
+    lat: float | None = None
+    lon: float | None = None
+    h3_cell: int | None = None
     dominant_species: str = Field(
         ...,
         description=(

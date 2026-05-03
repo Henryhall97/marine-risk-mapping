@@ -652,19 +652,51 @@ class TestAudioClassify:
         assert body["risk_context"] is None
         assert body["dominant_species"] == "right_whale"
 
-    def test_classify_missing_coordinates(self, client: TestClient):
-        """lat and lon are required for audio — should fail."""
-        r = client.post(
-            "/api/v1/audio/classify",
-            files={
-                "file": (
-                    "recording.wav",
-                    b"RIFF" + b"\x00" * 100,
-                    "audio/wav",
-                )
-            },
-        )
-        assert r.status_code == 422  # validation error
+    def test_classify_without_coordinates(self, client: TestClient):
+        """lat and lon are now optional — classify-only without risk."""
+        mock_result = {
+            "filename": "recording.wav",
+            "dominant_species": "humpback_whale",
+            "n_segments": 2,
+            "segments": [
+                {
+                    "segment_idx": 0,
+                    "start_sec": 0.0,
+                    "end_sec": 4.0,
+                    "predicted_species": "humpback_whale",
+                    "confidence": 0.88,
+                    "probabilities": {"humpback_whale": 0.88},
+                },
+                {
+                    "segment_idx": 1,
+                    "start_sec": 2.0,
+                    "end_sec": 6.0,
+                    "predicted_species": "humpback_whale",
+                    "confidence": 0.90,
+                    "probabilities": {"humpback_whale": 0.90},
+                },
+            ],
+            "risk_context": None,
+        }
+        with patch(
+            "backend.services.audio.classify_audio_only",
+            return_value=mock_result,
+        ):
+            r = client.post(
+                "/api/v1/audio/classify",
+                files={
+                    "file": (
+                        "recording.wav",
+                        b"RIFF" + b"\x00" * 100,
+                        "audio/wav",
+                    )
+                },
+            )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["dominant_species"] == "humpback_whale"
+        assert body["risk_context"] is None
+        assert body["h3_cell"] is None
 
     def test_classify_model_unavailable(self, client: TestClient):
         with patch(
@@ -788,7 +820,7 @@ class TestBathymetryLayer:
         assert r.status_code == 400
 
     def test_default_us_bbox(self, client: TestClient):
-        """No bbox params → uses full US coastal bbox, skips area check."""
+        """No bbox params → uses full study-area bbox, skips area check."""
         with (
             patch(
                 "backend.services.layers.count_bathymetry",
@@ -935,7 +967,7 @@ class TestOceanCovariateLayer:
         assert r.status_code == 400
 
     def test_default_us_bbox(self, client: TestClient):
-        """No bbox params → uses full US coastal bbox, skips area check."""
+        """No bbox params → uses full study-area bbox, skips area check."""
         row = {
             "h3_cell": 607252735839895551,
             "cell_lat": 40.5,
@@ -1361,13 +1393,19 @@ class TestMLRisk:
             "cell_lon": -73.2,
             "risk_score": 0.78,
             "risk_category": "high",
-            "whale_traffic_interaction_score": 0.8,
+            "interaction_score": 0.8,
             "traffic_score": 0.7,
-            "whale_ml_exposure_score": 0.6,
+            "whale_ml_score": 0.6,
             "proximity_score": 0.5,
             "strike_score": 0.0,
             "protection_gap": 0.3,
             "reference_risk_score": 0.4,
+            "blue_whale_prob": 0.12,
+            "fin_whale_prob": 0.35,
+            "humpback_whale_prob": 0.45,
+            "sperm_whale_prob": 0.02,
+            "right_whale_prob": 0.08,
+            "minke_whale_prob": 0.05,
             "any_whale_prob": 0.65,
             "max_whale_prob": 0.45,
             "mean_whale_prob": 0.24,
@@ -1375,6 +1413,12 @@ class TestMLRisk:
             "isdm_fin_whale": 0.35,
             "isdm_humpback_whale": 0.45,
             "isdm_sperm_whale": 0.02,
+            "sdm_blue_whale": 0.12,
+            "sdm_fin_whale": 0.35,
+            "sdm_humpback_whale": 0.45,
+            "sdm_sperm_whale": 0.02,
+            "sdm_right_whale": 0.08,
+            "sdm_minke_whale": 0.05,
         }
         with patch(
             "backend.services.layers.get_ml_risk_detail",
@@ -1388,6 +1432,9 @@ class TestMLRisk:
         body = r.json()
         assert body["scores"]["whale_traffic_interaction"] == 0.8
         assert body["any_whale_prob"] == 0.65
+        assert body["blue_whale_prob"] == 0.12
+        assert body["right_whale_prob"] == 0.08
+        assert body["sdm_right_whale"] == 0.08
 
     def test_ml_risk_detail_not_found(self, client: TestClient):
         with patch(
@@ -1679,6 +1726,37 @@ _MOCK_RISK_DATA = {
     "reference_risk_score": 0.2,
 }
 
+_MOCK_LOCATION_FLAGS = {
+    "is_ocean": True,
+    "in_risk_coverage": True,
+    "location_warnings": [],
+}
+
+_MOCK_LOCATION_LAND = {
+    "is_ocean": False,
+    "in_risk_coverage": False,
+    "location_warnings": [
+        "This location appears to be on land. "
+        "Please verify your coordinates are correct.",
+        "Risk assessment data is not available for this "
+        "location. Your sighting will still be recorded "
+        "and is valuable for research.",
+    ],
+}
+
+_MOCK_LOCATION_OUTSIDE = {
+    "is_ocean": None,
+    "in_risk_coverage": False,
+    "location_warnings": [
+        "This location is outside our study area. "
+        "We cannot verify whether it is over ocean, "
+        "but your sighting will still be recorded.",
+        "Risk assessment data is not available for this "
+        "location. Your sighting will still be recorded "
+        "and is valuable for research.",
+    ],
+}
+
 
 class TestSightingReport:
     """Tests for POST /api/v1/sightings/report."""
@@ -1693,6 +1771,10 @@ class TestSightingReport:
             patch(
                 "backend.services.sightings.get_cell_risk",
                 return_value=_MOCK_RISK_DATA,
+            ),
+            patch(
+                "backend.services.sightings.check_location",
+                return_value=_MOCK_LOCATION_FLAGS,
             ),
         ):
             r = client.post(
@@ -1725,6 +1807,9 @@ class TestSightingReport:
             "moderate",
         )
         assert body["location"]["h3_cell"] is not None
+        assert body["location"]["is_ocean"] is True
+        assert body["location"]["in_risk_coverage"] is True
+        assert body["location"]["location_warnings"] == []
         assert "sighting_id" in body
         assert "timestamp" in body
 
@@ -1738,6 +1823,10 @@ class TestSightingReport:
             patch(
                 "backend.services.sightings.get_cell_risk",
                 return_value=_MOCK_RISK_DATA,
+            ),
+            patch(
+                "backend.services.sightings.check_location",
+                return_value=_MOCK_LOCATION_FLAGS,
             ),
         ):
             r = client.post(
@@ -1775,6 +1864,10 @@ class TestSightingReport:
                 "backend.services.sightings.get_cell_risk",
                 return_value=_MOCK_RISK_DATA,
             ),
+            patch(
+                "backend.services.sightings.check_location",
+                return_value=_MOCK_LOCATION_FLAGS,
+            ),
         ):
             r = client.post(
                 "/api/v1/sightings/report",
@@ -1799,9 +1892,15 @@ class TestSightingReport:
 
     def test_species_guess_only(self, client: TestClient):
         """No media — just a species guess + location."""
-        with patch(
-            "backend.services.sightings.get_cell_risk",
-            return_value=_MOCK_RISK_DATA,
+        with (
+            patch(
+                "backend.services.sightings.get_cell_risk",
+                return_value=_MOCK_RISK_DATA,
+            ),
+            patch(
+                "backend.services.sightings.check_location",
+                return_value=_MOCK_LOCATION_FLAGS,
+            ),
         ):
             r = client.post(
                 "/api/v1/sightings/report",
@@ -1833,6 +1932,10 @@ class TestSightingReport:
             patch(
                 "backend.services.sightings.get_cell_risk",
                 return_value=_MOCK_RISK_DATA,
+            ),
+            patch(
+                "backend.services.sightings.check_location",
+                return_value=_MOCK_LOCATION_FLAGS,
             ),
         ):
             r = client.post(
@@ -1917,6 +2020,108 @@ class TestSightingReport:
         assert body["photo_classification"] is not None
         # Advisory still generated (low risk default)
         assert body["advisory"] is not None
+
+
+# ── Location validation ─────────────────────────────────────
+
+
+class TestCheckLocation:
+    """Tests for GET /api/v1/sightings/check-location."""
+
+    def test_ocean_location(self, client: TestClient):
+        """Valid ocean location returns is_ocean=True."""
+        with patch(
+            "backend.services.sightings.check_location",
+            return_value=_MOCK_LOCATION_FLAGS,
+        ):
+            r = client.get(
+                "/api/v1/sightings/check-location",
+                params={"lat": 40.5, "lon": -73.2},
+            )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["lat"] == 40.5
+        assert body["lon"] == -73.2
+        assert body["is_ocean"] is True
+        assert body["in_risk_coverage"] is True
+        assert body["location_warnings"] == []
+        assert body["h3_cell"] is not None
+
+    def test_land_location(self, client: TestClient):
+        """Location on land returns warnings."""
+        with patch(
+            "backend.services.sightings.check_location",
+            return_value=_MOCK_LOCATION_LAND,
+        ):
+            r = client.get(
+                "/api/v1/sightings/check-location",
+                params={"lat": 40.7, "lon": -74.0},
+            )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["is_ocean"] is False
+        assert body["in_risk_coverage"] is False
+        assert len(body["location_warnings"]) == 2
+        assert "on land" in body["location_warnings"][0]
+
+    def test_outside_study_area(self, client: TestClient):
+        """Location outside study area returns coverage warning."""
+        with patch(
+            "backend.services.sightings.check_location",
+            return_value=_MOCK_LOCATION_OUTSIDE,
+        ):
+            r = client.get(
+                "/api/v1/sightings/check-location",
+                params={"lat": -40.0, "lon": 170.0},
+            )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["is_ocean"] is None
+        assert body["in_risk_coverage"] is False
+        assert len(body["location_warnings"]) == 2
+        assert "outside our study area" in body["location_warnings"][0]
+
+    def test_missing_lat(self, client: TestClient):
+        """Missing latitude returns 422."""
+        r = client.get(
+            "/api/v1/sightings/check-location",
+            params={"lon": -73.2},
+        )
+        assert r.status_code == 422
+
+    def test_invalid_lat_range(self, client: TestClient):
+        """Latitude out of range returns 422."""
+        r = client.get(
+            "/api/v1/sightings/check-location",
+            params={"lat": 95.0, "lon": -73.2},
+        )
+        assert r.status_code == 422
+
+    def test_sighting_report_includes_location_flags(self, client: TestClient):
+        """Sighting report response includes location validation."""
+        with (
+            patch(
+                "backend.services.sightings.get_cell_risk",
+                return_value=_MOCK_RISK_DATA,
+            ),
+            patch(
+                "backend.services.sightings.check_location",
+                return_value=_MOCK_LOCATION_LAND,
+            ),
+        ):
+            r = client.post(
+                "/api/v1/sightings/report",
+                data={
+                    "species_guess": "humpback_whale",
+                    "lat": "40.7",
+                    "lon": "-74.0",
+                },
+            )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["location"]["is_ocean"] is False
+        assert body["location"]["in_risk_coverage"] is False
+        assert len(body["location"]["location_warnings"]) == 2
 
 
 # ── Zone geometry endpoints ─────────────────────────────────
@@ -2235,3 +2440,655 @@ class TestIsZoneActive:
             "end_day": 30,
         }
         assert _is_zone_active(row, date(2026, 4, 30)) is True
+
+
+# ── Community Events ────────────────────────────────────────
+
+_SAMPLE_EVENT = {
+    "id": "11111111-1111-1111-1111-111111111111",
+    "title": "Monterey Bay Trip",
+    "description": "A whale watching expedition",
+    "event_type": "whale_watching",
+    "status": "active",
+    "start_date": "2026-06-01",
+    "end_date": "2026-06-03",
+    "lat": 36.6,
+    "lon": -121.9,
+    "location_name": "Monterey Bay",
+    "is_public": True,
+    "invite_code": "ABCD1234",
+    "creator_id": 1,
+    "creator_name": "Alice",
+    "creator_avatar": None,
+    "creator_tier": "observer",
+    "member_count": 3,
+    "sighting_count": 5,
+    "created_at": "2026-05-20T10:00:00",
+    "updated_at": None,
+    "members": [
+        {
+            "user_id": 1,
+            "display_name": "Alice",
+            "role": "creator",
+            "joined_at": "2026-05-20T10:00:00",
+            "reputation_tier": "observer",
+            "avatar_filename": None,
+        }
+    ],
+}
+
+_SAMPLE_EVENT_SUMMARY = {
+    **{k: v for k, v in _SAMPLE_EVENT.items() if k != "members"},
+}
+
+_VALID_TOKEN = "Bearer valid-test-token"
+
+
+class TestEventsList:
+    """GET /api/v1/events — list public events."""
+
+    def test_list_public_events(self, client: TestClient):
+        with patch(
+            "backend.services.events.list_public_events",
+            return_value=([_SAMPLE_EVENT_SUMMARY], 1),
+        ):
+            r = client.get("/api/v1/events")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["total"] == 1
+        assert len(body["events"]) == 1
+        assert body["events"][0]["title"] == "Monterey Bay Trip"
+
+    def test_list_with_status_filter(self, client: TestClient):
+        with patch(
+            "backend.services.events.list_public_events",
+            return_value=([], 0),
+        ):
+            r = client.get(
+                "/api/v1/events",
+                params={"status": "upcoming"},
+            )
+        assert r.status_code == 200
+        assert r.json()["total"] == 0
+
+    def test_list_with_type_filter(self, client: TestClient):
+        with patch(
+            "backend.services.events.list_public_events",
+            return_value=([], 0),
+        ):
+            r = client.get(
+                "/api/v1/events",
+                params={"event_type": "research_expedition"},
+            )
+        assert r.status_code == 200
+
+
+class TestEventsCreate:
+    """POST /api/v1/events — create event (auth required)."""
+
+    def test_create_event(self, client: TestClient):
+        with (
+            patch(
+                "backend.services.auth.get_current_user_id",
+                return_value=1,
+            ),
+            patch(
+                "backend.services.events.create_event",
+                return_value=_SAMPLE_EVENT,
+            ),
+        ):
+            r = client.post(
+                "/api/v1/events",
+                json={
+                    "title": "Monterey Bay Trip",
+                    "event_type": "whale_watching",
+                },
+                headers={"Authorization": _VALID_TOKEN},
+            )
+        assert r.status_code == 201
+        assert r.json()["title"] == "Monterey Bay Trip"
+        assert "invite_code" in r.json()
+
+    def test_create_event_unauthenticated(self, client: TestClient):
+        r = client.post(
+            "/api/v1/events",
+            json={"title": "Test"},
+        )
+        assert r.status_code == 401
+
+
+class TestEventDetail:
+    """GET /api/v1/events/{id} — event detail."""
+
+    def test_get_event(self, client: TestClient):
+        with patch(
+            "backend.services.events.get_event_detail",
+            return_value=_SAMPLE_EVENT,
+        ):
+            r = client.get("/api/v1/events/11111111-1111-1111-1111-111111111111")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["title"] == "Monterey Bay Trip"
+        assert len(body["members"]) == 1
+        assert body["members"][0]["role"] == "creator"
+
+    def test_event_not_found(self, client: TestClient):
+        with patch(
+            "backend.services.events.get_event_detail",
+            return_value=None,
+        ):
+            r = client.get("/api/v1/events/00000000-0000-0000-0000-000000000000")
+        assert r.status_code == 404
+
+
+class TestEventUpdate:
+    """PATCH /api/v1/events/{id} — update event."""
+
+    def test_update_event(self, client: TestClient):
+        updated = {**_SAMPLE_EVENT, "title": "Updated Title"}
+        with (
+            patch(
+                "backend.services.auth.get_current_user_id",
+                return_value=1,
+            ),
+            patch(
+                "backend.services.events.update_event",
+                return_value=updated,
+            ),
+        ):
+            r = client.patch(
+                "/api/v1/events/11111111-1111-1111-1111-111111111111",
+                json={"title": "Updated Title"},
+                headers={"Authorization": _VALID_TOKEN},
+            )
+        assert r.status_code == 200
+        assert r.json()["title"] == "Updated Title"
+
+    def test_update_unauthorized(self, client: TestClient):
+        with (
+            patch(
+                "backend.services.auth.get_current_user_id",
+                return_value=2,
+            ),
+            patch(
+                "backend.services.events.update_event",
+                return_value=None,
+            ),
+        ):
+            r = client.patch(
+                "/api/v1/events/11111111-1111-1111-1111-111111111111",
+                json={"title": "Hijack"},
+                headers={"Authorization": _VALID_TOKEN},
+            )
+        assert r.status_code == 403
+
+
+class TestEventDelete:
+    """DELETE /api/v1/events/{id} — delete event."""
+
+    def test_delete_event(self, client: TestClient):
+        with (
+            patch(
+                "backend.services.auth.get_current_user_id",
+                return_value=1,
+            ),
+            patch(
+                "backend.services.events.delete_event",
+                return_value=True,
+            ),
+        ):
+            r = client.delete(
+                "/api/v1/events/11111111-1111-1111-1111-111111111111",
+                headers={"Authorization": _VALID_TOKEN},
+            )
+        assert r.status_code == 204
+
+    def test_delete_unauthorized(self, client: TestClient):
+        with (
+            patch(
+                "backend.services.auth.get_current_user_id",
+                return_value=2,
+            ),
+            patch(
+                "backend.services.events.delete_event",
+                return_value=False,
+            ),
+        ):
+            r = client.delete(
+                "/api/v1/events/11111111-1111-1111-1111-111111111111",
+                headers={"Authorization": _VALID_TOKEN},
+            )
+        assert r.status_code == 403
+
+
+class TestEventJoin:
+    """POST /api/v1/events/{id}/join and
+    POST /api/v1/events/join/{invite_code}."""
+
+    def test_join_event(self, client: TestClient):
+        with (
+            patch(
+                "backend.services.auth.get_current_user_id",
+                return_value=2,
+            ),
+            patch(
+                "backend.services.events.get_event_detail",
+                return_value={**_SAMPLE_EVENT, "is_public": True},
+            ),
+            patch(
+                "backend.services.events.join_event",
+                return_value=_SAMPLE_EVENT,
+            ),
+        ):
+            r = client.post(
+                "/api/v1/events/11111111-1111-1111-1111-111111111111/join",
+                headers={"Authorization": _VALID_TOKEN},
+            )
+        assert r.status_code == 200
+
+    def test_join_by_invite_code(self, client: TestClient):
+        with (
+            patch(
+                "backend.services.auth.get_current_user_id",
+                return_value=2,
+            ),
+            patch(
+                "backend.services.events.join_event_by_invite",
+                return_value=_SAMPLE_EVENT,
+            ),
+        ):
+            r = client.post(
+                "/api/v1/events/join/ABCD1234",
+                headers={"Authorization": _VALID_TOKEN},
+            )
+        assert r.status_code == 200
+
+    def test_join_invalid_invite(self, client: TestClient):
+        with (
+            patch(
+                "backend.services.auth.get_current_user_id",
+                return_value=2,
+            ),
+            patch(
+                "backend.services.events.join_event_by_invite",
+                return_value=None,
+            ),
+        ):
+            r = client.post(
+                "/api/v1/events/join/BADCODE1",
+                headers={"Authorization": _VALID_TOKEN},
+            )
+        assert r.status_code == 404
+
+    def test_join_unauthenticated(self, client: TestClient):
+        r = client.post(
+            "/api/v1/events/join/ABCD1234",
+        )
+        assert r.status_code == 401
+
+
+class TestEventInvitePreview:
+    """GET /api/v1/events/invite/{invite_code} — no auth."""
+
+    def test_preview_invite(self, client: TestClient):
+        with patch(
+            "backend.services.events.get_event_by_invite",
+            return_value=_SAMPLE_EVENT_SUMMARY,
+        ):
+            r = client.get("/api/v1/events/invite/ABCD1234")
+        assert r.status_code == 200
+        assert r.json()["title"] == "Monterey Bay Trip"
+
+    def test_preview_invalid_invite(self, client: TestClient):
+        with patch(
+            "backend.services.events.get_event_by_invite",
+            return_value=None,
+        ):
+            r = client.get("/api/v1/events/invite/BADCODE1")
+        assert r.status_code == 404
+
+
+class TestEventLeave:
+    """DELETE /api/v1/events/{id}/leave."""
+
+    def test_leave_event(self, client: TestClient):
+        with (
+            patch(
+                "backend.services.auth.get_current_user_id",
+                return_value=2,
+            ),
+            patch(
+                "backend.services.events.leave_event",
+                return_value=True,
+            ),
+        ):
+            r = client.delete(
+                "/api/v1/events/11111111-1111-1111-1111-111111111111/leave",
+                headers={"Authorization": _VALID_TOKEN},
+            )
+        assert r.status_code == 204
+
+    def test_creator_cannot_leave(self, client: TestClient):
+        with (
+            patch(
+                "backend.services.auth.get_current_user_id",
+                return_value=1,
+            ),
+            patch(
+                "backend.services.events.leave_event",
+                return_value=False,
+            ),
+        ):
+            r = client.delete(
+                "/api/v1/events/11111111-1111-1111-1111-111111111111/leave",
+                headers={"Authorization": _VALID_TOKEN},
+            )
+        assert r.status_code == 400
+
+
+class TestEventSightings:
+    """GET + POST + DELETE /api/v1/events/{id}/sightings."""
+
+    def test_list_event_sightings(self, client: TestClient):
+        with patch(
+            "backend.services.events.get_event_sightings",
+            return_value=([], 0),
+        ):
+            r = client.get(
+                "/api/v1/events/11111111-1111-1111-1111-111111111111/sightings"
+            )
+        assert r.status_code == 200
+        assert r.json()["total"] == 0
+
+    def test_link_sighting(self, client: TestClient):
+        with (
+            patch(
+                "backend.services.auth.get_current_user_id",
+                return_value=1,
+            ),
+            patch(
+                "backend.services.events.link_sighting",
+                return_value=True,
+            ),
+        ):
+            r = client.post(
+                "/api/v1/events/11111111-1111-1111-1111-111111111111"
+                "/sightings/22222222-2222-2222-2222-222222222222",
+                headers={"Authorization": _VALID_TOKEN},
+            )
+        assert r.status_code == 201
+        assert r.json()["status"] == "linked"
+
+    def test_unlink_sighting(self, client: TestClient):
+        with (
+            patch(
+                "backend.services.auth.get_current_user_id",
+                return_value=1,
+            ),
+            patch(
+                "backend.services.events.unlink_sighting",
+                return_value=True,
+            ),
+        ):
+            r = client.delete(
+                "/api/v1/events/11111111-1111-1111-1111-111111111111"
+                "/sightings/22222222-2222-2222-2222-222222222222",
+                headers={"Authorization": _VALID_TOKEN},
+            )
+        assert r.status_code == 200
+        assert r.json()["status"] == "unlinked"
+
+    def test_link_sighting_unauthorized(self, client: TestClient):
+        with (
+            patch(
+                "backend.services.auth.get_current_user_id",
+                return_value=1,
+            ),
+            patch(
+                "backend.services.events.link_sighting",
+                return_value=False,
+            ),
+        ):
+            r = client.post(
+                "/api/v1/events/11111111-1111-1111-1111-111111111111"
+                "/sightings/22222222-2222-2222-2222-222222222222",
+                headers={"Authorization": _VALID_TOKEN},
+            )
+        assert r.status_code == 403
+
+
+class TestMyEvents:
+    """GET /api/v1/events/mine — user's events."""
+
+    def test_list_my_events(self, client: TestClient):
+        enriched = {**_SAMPLE_EVENT_SUMMARY, "my_role": "creator"}
+        with (
+            patch(
+                "backend.services.auth.get_current_user_id",
+                return_value=1,
+            ),
+            patch(
+                "backend.services.events.list_user_events",
+                return_value=([enriched], 1),
+            ),
+        ):
+            r = client.get(
+                "/api/v1/events/mine",
+                headers={"Authorization": _VALID_TOKEN},
+            )
+        assert r.status_code == 200
+        assert r.json()["total"] == 1
+        assert r.json()["events"][0]["my_role"] == "creator"
+
+    def test_my_events_unauthenticated(self, client: TestClient):
+        r = client.get("/api/v1/events/mine")
+        assert r.status_code == 401
+
+
+# ── OBIS DwC-A Export ───────────────────────────────────────
+
+
+_SAMPLE_SIGHTING_ROW = {
+    "submission_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    "created_at": "2025-06-15T12:00:00Z",
+    "sighting_datetime": None,
+    "lat": 42.35,
+    "lon": -70.88,
+    "coordinate_uncertainty_m": 50.0,
+    "scientific_name": "Megaptera novaeangliae",
+    "aphia_id": 137092,
+    "species_guess": "humpback_whale",
+    "model_species": "humpback_whale",
+    "model_source": "photo",
+    "description": "Two humpbacks feeding",
+    "group_size": 2,
+    "behavior": "feeding",
+    "life_stage": "adult",
+    "calf_present": True,
+    "sea_state_beaufort": 3,
+    "observation_platform": "vessel",
+    "interaction_type": "passive_observation",
+    "recorded_by": "Jane Doe",
+}
+
+
+class TestObisExportEndpoint:
+    """GET /api/v1/export/obis — DwC-A download."""
+
+    def test_export_returns_zip(self, client: TestClient):
+        with patch(
+            "backend.services.obis_export.generate_dwca",
+            return_value=(b"PK\x03\x04fake", 5),
+        ):
+            r = client.get("/api/v1/export/obis")
+        assert r.status_code == 200
+        assert r.headers["content-type"] == "application/zip"
+        assert "dwca" in r.headers["content-disposition"]
+
+    def test_export_no_records(self, client: TestClient):
+        with patch(
+            "backend.services.obis_export.generate_dwca",
+            return_value=(b"", 0),
+        ):
+            r = client.get("/api/v1/export/obis")
+        assert r.status_code == 404
+
+    def test_export_with_date_range(self, client: TestClient):
+        with patch(
+            "backend.services.obis_export.generate_dwca",
+            return_value=(b"PK\x03\x04fake", 1),
+        ) as mock_gen:
+            r = client.get(
+                "/api/v1/export/obis",
+                params={
+                    "since": "2025-01-01T00:00:00Z",
+                    "until": "2025-12-31T23:59:59Z",
+                },
+            )
+        assert r.status_code == 200
+        call_kwargs = mock_gen.call_args.kwargs
+        assert call_kwargs["since"] is not None
+        assert call_kwargs["until"] is not None
+
+
+class TestObisExportService:
+    """Unit tests for DwC-A generation logic."""
+
+    def test_occurrence_row_mapping(self):
+        from backend.services.obis_export import _build_occurrence_row
+
+        row = _build_occurrence_row(
+            _SAMPLE_SIGHTING_ROW,
+            "Test Dataset",
+        )
+        assert row["occurrenceID"].startswith("urn:uuid:")
+        assert row["scientificName"] == "Megaptera novaeangliae"
+        assert row["scientificNameID"] == ("urn:lsid:marinespecies.org:taxname:137092")
+        assert row["decimalLatitude"] == "42.35"
+        assert row["decimalLongitude"] == "-70.88"
+        assert row["occurrenceStatus"] == "present"
+        assert row["basisOfRecord"] == "HumanObservation"
+        assert row["individualCount"] == "2"
+        assert row["lifeStage"] == "adult"
+        assert row["behavior"] == "feeding"
+        assert "calf present" in row["occurrenceRemarks"]
+        assert row["coordinateUncertaintyInMeters"] == "50.0"
+
+    def test_emof_rows(self):
+        from backend.services.obis_export import _build_emof_rows
+
+        rows = _build_emof_rows(_SAMPLE_SIGHTING_ROW)
+        types = {r["measurementType"] for r in rows}
+        assert "Beaufort wind force" in types
+        assert "Organism count" in types
+        assert "Sampling platform" in types
+        assert len(rows) == 3
+
+    def test_emof_empty_when_no_measurements(self):
+        from backend.services.obis_export import _build_emof_rows
+
+        sparse = {
+            "submission_id": "aaaaaaaa-0000-0000-0000-000000000000",
+            "sea_state_beaufort": None,
+            "group_size": None,
+            "observation_platform": None,
+        }
+        rows = _build_emof_rows(sparse)
+        assert len(rows) == 0
+
+    def test_generate_dwca_zip_structure(self):
+        import zipfile as zf
+        from io import BytesIO
+
+        from backend.services.obis_export import generate_dwca
+
+        with patch(
+            "backend.services.obis_export._query_verified_sightings",
+            return_value=[_SAMPLE_SIGHTING_ROW],
+        ):
+            zip_bytes, count = generate_dwca()
+
+        assert count == 1
+        with zf.ZipFile(BytesIO(zip_bytes)) as z:
+            names = z.namelist()
+            assert "occurrence.csv" in names
+            assert "emof.csv" in names
+            assert "meta.xml" in names
+            assert "eml.xml" in names
+
+            # Verify occurrence has header + 1 data row
+            occ = z.read("occurrence.csv").decode()
+            lines = [ln for ln in occ.strip().split("\n") if ln]
+            assert len(lines) == 2  # header + 1 record
+            assert "Megaptera novaeangliae" in lines[1]
+
+            # meta.xml should reference DwC terms
+            meta = z.read("meta.xml").decode()
+            assert "dwc/terms/Occurrence" in meta
+
+            # eml.xml should have dataset info
+            eml = z.read("eml.xml").decode()
+            assert "1 occurrence records" in eml
+
+    def test_life_stage_mapping(self):
+        from backend.services.obis_export import _map_life_stage
+
+        assert _map_life_stage("adult") == "adult"
+        assert _map_life_stage("calf") == "juvenile"
+        assert _map_life_stage("unknown") == ""
+        assert _map_life_stage(None) == ""
+
+    def test_scientific_name_id_from_aphia(self):
+        from backend.services.obis_export import (
+            _build_scientific_name_id,
+        )
+
+        lsid = _build_scientific_name_id(137092)
+        assert lsid == "urn:lsid:marinespecies.org:taxname:137092"
+        assert _build_scientific_name_id(None) == ""
+
+
+class TestSpeciesResolve:
+    """Unit tests for species crosswalk resolution."""
+
+    def test_resolve_by_scientific_name(self):
+        from backend.services.species import resolve_species
+
+        expected = {
+            "scientific_name": "Megaptera novaeangliae",
+            "aphia_id": 137092,
+            "worms_lsid": ("urn:lsid:marinespecies.org:taxname:137092"),
+        }
+        with patch(
+            "backend.services.species.fetch_one",
+            return_value=expected,
+        ):
+            result = resolve_species("Megaptera novaeangliae")
+        assert result is not None
+        assert result["aphia_id"] == 137092
+
+    def test_resolve_fallback_to_group(self):
+        from backend.services.species import resolve_species
+
+        expected = {
+            "scientific_name": "Megaptera novaeangliae",
+            "aphia_id": 137092,
+            "worms_lsid": ("urn:lsid:marinespecies.org:taxname:137092"),
+        }
+        with patch(
+            "backend.services.species.fetch_one",
+            side_effect=[None, expected],
+        ):
+            result = resolve_species("humpback_whale")
+        assert result is not None
+        assert result["scientific_name"] == "Megaptera novaeangliae"
+
+    def test_resolve_returns_none(self):
+        from backend.services.species import resolve_species
+
+        with patch(
+            "backend.services.species.fetch_one",
+            return_value=None,
+        ):
+            result = resolve_species("nonexistent_species")
+        assert result is None

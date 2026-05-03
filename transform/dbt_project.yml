@@ -79,6 +79,17 @@ vars:
   risk_ml_weight_protection_gap: 0.10
   risk_ml_weight_reference: 0.05
 
+  # Projected ML risk weights (climate projections, 6 sub-scores).
+  # Proximity removed: whale-proximity component is stale under future
+  # projections (measures distance to *current* sightings, not projected
+  # habitat).  Remaining weights renormalized: w_i / (1 - 0.15).
+  risk_ml_projected_weight_interaction: 0.3529
+  risk_ml_projected_weight_traffic: 0.1765
+  risk_ml_projected_weight_whale_ml: 0.1765
+  risk_ml_projected_weight_strike: 0.1176
+  risk_ml_projected_weight_protection_gap: 0.1176
+  risk_ml_projected_weight_reference: 0.0588
+
   # Risk category thresholds (score >= threshold → label)
   risk_threshold_critical: 0.7
   risk_threshold_high: 0.5
@@ -152,3 +163,4 @@ seeds:
     species_crosswalk:
       +column_types:
         is_baleen: boolean
+        aphia_id: integer

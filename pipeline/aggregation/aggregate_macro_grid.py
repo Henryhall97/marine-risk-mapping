@@ -35,6 +35,8 @@ CREATE TABLE IF NOT EXISTS macro_risk_overview (
     cell_lat            DOUBLE PRECISION NOT NULL,
     cell_lon            DOUBLE PRECISION NOT NULL,
     season              VARCHAR(10)  NOT NULL DEFAULT 'annual',
+    scenario            VARCHAR(10),
+    decade              VARCHAR(10),
     risk_score          DOUBLE PRECISION,
     ml_risk_score       DOUBLE PRECISION,
     traffic_score       DOUBLE PRECISION,
@@ -63,7 +65,12 @@ CREATE TABLE IF NOT EXISTS macro_risk_overview (
     sdm_fin_whale       DOUBLE PRECISION,
     sdm_humpback_whale  DOUBLE PRECISION,
     sdm_sperm_whale     DOUBLE PRECISION,
+    sdm_right_whale     DOUBLE PRECISION,
+    sdm_minke_whale     DOUBLE PRECISION,
     sst                 DOUBLE PRECISION,
+    sst_sd              DOUBLE PRECISION,
+    mld                 DOUBLE PRECISION,
+    sla                 DOUBLE PRECISION,
     pp_upper_200m       DOUBLE PRECISION,
     depth_m_mean        DOUBLE PRECISION,
     shelf_fraction      DOUBLE PRECISION,
@@ -75,6 +82,12 @@ CREATE INDEX IF NOT EXISTS idx_macro_overview_cell
     ON macro_risk_overview (h3_cell);
 """
 
+# Index on projection columns — created after migration adds them
+CREATE_PROJECTION_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_macro_overview_projection
+    ON macro_risk_overview (scenario, decade, season);
+"""
+
 # ── Columns we output ────────────────────────────────────────
 
 OUTPUT_COLS = [
@@ -82,6 +95,8 @@ OUTPUT_COLS = [
     "cell_lat",
     "cell_lon",
     "season",
+    "scenario",
+    "decade",
     "risk_score",
     "ml_risk_score",
     "traffic_score",
@@ -110,7 +125,12 @@ OUTPUT_COLS = [
     "sdm_fin_whale",
     "sdm_humpback_whale",
     "sdm_sperm_whale",
+    "sdm_right_whale",
+    "sdm_minke_whale",
     "sst",
+    "sst_sd",
+    "mld",
+    "sla",
     "pp_upper_200m",
     "depth_m_mean",
     "shelf_fraction",
@@ -157,6 +177,9 @@ AGG_SPEC: dict[str, tuple[str, str]] = {
     "baleen_sightings": ("baleen_sightings", "sum"),
     "total_strikes": ("total_strikes", "sum"),
     "sst": ("sst", "mean"),
+    "sst_sd": ("sst_sd", "mean"),
+    "mld": ("mld", "mean"),
+    "sla": ("sla", "mean"),
     "pp_upper_200m": ("pp_upper_200m", "mean"),
     "depth_m_mean": ("depth_m", "mean"),
     "shelf_fraction": ("is_continental_shelf", "mean"),
@@ -232,6 +255,9 @@ def _aggregate_annual(conn) -> pd.DataFrame:
             coalesce(cd.baleen_whale_sightings, 0)     AS baleen_sightings,
             coalesce(sd.total_strikes, 0)              AS total_strikes,
             oc.sst,
+            oc.sst_sd,
+            oc.mld,
+            oc.sla,
             oc.pp_upper_200m,
             b.depth_m,
             b.is_continental_shelf::int                AS is_continental_shelf
@@ -283,6 +309,9 @@ def _aggregate_seasonal(conn) -> pd.DataFrame:
                 coalesce(cds.baleen_whale_sightings, 0)    AS baleen_sightings,
                 coalesce(sd.total_strikes, 0)              AS total_strikes,
                 ocs.sst,
+                ocs.sst_sd,
+                ocs.mld,
+                ocs.sla,
                 ocs.pp_upper_200m,
                 b.depth_m,
                 b.is_continental_shelf::int                AS is_continental_shelf
@@ -372,6 +401,8 @@ def _add_sdm_predictions(conn, df: pd.DataFrame) -> pd.DataFrame:
         "sdm_fin_whale",
         "sdm_humpback_whale",
         "sdm_sperm_whale",
+        "sdm_right_whale",
+        "sdm_minke_whale",
     ]
     try:
         logger.info("── SDM whale predictions ──────────────────")
@@ -379,7 +410,8 @@ def _add_sdm_predictions(conn, df: pd.DataFrame) -> pd.DataFrame:
             """
             SELECT h3_cell, season,
                    sdm_any_whale, sdm_blue_whale, sdm_fin_whale,
-                   sdm_humpback_whale, sdm_sperm_whale
+                   sdm_humpback_whale, sdm_sperm_whale,
+                   sdm_right_whale, sdm_minke_whale
             FROM int_sdm_whale_predictions
             """,
             conn,
@@ -468,8 +500,177 @@ def _add_ml_risk_score(conn, df: pd.DataFrame) -> pd.DataFrame:
     return combined
 
 
-def _write(conn, df: pd.DataFrame) -> None:
-    """Write aggregated rows to macro_risk_overview (truncate first)."""
+def _aggregate_projected(conn) -> pd.DataFrame:
+    """Aggregate fct_collision_risk_ml_projected to res-4.
+
+    Reads the projected mart (grain: h3_cell × season × scenario × decade)
+    and aggregates to H3 res-4 parent cells.  Produces ~14K cells × 4
+    seasons × 2 scenarios × 4 decades ≈ 448K rows.
+
+    The projected mart has: risk_score, sub-scores, and per-species
+    whale probabilities.  We map those to the macro column names
+    so they coexist with current-period rows.
+    """
+    logger.info("── Projected aggregation ──────────────────")
+
+    # Columns to aggregate (mean)
+    agg_cols = [
+        "risk_score",
+        "ml_risk_score",
+        "traffic_score",
+        "strike_score",
+        "protection_gap",
+        "reference_risk",
+        "any_whale_prob",
+        "isdm_blue_whale",
+        "isdm_fin_whale",
+        "isdm_humpback_whale",
+        "isdm_sperm_whale",
+        "sdm_any_whale",
+        "sdm_blue_whale",
+        "sdm_fin_whale",
+        "sdm_humpback_whale",
+        "sdm_sperm_whale",
+        "sdm_right_whale",
+        "sdm_minke_whale",
+        "sst",
+        "sst_sd",
+        "mld",
+        "sla",
+        "pp_upper_200m",
+    ]
+
+    # Check that the source table exists
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM fct_collision_risk_ml_projected LIMIT 1")
+    except Exception:
+        conn.rollback()
+        logger.warning(
+            "  fct_collision_risk_ml_projected not found — skipping projections"
+        )
+        return pd.DataFrame(columns=OUTPUT_COLS)
+
+    # Discover available (scenario, decade) combos
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT DISTINCT scenario, decade "
+            "FROM fct_collision_risk_ml_projected "
+            "ORDER BY scenario, decade"
+        )
+        combos = cur.fetchall()
+
+    if not combos:
+        logger.info("  No projected rows found — skipping")
+        return pd.DataFrame(columns=OUTPUT_COLS)
+
+    logger.info(
+        "  Processing %d (scenario, decade) combos …",
+        len(combos),
+    )
+
+    # Process each combo separately to avoid loading 58M rows
+    # at once (~7.3M per combo, same as current seasonal reads).
+    chunks: list[pd.DataFrame] = []
+    centroids: pd.DataFrame | None = None
+
+    for scenario, decade in combos:
+        logger.info("  %s / %s …", scenario, decade)
+        sql = """
+            SELECT
+                cr.h3_cell,
+                cr.season,
+                cr.scenario,
+                cr.decade,
+                cr.risk_score,
+                cr.risk_score           AS ml_risk_score,
+                cr.traffic_score,
+                cr.strike_score,
+                cr.protection_gap,
+                cr.reference_risk_score AS reference_risk,
+                cr.any_whale_prob,
+                cr.isdm_blue_whale,
+                cr.isdm_fin_whale,
+                cr.isdm_humpback_whale,
+                cr.isdm_sperm_whale,
+                cr.sdm_right_whale,
+                cr.sdm_minke_whale,
+                cr.blue_whale_prob      AS sdm_blue_whale,
+                cr.fin_whale_prob       AS sdm_fin_whale,
+                cr.humpback_whale_prob  AS sdm_humpback_whale,
+                cr.sperm_whale_prob     AS sdm_sperm_whale,
+                ocp.sst,
+                ocp.sst_sd,
+                ocp.mld,
+                ocp.sla,
+                ocp.pp_upper_200m
+            FROM fct_collision_risk_ml_projected cr
+            LEFT JOIN int_ocean_covariates_projected ocp
+                ON cr.h3_cell = ocp.h3_cell
+               AND cr.season  = ocp.season
+               AND cr.scenario = ocp.scenario
+               AND cr.decade   = ocp.decade
+            WHERE cr.scenario = %(scenario)s
+              AND cr.decade   = %(decade)s
+        """
+        df = pd.read_sql(sql, conn, params={"scenario": scenario, "decade": decade})
+
+        # Compute sdm_any_whale = 1 - prod(1 - p_i) over 6 SDM species
+        sdm_sp = [
+            "sdm_blue_whale",
+            "sdm_fin_whale",
+            "sdm_humpback_whale",
+            "sdm_sperm_whale",
+            "sdm_right_whale",
+            "sdm_minke_whale",
+        ]
+        if not df.empty and all(c in df.columns for c in sdm_sp):
+            survival = np.ones(len(df))
+            for c in sdm_sp:
+                survival *= 1 - df[c].fillna(0).clip(0, 1)
+            df["sdm_any_whale"] = 1 - survival
+        logger.info("    Read %s rows", f"{len(df):,}")
+        if df.empty:
+            continue
+
+        # Map to res-4 parent
+        df["h3_parent"] = df["h3_cell"].apply(_to_parent)
+
+        group_keys = ["h3_parent", "season", "scenario", "decade"]
+        agg_dict = {c: (c, "mean") for c in agg_cols if c in df.columns}
+        agg_dict["child_cell_count"] = ("h3_cell", "count")
+        agg = df.groupby(group_keys).agg(**agg_dict).reset_index()
+
+        # Centroids — compute once, reuse across combos
+        if centroids is None:
+            centroids = _parent_centroids(agg["h3_parent"])
+        agg = agg.merge(centroids, left_on="h3_parent", right_on="h3_cell")
+        agg.drop(columns=["h3_parent"], inplace=True)
+        chunks.append(agg)
+        logger.info("    → %s macro rows", f"{len(agg):,}")
+
+        # Free memory before next iteration
+        del df, agg
+
+    if not chunks:
+        return pd.DataFrame(columns=OUTPUT_COLS)
+
+    result = pd.concat(chunks, ignore_index=True)
+    logger.info(
+        "  Aggregated to %s projected macro rows total",
+        f"{len(result):,}",
+    )
+    return result
+
+
+def _write(conn, df: pd.DataFrame, projected_only: bool = False) -> None:
+    """Write aggregated rows to macro_risk_overview.
+
+    When *projected_only* is True, deletes only projected rows
+    (WHERE scenario IS NOT NULL) and inserts the new ones,
+    preserving existing current rows.  Otherwise truncates the
+    whole table and re-inserts everything.
+    """
     # Ensure all output columns exist
     for col in OUTPUT_COLS:
         if col not in df.columns:
@@ -490,7 +691,10 @@ def _write(conn, df: pd.DataFrame) -> None:
 
     logger.info("Writing %s rows to macro_risk_overview …", f"{len(rows):,}")
     with conn.cursor() as cur:
-        cur.execute("TRUNCATE TABLE macro_risk_overview;")
+        if projected_only:
+            cur.execute("DELETE FROM macro_risk_overview WHERE scenario IS NOT NULL;")
+        else:
+            cur.execute("TRUNCATE TABLE macro_risk_overview;")
         batch = 5_000
         for i in range(0, len(rows), batch):
             cur.executemany(sql, rows[i : i + batch])
@@ -502,11 +706,26 @@ def _write(conn, df: pd.DataFrame) -> None:
 
 
 def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Aggregate H3 res-7 → res-4 macro overview grid",
+    )
+    parser.add_argument(
+        "--projected-only",
+        action="store_true",
+        help=(
+            "Skip current (annual+seasonal) aggregation and only "
+            "re-aggregate projected rows.  ~4× faster."
+        ),
+    )
+    args = parser.parse_args()
+
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(CREATE_TABLE)
-            # Migrate: add traffic sub-metric columns if missing
+            # Migrate: add columns if missing from earlier schema
             for col in (
                 "avg_monthly_vessels",
                 "avg_speed_lethality",
@@ -520,26 +739,64 @@ def main() -> None:
                 "sdm_fin_whale",
                 "sdm_humpback_whale",
                 "sdm_sperm_whale",
+                "sdm_right_whale",
+                "sdm_minke_whale",
             ):
                 cur.execute(
                     "ALTER TABLE macro_risk_overview "
                     f"ADD COLUMN IF NOT EXISTS {col} "
                     "DOUBLE PRECISION"
                 )
+            # Migrate: add projection dimension columns
+            for col, dtype in (
+                ("scenario", "VARCHAR(10)"),
+                ("decade", "VARCHAR(10)"),
+            ):
+                cur.execute(
+                    "ALTER TABLE macro_risk_overview "
+                    f"ADD COLUMN IF NOT EXISTS {col} {dtype}"
+                )
+            # Now that projection columns exist, create index
+            cur.execute(CREATE_PROJECTION_INDEX)
             conn.commit()
 
-        annual = _aggregate_annual(conn)
-        seasonal = _aggregate_seasonal(conn)
-        combined = pd.concat([annual, seasonal], ignore_index=True)
-        combined = _add_whale_predictions(conn, combined)
-        combined = _add_sdm_predictions(conn, combined)
-        combined = _add_ml_risk_score(conn, combined)
-        _write(conn, combined)
+        if args.projected_only:
+            logger.info("── Projected-only mode ─────────────────")
+            projected = _aggregate_projected(conn)
+            _write(conn, projected, projected_only=True)
+            logger.info(
+                "✓ macro_risk_overview: replaced %s projected rows",
+                f"{len(projected):,}",
+            )
+        else:
+            # ── Current data (annual + seasonal) ───────────
+            annual = _aggregate_annual(conn)
+            seasonal = _aggregate_seasonal(conn)
+            combined = pd.concat(
+                [annual, seasonal],
+                ignore_index=True,
+            )
+            combined = _add_whale_predictions(conn, combined)
+            combined = _add_sdm_predictions(conn, combined)
+            combined = _add_ml_risk_score(conn, combined)
 
-        logger.info(
-            "✓ macro_risk_overview: %s rows",
-            f"{len(combined):,}",
-        )
+            # ── Projected data (CMIP6 scenarios × decades) ─
+            projected = _aggregate_projected(conn)
+
+            all_rows = pd.concat(
+                [combined, projected],
+                ignore_index=True,
+            )
+            _write(conn, all_rows)
+
+            n_current = len(combined)
+            n_projected = len(projected)
+            logger.info(
+                "✓ macro_risk_overview: %s rows (%s current + %s projected)",
+                f"{n_current + n_projected:,}",
+                f"{n_current:,}",
+                f"{n_projected:,}",
+            )
     finally:
         conn.close()
 

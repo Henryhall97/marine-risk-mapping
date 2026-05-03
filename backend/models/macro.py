@@ -12,6 +12,8 @@ class MacroCell(BaseModel):
     cell_lat: float
     cell_lon: float
     season: str = "annual"
+    scenario: str | None = None
+    decade: str | None = None
 
     # Composite risk
     risk_score: float | None = None
@@ -48,9 +50,14 @@ class MacroCell(BaseModel):
     sdm_fin_whale: float | None = None
     sdm_humpback_whale: float | None = None
     sdm_sperm_whale: float | None = None
+    sdm_right_whale: float | None = None
+    sdm_minke_whale: float | None = None
 
     # Ocean covariates
     sst: float | None = None
+    sst_sd: float | None = None
+    mld: float | None = None
+    sla: float | None = None
     pp_upper_200m: float | None = None
 
     # Bathymetry
@@ -66,6 +73,8 @@ class MacroOverviewResponse(BaseModel):
 
     total: int
     season: str
+    scenario: str | None = None
+    decade: str | None = None
     data: list[MacroCell]
 
 

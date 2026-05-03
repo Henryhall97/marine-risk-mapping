@@ -12,6 +12,14 @@
 -- Creates a PostGIS POINT geometry from the cell centroid
 -- for downstream spatial joins (MPA overlay, speed zones, etc.).
 
+{{ config(
+    indexes=[
+        {'columns': ['h3_cell']},
+        {'columns': ['cell_lat', 'cell_lon']},
+        {'columns': ['geom'], 'type': 'gist'},
+    ]
+) }}
+
 with ais_cells as (
 
     select distinct

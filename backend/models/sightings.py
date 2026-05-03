@@ -43,6 +43,27 @@ class SightingLocation(BaseModel):
         None,
         description="How coordinates were resolved: 'user', 'exif', or null",
     )
+    is_ocean: bool | None = Field(
+        None,
+        description=(
+            "Whether the location is over ocean (True), "
+            "land (False), or unknown (null — outside "
+            "bathymetry coverage)"
+        ),
+    )
+    in_risk_coverage: bool = Field(
+        False,
+        description=(
+            "Whether the location falls within the project's "
+            "collision risk model coverage area"
+        ),
+    )
+    location_warnings: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Human-readable location warnings (e.g. 'on land', 'outside risk coverage')"
+        ),
+    )
 
 
 class UserInput(BaseModel):
@@ -51,6 +72,85 @@ class UserInput(BaseModel):
     species_guess: str | None = None
     description: str | None = None
     interaction_type: str | None = None
+    group_size: int | None = None
+    # OBIS / biological enrichment fields
+    sighting_datetime: str | None = Field(
+        None,
+        description="ISO-8601 datetime of the sighting (when it occurred)",
+    )
+    behavior: str | None = Field(
+        None,
+        description=(
+            "Observed behavior: feeding, traveling, resting, "
+            "socializing, mating, breaching, logging, other"
+        ),
+    )
+    life_stage: str | None = Field(
+        None,
+        description="Life stage: adult, juvenile, calf, unknown",
+    )
+    calf_present: bool | None = Field(
+        None,
+        description="Whether a calf was observed with the group",
+    )
+    sea_state_beaufort: int | None = Field(
+        None,
+        ge=0,
+        le=12,
+        description="Beaufort sea state (0-12)",
+    )
+    observation_platform: str | None = Field(
+        None,
+        description=(
+            "Observation platform: vessel, shore, aircraft, drone, kayak, diving, other"
+        ),
+    )
+    coordinate_uncertainty_m: float | None = Field(
+        None,
+        ge=0,
+        description="GPS coordinate uncertainty in metres",
+    )
+    confidence_level: str | None = Field(
+        None,
+        description=(
+            "Confidence in species identification: certain, likely, possible, uncertain"
+        ),
+    )
+    group_size_min: int | None = Field(
+        None,
+        ge=1,
+        le=500,
+        description="Minimum estimated group size",
+    )
+    group_size_max: int | None = Field(
+        None,
+        ge=1,
+        le=500,
+        description="Maximum estimated group size",
+    )
+    visibility_km: float | None = Field(
+        None,
+        ge=0,
+        le=100,
+        description="Horizontal visibility in kilometres",
+    )
+    sea_glare: str | None = Field(
+        None,
+        description="Sea glare level: none, slight, moderate, severe",
+    )
+    distance_to_animal_m: float | None = Field(
+        None,
+        ge=0,
+        le=50000,
+        description="Estimated distance to the animal in metres",
+    )
+    direction_of_travel: str | None = Field(
+        None,
+        description=(
+            "Direction the animal was traveling: "
+            "N, NE, E, SE, S, SW, W, NW, stationary, erratic"
+        ),
+    )
 
 
 class PhotoResult(BaseModel):
@@ -101,6 +201,19 @@ class SpeciesAssessment(BaseModel):
         None,
         description=(
             "Whether user guess matches model prediction (null if no guess provided)"
+        ),
+    )
+    model_rank: str | None = Field(
+        None,
+        description=(
+            "Taxonomic rank of the model prediction (always 'species' for classifiers)"
+        ),
+    )
+    user_rank: str | None = Field(
+        None,
+        description=(
+            "Taxonomic rank the user submitted at "
+            "(species, genus, family, suborder, order)"
         ),
     )
 

@@ -1,18 +1,26 @@
 """Whale species photo classifier.
 
-Single-stage EfficientNet-B4 fine-tuned from ImageNet weights on mixed
-body views (fluke, dorsal fin, flank).  Supports training and inference
-with optional H3-based risk enrichment.
+Two-pass classification pipeline mirroring the audio three-pass design:
+  1. **Critical (Pass 1)** — 8-class EfficientNet-B4 covering 7 ESA-listed
+     species + ``other_cetacean`` gatekeeper.  Escalates when the top
+     prediction is ``other_cetacean`` OR confidence < 0.65.
+  2. **Broad (Pass 2)** — 19-class model covering non-critical cetaceans
+     (dolphins, pilot whales, beaked whales, etc.).  Escalates when the
+     top prediction is ``unknown_cetacean`` OR confidence < 0.50.
+  3. **Rare (Pass 3, optional)** — cosine-similarity lookup against
+     EfficientNet-B4 penultimate-layer embeddings for rare species.
+     Returns ranked ``possible_matches``; never emits a definitive label.
+
+Single-stage ``WhalePhotoClassifier`` is retained for direct use and as
+the underlying engine for each pass.
 
 Usage
 -----
-    from pipeline.photo.classify import WhalePhotoClassifier
+    from pipeline.photo.classify import TwoPassPhotoClassifier
 
-    clf = WhalePhotoClassifier.load()
+    clf = TwoPassPhotoClassifier.load()
     result = clf.predict("whale_fluke.jpg")
-    enriched = clf.classify_and_enrich(
-        "whale_fluke.jpg", lat=42.3, lon=-70.5
-    )
+    # result["classifier_stage"] in {"critical", "broad", "rare"}
 """
 
 from __future__ import annotations
@@ -27,10 +35,14 @@ import numpy as np
 from pipeline.config import (
     DB_CONFIG,
     H3_RESOLUTION,
+    PHOTO_BROAD_CONFIDENCE_THRESHOLD,
+    PHOTO_BROAD_MODEL_DIR,
+    PHOTO_CRITICAL_CONFIDENCE_THRESHOLD,
     PHOTO_IMAGE_SIZE,
     PHOTO_IMAGENET_MEAN,
     PHOTO_IMAGENET_STD,
     PHOTO_MODEL_DIR,
+    PHOTO_RARE_EMBEDDINGS_DIR,
     WHALE_PHOTO_SPECIES,
 )
 
@@ -314,7 +326,405 @@ class WhalePhotoClassifier:
         return cls(model=model, label_encoder=label_encoder)
 
 
-# ── Helpers ─────────────────────────────────────────────────
+# ── Helpers ────────────────────────────────────────────────────────────
+
+
+def _extract_backbone_features(
+    model: Any,
+    image_path: str | Path,
+) -> np.ndarray:
+    """Extract the 1792-dim penultimate-layer embedding from EfficientNet-B4.
+
+    Removes the classifier head and runs a forward pass to obtain the
+    global average-pooled feature vector used for cosine similarity.
+    """
+    import torch
+    from PIL import Image
+
+    from pipeline.photo.preprocess import get_val_transforms
+
+    # Temporarily detach the classifier head
+    original_classifier = model.classifier
+    model.classifier = torch.nn.Identity()
+    model.eval()
+    device = next(model.parameters()).device
+
+    img = Image.open(str(image_path)).convert("RGB")
+    tensor = get_val_transforms()(img).unsqueeze(0).to(device)
+    with torch.no_grad():
+        features = model(tensor).cpu().numpy()[0]
+
+    # Restore classifier head
+    model.classifier = original_classifier
+    return features.astype(np.float32)
+
+
+# ── Rare-species embedding classifier (Pass 3) ──────────────────────────────
+
+
+class RareEmbeddingPhotoClassifier:
+    """Cosine-similarity embedding lookup for rare cetacean species.
+
+    Uses 1792-dim EfficientNet-B4 penultimate features as the embedding
+    space.  Maintains a library of mean embeddings per rare species built
+    from training images.  At inference time, the query embedding is
+    compared to each library vector and a ranked ``possible_matches``
+    list is returned.
+
+    Similarity labels
+    -----------------
+    - ``"possible match"`` : cosine similarity ≥ 0.80
+    - ``"weak match"``     : cosine similarity ≥ 0.65
+    - ``"unlikely"``       : cosine similarity < 0.65
+    """
+
+    SIMILARITY_POSSIBLE: float = 0.80
+    SIMILARITY_WEAK: float = 0.65
+
+    def __init__(self, library: dict[str, np.ndarray]) -> None:
+        self.library = library
+        self._normed = {
+            sp: vec / (np.linalg.norm(vec) + 1e-10) for sp, vec in library.items()
+        }
+
+    @classmethod
+    def load(
+        cls, embeddings_dir: str | Path | None = None
+    ) -> RareEmbeddingPhotoClassifier:
+        """Load mean embedding vectors from ``{species}_mean_embedding.npy`` files."""
+        embeddings_dir = Path(embeddings_dir or PHOTO_RARE_EMBEDDINGS_DIR)
+        if not embeddings_dir.exists():
+            raise FileNotFoundError(
+                f"Rare photo embeddings directory not found: {embeddings_dir}. "
+                "Run train_photo_classifier.py --stage rare first."
+            )
+        library: dict[str, np.ndarray] = {}
+        for npy_path in sorted(embeddings_dir.glob("*_mean_embedding.npy")):
+            species = npy_path.stem.replace("_mean_embedding", "")
+            library[species] = np.load(npy_path)
+        if not library:
+            raise FileNotFoundError(
+                f"No *_mean_embedding.npy files found in {embeddings_dir}."
+            )
+        log.info(
+            "Loaded rare photo embeddings for %d species: %s",
+            len(library),
+            ", ".join(sorted(library)),
+        )
+        return cls(library)
+
+    def build_library(
+        self,
+        model: Any,
+        images_by_species: dict[str, list[Path]],
+        save_dir: str | Path | None = None,
+    ) -> None:
+        """Compute and save mean embedding vectors from training images.
+
+        Parameters
+        ----------
+        model :
+            Trained ``WhalePhotoClassifier.model`` (EfficientNet-B4).
+        images_by_species :
+            Dict mapping species name → list of image file paths.
+        save_dir :
+            Directory to save ``{species}_mean_embedding.npy`` files.
+        """
+        save_dir = Path(save_dir or PHOTO_RARE_EMBEDDINGS_DIR)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        for sp, paths in images_by_species.items():
+            feats = []
+            for p in paths:
+                try:
+                    feats.append(_extract_backbone_features(model, p))
+                except Exception as exc:
+                    log.warning("Skipping %s for rare embedding: %s", p, exc)
+            if not feats:
+                log.warning("No valid images for rare species '%s' — skipping", sp)
+                continue
+            vec = np.mean(feats, axis=0).astype(np.float32)
+            self.library[sp] = vec
+            self._normed[sp] = vec / (np.linalg.norm(vec) + 1e-10)
+            np.save(save_dir / f"{sp}_mean_embedding.npy", vec)
+            log.info(
+                "Rare photo embedding saved: %s (%d dims, %d images)",
+                sp,
+                len(vec),
+                len(feats),
+            )
+
+    def predict(self, model: Any, image_path: str | Path) -> list[dict[str, Any]]:
+        """Rank rare species by cosine similarity to the query image.
+
+        Returns
+        -------
+        List of dicts sorted descending by similarity::
+
+            [
+              {"species": "frasiers_dolphin",
+               "similarity": 0.83,
+               "confidence_label": "possible match"},
+              ...
+            ]
+        """
+        query = _extract_backbone_features(model, image_path)
+        query_norm = query / (np.linalg.norm(query) + 1e-10)
+
+        matches = []
+        for sp, normed_lib in self._normed.items():
+            min_len = min(len(query_norm), len(normed_lib))
+            similarity = float(np.dot(query_norm[:min_len], normed_lib[:min_len]))
+            if similarity >= self.SIMILARITY_WEAK:
+                label = (
+                    "possible match"
+                    if similarity >= self.SIMILARITY_POSSIBLE
+                    else "weak match"
+                )
+            else:
+                label = "unlikely"
+            matches.append(
+                {
+                    "species": sp,
+                    "similarity": round(similarity, 4),
+                    "confidence_label": label,
+                }
+            )
+        return sorted(matches, key=lambda x: x["similarity"], reverse=True)
+
+
+# ── Two-pass photo classifier ──────────────────────────────────────────────
+
+
+class TwoPassPhotoClassifier:
+    """Two-pass cetacean photo classifier with optional rare-embedding Pass 3.
+
+    **Pass 1 — critical** (7 ESA species + ``other_cetacean`` gatekeeper)
+        Escalates when: ``top_pred == "other_cetacean"``
+        OR ``confidence < PHOTO_CRITICAL_CONFIDENCE_THRESHOLD`` (0.65).
+
+    **Pass 2 — broad** (18 non-critical species + ``unknown_cetacean``)
+        Escalates when: ``top_pred == "unknown_cetacean"``
+        OR ``confidence < PHOTO_BROAD_CONFIDENCE_THRESHOLD`` (0.50).
+
+    **Pass 3 — rare** (embedding similarity)
+        Returns ranked ``possible_matches``; never emits a definitive label.
+
+    Result dict always includes:
+        ``classifier_stage``, ``escalated``, ``max_confidence``,
+        ``critical_confidence``, ``broad_confidence``, ``possible_matches``
+    """
+
+    def __init__(
+        self,
+        critical: WhalePhotoClassifier,
+        broad: WhalePhotoClassifier,
+        rare: RareEmbeddingPhotoClassifier | None = None,
+        critical_threshold: float = PHOTO_CRITICAL_CONFIDENCE_THRESHOLD,
+        broad_threshold: float = PHOTO_BROAD_CONFIDENCE_THRESHOLD,
+    ) -> None:
+        self.critical = critical
+        self.broad = broad
+        self.rare = rare
+        self.critical_threshold = critical_threshold
+        self.broad_threshold = broad_threshold
+
+    @classmethod
+    def load(
+        cls,
+        critical_dir: str | Path | None = None,
+        broad_dir: str | Path | None = None,
+        rare_dir: str | Path | None = None,
+        critical_threshold: float | None = None,
+        broad_threshold: float | None = None,
+    ) -> TwoPassPhotoClassifier:
+        """Load both classifiers + optional rare embeddings from disk."""
+        critical = WhalePhotoClassifier.load(critical_dir)
+        broad = WhalePhotoClassifier.load(broad_dir or PHOTO_BROAD_MODEL_DIR)
+
+        rare: RareEmbeddingPhotoClassifier | None = None
+        try:
+            rare = RareEmbeddingPhotoClassifier.load(rare_dir)
+        except FileNotFoundError:
+            log.info(
+                "Rare photo embeddings not found — Pass 3 disabled. "
+                "Run train_photo_classifier.py --stage rare to enable."
+            )
+
+        return cls(
+            critical=critical,
+            broad=broad,
+            rare=rare,
+            critical_threshold=(
+                critical_threshold
+                if critical_threshold is not None
+                else PHOTO_CRITICAL_CONFIDENCE_THRESHOLD
+            ),
+            broad_threshold=(
+                broad_threshold
+                if broad_threshold is not None
+                else PHOTO_BROAD_CONFIDENCE_THRESHOLD
+            ),
+        )
+
+    # ── helpers ───────────────────────────────────────────────
+
+    @staticmethod
+    def _should_escalate(
+        prediction: dict[str, Any],
+        threshold: float,
+        gatekeeper_label: str,
+    ) -> bool:
+        return (
+            prediction["predicted_species"] == gatekeeper_label
+            or prediction["confidence"] < threshold
+        )
+
+    # ── main predict ─────────────────────────────────────────
+
+    def predict(
+        self,
+        image_path: str | Path,
+    ) -> dict[str, Any]:
+        """Run two-pass classification on a whale photo.
+
+        Returns
+        -------
+        dict with keys:
+            predicted_species, confidence, probabilities,
+            classifier_stage, escalated, max_confidence,
+            critical_confidence, broad_confidence, possible_matches
+        """
+        base: dict[str, Any] = {
+            "predicted_species": "unknown_cetacean",
+            "confidence": 0.0,
+            "probabilities": {},
+            "classifier_stage": "critical",
+            "escalated": False,
+            "max_confidence": 0.0,
+            "critical_confidence": None,
+            "broad_confidence": None,
+            "possible_matches": [],
+        }
+
+        # ── Pass 1: critical ─────────────────────────────────
+        crit_pred = self.critical.predict(image_path)
+        crit_conf = crit_pred["confidence"]
+        base["critical_confidence"] = crit_conf
+
+        if not self._should_escalate(
+            crit_pred, self.critical_threshold, "other_cetacean"
+        ):
+            return {**base, **crit_pred, "max_confidence": crit_conf}
+
+        log.info(
+            "Two-pass photo: critical pred='%s', conf=%.3f → escalating to broad",
+            crit_pred["predicted_species"],
+            crit_conf,
+        )
+
+        # ── Pass 2: broad ────────────────────────────────────
+        broad_pred = self.broad.predict(image_path)
+        broad_conf = broad_pred["confidence"]
+        base["broad_confidence"] = broad_conf
+
+        if not self._should_escalate(
+            broad_pred, self.broad_threshold, "unknown_cetacean"
+        ):
+            return {
+                **base,
+                **broad_pred,
+                "classifier_stage": "broad",
+                "escalated": True,
+                "max_confidence": broad_conf,
+            }
+
+        log.info(
+            "Two-pass photo: broad pred='%s', conf=%.3f → escalating to rare",
+            broad_pred["predicted_species"],
+            broad_conf,
+        )
+
+        # ── Pass 3: rare ──────────────────────────────────────
+        if self.rare is None:
+            log.warning("Two-pass photo: rare pass not loaded — returning broad result")
+            return {
+                **base,
+                **broad_pred,
+                "classifier_stage": "broad",
+                "escalated": True,
+                "max_confidence": broad_conf,
+            }
+
+        possible_matches = self.rare.predict(self.broad.model, image_path)
+        log.info(
+            "Two-pass photo: rare top match '%s' (sim=%.3f, %s)",
+            possible_matches[0]["species"] if possible_matches else "none",
+            possible_matches[0]["similarity"] if possible_matches else 0.0,
+            possible_matches[0]["confidence_label"] if possible_matches else "n/a",
+        )
+        return {
+            **base,
+            **broad_pred,  # carry probabilities from broad for context
+            "predicted_species": "unknown_cetacean",
+            "classifier_stage": "rare",
+            "escalated": True,
+            "max_confidence": 0.0,
+            "possible_matches": possible_matches,
+        }
+
+    def classify_and_enrich(
+        self,
+        image_path: str | Path,
+        lat: float | None = None,
+        lon: float | None = None,
+    ) -> dict[str, Any]:
+        """Two-pass classify + H3 risk context enrichment.
+
+        GPS may come from EXIF metadata or user-supplied coordinates.
+        Returns the two-pass predict result merged with spatial context.
+        """
+        import h3
+
+        from pipeline.photo.preprocess import extract_exif_gps
+
+        result = self.predict(image_path)
+
+        if lat is None or lon is None:
+            coords = extract_exif_gps(image_path)
+            if coords:
+                lat, lon = coords
+                log.info("Extracted EXIF GPS: (%.4f, %.4f)", lat, lon)
+
+        enriched: dict[str, Any] = {
+            "file": str(Path(image_path).name),
+            **result,
+        }
+
+        if lat is not None and lon is not None:
+            h3_cell = h3.latlng_to_cell(lat, lon, H3_RESOLUTION)
+            h3_int = int(h3_cell, 16)
+            enriched.update(
+                {
+                    "lat": lat,
+                    "lon": lon,
+                    "h3_cell": h3_int,
+                    "h3_hex": h3_cell,
+                    "risk_context": _lookup_risk_context(h3_int),
+                }
+            )
+        else:
+            enriched.update(
+                {
+                    "lat": None,
+                    "lon": None,
+                    "risk_context": {"note": "No coordinates available"},
+                }
+            )
+
+        return enriched
+
+
+# ── Helpers ────────────────────────────────────────────────────────────
 
 
 def _lookup_risk_context(h3_int: int) -> dict[str, Any]:

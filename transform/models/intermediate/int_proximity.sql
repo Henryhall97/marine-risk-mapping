@@ -3,6 +3,12 @@
 -- Wraps the pre-computed cell_proximity table produced by
 -- pipeline/aggregation/compute_proximity.py (scipy KDTree
 -- with haversine post-correction).
+
+{{ config(
+    indexes=[
+        {'columns': ['h3_cell']},
+    ]
+) }}
 --
 -- Four distance features:
 --   - dist_to_nearest_whale_km:      nearest whale sighting

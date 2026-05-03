@@ -40,14 +40,17 @@ if TYPE_CHECKING:
 
 from pipeline.config import (
     AUDIO_AUGMENT_TARGET,
+    AUDIO_BROAD_MODEL_DIR,
     AUDIO_CNN_EARLY_STOP_PATIENCE,
     AUDIO_MAX_SEGMENTS_PER_SPECIES,
     AUDIO_MODEL_DIR,
+    AUDIO_RARE_EMBEDDINGS_DIR,
     AUDIO_SAMPLE_RATE,
     AUDIO_SEGMENT_DURATION,
     AUDIO_SEGMENT_HOP,
     ML_DIR,
     MLFLOW_TRACKING_URI,
+    WHALE_AUDIO_RARE_SPECIES,
     WHALE_AUDIO_RAW_DIR,
 )
 
@@ -289,6 +292,8 @@ def train_xgboost(
     features_df: pd.DataFrame,
     tune: bool = False,
     n_trials: int = 50,
+    model_dir: Path | None = None,
+    experiment_name: str | None = None,
 ) -> XGBoostAudioClassifier:
     """Train a multi-class XGBoost classifier on acoustic features.
 
@@ -309,7 +314,10 @@ def train_xgboost(
     from pipeline.audio.classify import XGBoostAudioClassifier
 
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-    mlflow.set_experiment(EXPERIMENT_NAME)
+    mlflow.set_experiment(experiment_name or EXPERIMENT_NAME)
+
+    eff_model_dir = model_dir or AUDIO_MODEL_DIR
+    eff_artifacts_dir = ARTIFACTS_DIR.parent / eff_model_dir.name
 
     # Prepare data
     meta_cols = ["file", "segment_idx", "start_sec", "end_sec", "species"]
@@ -421,8 +429,8 @@ def train_xgboost(
         log.info("\n%s", report)
 
         # Save artifacts
-        ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
-        report_path = ARTIFACTS_DIR / "classification_report.txt"
+        eff_artifacts_dir.mkdir(parents=True, exist_ok=True)
+        report_path = eff_artifacts_dir / "classification_report.txt"
         report_path.write_text(report)
         mlflow.log_artifact(str(report_path))
 
@@ -430,15 +438,15 @@ def train_xgboost(
         _plot_confusion_matrix(
             confusion_matrix(y, oof_labels),
             [label_map[i] for i in range(n_classes)],
-            ARTIFACTS_DIR / "confusion_matrix.png",
+            eff_artifacts_dir / "confusion_matrix.png",
         )
-        mlflow.log_artifact(str(ARTIFACTS_DIR / "confusion_matrix.png"))
+        mlflow.log_artifact(str(eff_artifacts_dir / "confusion_matrix.png"))
 
         # Feature importance
         _plot_feature_importance(
-            model, feature_cols, ARTIFACTS_DIR / "feature_importance.png"
+            model, feature_cols, eff_artifacts_dir / "feature_importance.png"
         )
-        mlflow.log_artifact(str(ARTIFACTS_DIR / "feature_importance.png"))
+        mlflow.log_artifact(str(eff_artifacts_dir / "feature_importance.png"))
 
         # Train final model on all data
         log.info("Training final model on all %d samples", len(y))
@@ -461,11 +469,11 @@ def train_xgboost(
             feature_names=feature_cols,
             label_encoder=label_map,
         )
-        model_path = classifier.save()
+        model_path = classifier.save(eff_model_dir)
         mlflow.log_artifact(str(model_path))
-        mlflow.log_artifact(str(AUDIO_MODEL_DIR / "model_metadata.json"))
+        mlflow.log_artifact(str(eff_model_dir / "model_metadata.json"))
 
-        log.info("Model saved to %s", AUDIO_MODEL_DIR)
+        log.info("Model saved to %s", eff_model_dir)
 
     return classifier
 
@@ -554,6 +562,8 @@ def train_cnn(
     epochs: int = 30,
     batch_size: int = 32,
     lr: float = 1e-3,
+    model_dir: Path | None = None,
+    experiment_name: str | None = None,
 ) -> CNNAudioClassifier:
     """Train a ResNet18-based CNN on mel spectrograms.
 
@@ -581,7 +591,10 @@ def train_cnn(
     )
 
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-    mlflow.set_experiment(EXPERIMENT_NAME)
+    mlflow.set_experiment(experiment_name or EXPERIMENT_NAME)
+
+    eff_model_dir = model_dir or AUDIO_MODEL_DIR
+    eff_artifacts_dir = ARTIFACTS_DIR.parent / eff_model_dir.name
 
     # Get unique files + labels from the feature DataFrame
     # Exclude augmented rows — CNN re-generates spectrograms from source files
@@ -839,17 +852,21 @@ def train_cnn(
         log.info("\n%s", report)
         mlflow.log_metric("best_val_f1", best_f1)
 
-        ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
-        report_path = ARTIFACTS_DIR / "cnn_classification_report.txt"
+        eff_artifacts_dir.mkdir(parents=True, exist_ok=True)
+        report_path = eff_artifacts_dir / "cnn_classification_report.txt"
         report_path.write_text(report)
         mlflow.log_artifact(str(report_path))
 
         # Save model
         classifier = CNNAudioClassifier(model=model, label_encoder=label_map)
-        model_path = classifier.save()
+        model_path = classifier.save(eff_model_dir)
         mlflow.log_artifact(str(model_path))
 
-        log.info("CNN model saved to %s  (best val F1: %.4f)", AUDIO_MODEL_DIR, best_f1)
+        log.info(
+            "CNN model saved to %s  (best val F1: %.4f)",
+            eff_model_dir,
+            best_f1,
+        )
 
     return classifier
 
@@ -981,6 +998,23 @@ def main():
         ),
     )
     parser.add_argument(
+        "--manifest-only",
+        action="store_true",
+        help="Skip downloads, just rebuild the training manifest from existing files",
+    ) if False else None  # kept for reference; not used in this script
+    parser.add_argument(
+        "--stage",
+        choices=["critical", "broad", "rare"],
+        default="critical",
+        help=(
+            "Training stage: 'critical' trains the 9-species ESA large-whale "
+            "model incl. bowhead (default). 'broad' trains the ~14-species "
+            "non-critical cetacean model. 'rare' builds mean embedding vectors "
+            "for rare species using the trained broad model backbone and saves "
+            "them to AUDIO_RARE_EMBEDDINGS_DIR."
+        ),
+    )
+    parser.add_argument(
         "--features-path",
         type=str,
         default=None,
@@ -1046,20 +1080,88 @@ def main():
         )
         return
 
+    # Resolve stage-specific model dir and experiment name
+    if args.stage == "broad":
+        stage_model_dir: Path = AUDIO_BROAD_MODEL_DIR
+        stage_experiment = "whale_audio_classifier_broad"
+        log.info(
+            "Stage: broad — saving to %s, experiment '%s'",
+            stage_model_dir,
+            stage_experiment,
+        )
+    elif args.stage == "rare":
+        # ── Rare stage: build embedding library from broad model ──────────
+        log.info(
+            "Stage: rare — building mean embedding library "
+            "from broad XGBoost model backbone"
+        )
+        from pipeline.audio.classify import RareEmbeddingAudioClassifier
+
+        rare_species = WHALE_AUDIO_RARE_SPECIES
+
+        # Reuse extracted feature matrix; filter to rare species only
+        rare_features = {
+            sp: features_df[features_df["species"] == sp].drop(
+                columns=["file", "segment_idx", "start_sec", "end_sec", "species"],
+                errors="ignore",
+            )
+            for sp in rare_species
+            if sp in features_df["species"].values
+        }
+        missing_rare = set(rare_species) - set(rare_features)
+        if missing_rare:
+            log.warning(
+                "Rare species not found in features: %s — "
+                "download and extract their audio first.",
+                ", ".join(sorted(missing_rare)),
+            )
+        if not rare_features:
+            log.error(
+                "No rare-species segments found. "
+                "Run download_whale_audio.py --stage rare and re-extract features."
+            )
+            return
+
+        embedder = RareEmbeddingAudioClassifier(library={})
+        embedder.build_library(
+            features_by_species=rare_features,
+            save_dir=AUDIO_RARE_EMBEDDINGS_DIR,
+        )
+        log.info(
+            "Rare embedding library built for %d species → %s",
+            len(rare_features),
+            AUDIO_RARE_EMBEDDINGS_DIR,
+        )
+        elapsed = time.time() - t0
+        log.info("Rare stage complete in %.1f s", elapsed)
+        return
+    else:
+        stage_model_dir = AUDIO_MODEL_DIR
+        stage_experiment = EXPERIMENT_NAME
+        log.info("Stage: critical (default)")
+
     # Train
     if args.backend == "xgboost":
-        clf = train_xgboost(features_df, tune=args.tune, n_trials=args.n_trials)
+        clf = train_xgboost(
+            features_df,
+            tune=args.tune,
+            n_trials=args.n_trials,
+            model_dir=stage_model_dir,
+            experiment_name=stage_experiment,
+        )
     elif args.backend == "cnn":
         clf = train_cnn(
             features_df,
             epochs=args.epochs,
             batch_size=args.batch_size,
             lr=args.lr,
+            model_dir=stage_model_dir,
+            experiment_name=stage_experiment,
         )
 
     elapsed = time.time() - t0
     log.info("Training complete in %.1f s", elapsed)
-    log.info("Model saved to %s", AUDIO_MODEL_DIR)
+    log.info("Model saved to %s", stage_model_dir)
 
 
 if __name__ == "__main__":

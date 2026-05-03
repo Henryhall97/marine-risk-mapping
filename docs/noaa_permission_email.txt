@@ -1,0 +1,37 @@
+Subject: Permission Request — Use of NOAA Fisheries Species Illustrations in Non-Commercial Marine Conservation Platform
+
+Dear NOAA Fisheries Web Publishing Team,
+
+I am writing to request permission to use cetacean species profile illustrations from the NOAA Fisheries Species Directory (fisheries.noaa.gov/species-directory/marine-mammals) on a non-commercial marine conservation and citizen science platform called WhaleWatch.
+
+**About the project:**
+WhaleWatch is an open-source, non-commercial research platform (https://github.com/Henryhall97/marine-risk-mapping) that maps whale–vessel collision risk across US waters using AIS vessel traffic data, OBIS cetacean sightings, NOAA ship strike records, bathymetry, and ocean covariates. The platform includes a citizen science component where members of the public can report whale sightings to improve collision risk models.
+
+**How the illustrations would be used:**
+The platform includes a species identification wizard that helps users identify cetacean species when submitting sighting reports. Your 640×427 profile illustrations (24 species, covering baleen whales, toothed whales, dolphins, and porpoises) are anatomically accurate and visually consistent — far superior to any alternatives for educational species identification. We would display them within the identification wizard alongside text-based field marks to help users distinguish between species.
+
+**Specific illustrations requested:**
+24 illustrations from the Species Directory, including:
+- Baleen whales: North Atlantic Right Whale, Humpback, Blue, Fin, Sei, Minke, Gray, Bowhead, Bryde's
+- Toothed whales: Sperm Whale, Beluga, Narwhal
+- Dolphins: Killer Whale (Orca), Bottlenose, Common, Spotted, Striped, White-sided, Risso's, Pilot Whale
+- Porpoises: Harbor Porpoise, Dall's Porpoise, Vaquita
+
+**Attribution:**
+Full credit is provided on the platform's attribution page (whalewatch.org/attribution) reading:
+"Cetacean species illustrations sourced from NOAA Fisheries Species Directory. General credit: NOAA Fisheries. Select illustrations: Jack Hornady / NOAA Fisheries."
+
+**Terms of use:**
+- Non-commercial, open-source educational/conservation project
+- Images are not redistributed as standalone files — they are displayed within the platform UI only
+- No modifications to the illustrations themselves (we add only a species name text label at the bottom)
+- We are happy to adjust attribution or usage per any requirements you specify
+
+I understand that NOAA Fisheries grants permission to use graphics on a case-by-case basis, and that some illustrations may be contractor-created works with different licensing terms. I am happy to provide any additional information needed.
+
+Thank you for your time and for the exceptional quality of these educational resources.
+
+Best regards,
+Henry Hall
+WhaleWatch — Marine Risk Mapping Project
+GitHub: https://github.com/Henryhall97/marine-risk-mapping

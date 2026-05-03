@@ -5,7 +5,7 @@ import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 /**
- * Lightweight MapLibre GL map showing the US coastal bounding box
+ * Lightweight MapLibre GL map showing the study-area bounding box
  * that the risk model covers. Non-interactive — just a visual aid.
  */
 
@@ -30,8 +30,8 @@ export default function CoverageMap() {
     const map = new maplibregl.Map({
       container: containerRef.current,
       style: MAP_STYLE,
-      center: [-120, 36],
-      zoom: 1.6,
+      center: [-115, 28],
+      zoom: 1.3,
       interactive: false,
       attributionControl: false,
     });
@@ -113,7 +113,7 @@ export default function CoverageMap() {
       {/* Overlay label */}
       <div className="pointer-events-none absolute inset-0 flex items-end justify-center pb-4">
         <div className="rounded-full bg-abyss-900/80 px-4 py-1.5 text-xs font-medium text-slate-300 backdrop-blur-sm">
-          Coverage: 2°S–52°N × 180°W–59°W
+          Western Hemisphere coverage: 2°S–52°N × 180°W–59°W
         </div>
       </div>
     </div>

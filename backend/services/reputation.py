@@ -237,7 +237,10 @@ VALID_CREDENTIAL_TYPES = {
 
 
 def add_credential(
-    user_id: int, credential_type: str, description: str
+    user_id: int,
+    credential_type: str,
+    description: str,
+    evidence_filename: str | None = None,
 ) -> dict[str, Any]:
     """Add a credential claim to a user's profile."""
     if credential_type not in VALID_CREDENTIAL_TYPES:
@@ -248,12 +251,15 @@ def add_credential(
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO user_credentials (user_id, credential_type, description)
-            VALUES (%s, %s, %s)
+            INSERT INTO user_credentials
+                (user_id, credential_type, description,
+                 evidence_filename)
+            VALUES (%s, %s, %s, %s)
             RETURNING id, credential_type, description,
-                      is_verified, verified_at, created_at
+                      is_verified, verified_at, created_at,
+                      evidence_filename
             """,
-            (user_id, credential_type, description),
+            (user_id, credential_type, description, evidence_filename),
         )
         row = cur.fetchone()
         conn.commit()
@@ -264,21 +270,29 @@ def add_credential(
         "is_verified": row[3],
         "verified_at": row[4],
         "created_at": row[5],
+        "evidence_filename": row[6],
     }
 
 
 def get_user_credentials(user_id: int) -> list[dict[str, Any]]:
     """Get all credentials for a user."""
-    return fetch_all(
+    rows = fetch_all(
         """
-        SELECT id, credential_type, description,
-               is_verified, verified_at, created_at
+        SELECT id, user_id, credential_type, description,
+               is_verified, verified_at, created_at,
+               evidence_filename
         FROM user_credentials
         WHERE user_id = %s
         ORDER BY created_at DESC
         """,
         (user_id,),
     )
+    for r in rows:
+        fn = r.get("evidence_filename")
+        r["evidence_url"] = (
+            f"/api/v1/media/credential-evidence/{r['id']}" if fn else None
+        )
+    return rows
 
 
 def verify_credential(credential_id: int) -> dict[str, Any] | None:

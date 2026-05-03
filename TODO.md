@@ -68,8 +68,33 @@
 
 ## Future Phases
 
-- [ ] **Phase 8** — Backend API (FastAPI endpoints)
-- [ ] **Phase 9** — Frontend (Next.js + Deck.gl dashboard)
+- [ ] **Forecast ocean covariates & predicted whale presence** — Extend the
+  Copernicus ocean covariate pipeline to forecast SST, MLD, SLA, and PP
+  into the future (e.g. seasonal forecasts from Copernicus Marine Service
+  or NOAA CFS).  Feed forecasted covariates through the trained ISDM / SDM
+  models to produce forward-looking whale probability maps.  Add a
+  "Forecast" view in the frontend (time-slider or future season selector)
+  so users can see predicted whale presence weeks/months ahead — enabling
+  proactive route planning and dynamic speed zone recommendations.
+  *(Added: 2026-03-07)*
+
+- [ ] **Species audit — Pacific vs Atlantic right whale collapse** — Review
+  all species handling across the pipeline.  Currently OBIS sightings for
+  both *Eubalaena glacialis* (North Atlantic right whale) and *Eubalaena
+  japonica* (North Pacific right whale) are collapsed into a single
+  `right_whale` category, and Happywhale's `southern_right_whale`
+  (*Eubalaena australis*) is also mapped to `right_whale` via label fixes.
+  These are three distinct species with very different populations
+  (~350 NARW vs ~500 NPRW vs ~15 000 SRW), ranges, and conservation
+  statuses (NARW critically endangered, NPRW endangered, SRW least
+  concern).  Audit the `species_crosswalk` seed for other silent
+  collapses (e.g. Bryde's whale complex, spinner vs spotted dolphin in
+  OBIS).  Document all species-level decisions and consider whether
+  the vulnerability-weighted composite (TODO above) needs per-population
+  weights rather than per-species.
+  *(Added: 2026-03-07)*
+
+
 - [ ] **Phase 10** — Testing (pytest, Vitest, E2E)
 - [ ] **Phase 11** — Containerisation (Dockerfiles, CI/CD)
 - [ ] **Phase 12** — Cloud Deployment (AWS ECS, RDS, S3)

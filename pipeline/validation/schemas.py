@@ -84,12 +84,12 @@ cetacean_schema = DataFrameSchema(
         "decimalLatitude": Column(
             float,
             Check.in_range(-2.0, 52.0),
-            description="Latitude — clipped to US waters bounding box",
+            description="Latitude — clipped to study bounding box",
         ),
         "decimalLongitude": Column(
             float,
             Check.in_range(-180.0, -59.0),
-            description="Longitude — clipped to US waters bounding box",
+            description="Longitude — clipped to study bounding box",
         ),
         "eventDate": Column(
             "str",

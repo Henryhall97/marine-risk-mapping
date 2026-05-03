@@ -407,13 +407,15 @@ def train_single_model(
 
 # ── Grid scoring (OOF predictions) ─────────────────────────
 
-# Targets to score for ISDM-comparable comparison
+# Targets to score — all 6 per-species models + aggregate
 SCORE_TARGETS = {
     "whale_present": "sdm_any_whale",
     "blue_whale_present": "sdm_blue_whale",
     "fin_whale_present": "sdm_fin_whale",
     "humpback_present": "sdm_humpback_whale",
     "sperm_whale_present": "sdm_sperm_whale",
+    "right_whale_present": "sdm_right_whale",
+    "minke_whale_present": "sdm_minke_whale",
 }
 
 
@@ -489,11 +491,13 @@ def score_all_targets(
     df: pd.DataFrame,
     params: dict | None = None,
 ) -> None:
-    """Train + save OOF predictions for all ISDM-comparable targets.
+    """Train + save OOF predictions for all SDM-comparable targets.
 
-    Loops through the 5 species targets (4 individual + any_whale),
+    Loops through the 7 species targets (6 individual + any_whale),
     trains each with spatial CV, and saves honest out-of-fold
-    predictions for every cell-season.
+    predictions for every cell-season.  Each species gets its own
+    MLflow run to avoid parameter-key collisions (different
+    scale_pos_weight per species).
     """
     for target_col, col_name in SCORE_TARGETS.items():
         if target_col not in df.columns:
@@ -520,12 +524,16 @@ def score_all_targets(
         )
         log.info("=" * 60)
 
-        model, metrics, oof_preds = train_single_model(
-            df,
-            target_col=target_col,
-            params=params,
-            log_to_mlflow=True,
-        )
+        target_short = target_col.replace("_present", "")
+        with mlflow.start_run(
+            run_name=f"score_{target_short}",
+        ):
+            model, metrics, oof_preds = train_single_model(
+                df,
+                target_col=target_col,
+                params=params,
+                log_to_mlflow=True,
+            )
         save_oof_predictions(df, oof_preds, target_col)
 
         log.info(

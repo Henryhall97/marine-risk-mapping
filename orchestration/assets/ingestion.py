@@ -11,13 +11,18 @@ from dagster import AssetExecutionContext, MaterializeResult, asset
 
 from orchestration.constants import (
     AIS_RAW_DIR,
+    BIA_FILE,
     CETACEAN_FILE,
+    CMIP6_PROJECTIONS_FILE,
+    CRITICAL_HABITAT_FILE,
     MPA_FILE,
     NISI_DIR,
     OCEAN_COVARIATES_FILE,
     OCEAN_MASK_FILE,
     PROJECT_ROOT,
     SHIP_STRIKES_FILE,
+    SHIPPING_LANES_FILE,
+    SLOW_ZONES_FILE,
     SMA_FILE,
     SPEED_ZONES_FILE,
 )
@@ -73,7 +78,7 @@ def raw_ais_data(context: AssetExecutionContext) -> MaterializeResult:
 @asset(
     group_name="ingestion",
     kinds={"python"},
-    description=("Filter OBIS parquets to US coastal cetacean sightings."),
+    description=("Filter OBIS parquets to study-area cetacean sightings."),
 )
 def raw_cetacean_data(
     context: AssetExecutionContext,
@@ -225,7 +230,7 @@ def raw_speed_zones(
     kinds={"python"},
     description=(
         "Download Natural Earth 1:10m ocean polygon for land/ocean"
-        " mask. Clips to US coastal bbox."
+        " mask. Clips to study bounding box."
     ),
 )
 def raw_ocean_mask(
@@ -241,5 +246,132 @@ def raw_ocean_mask(
         metadata={
             "file": str(OCEAN_MASK_FILE),
             "exists": OCEAN_MASK_FILE.exists(),
+        },
+    )
+
+
+# ── Zone geometry assets ─────────────────────────────────────
+
+
+@asset(
+    group_name="ingestion",
+    kinds={"python"},
+    description=(
+        "Download NOAA CetMap Biologically Important Areas "
+        "(85 polygons: feeding, migratory, reproductive)."
+    ),
+)
+def raw_bia_data(
+    context: AssetExecutionContext,
+) -> MaterializeResult:
+    """Download BIA polygons from NOAA ArcGIS FeatureServer."""
+    _run_script(
+        context,
+        "pipeline/ingestion/download_bia.py",
+    )
+    return MaterializeResult(
+        metadata={
+            "file": str(BIA_FILE),
+            "exists": BIA_FILE.exists(),
+        },
+    )
+
+
+@asset(
+    group_name="ingestion",
+    kinds={"python"},
+    description=(
+        "Download NMFS ESA-designated whale critical habitat "
+        "(31 polygons) from NOAA MapServer."
+    ),
+)
+def raw_critical_habitat(
+    context: AssetExecutionContext,
+) -> MaterializeResult:
+    """Download whale critical habitat polygons."""
+    _run_script(
+        context,
+        "pipeline/ingestion/download_critical_habitat.py",
+    )
+    return MaterializeResult(
+        metadata={
+            "file": str(CRITICAL_HABITAT_FILE),
+            "exists": CRITICAL_HABITAT_FILE.exists(),
+        },
+    )
+
+
+@asset(
+    group_name="ingestion",
+    kinds={"python"},
+    description=(
+        "Download NOAA Coast Survey shipping lanes, TSS, "
+        "and precautionary areas (300 features)."
+    ),
+)
+def raw_shipping_lanes(
+    context: AssetExecutionContext,
+) -> MaterializeResult:
+    """Download shipping lane geometries."""
+    _run_script(
+        context,
+        "pipeline/ingestion/download_shipping_lanes.py",
+    )
+    return MaterializeResult(
+        metadata={
+            "file": str(SHIPPING_LANES_FILE),
+            "exists": SHIPPING_LANES_FILE.exists(),
+        },
+    )
+
+
+@asset(
+    group_name="ingestion",
+    kinds={"python"},
+    description=(
+        "Scrape NOAA Fisheries active right whale DMAs / slow zones (~6 zones)."
+    ),
+)
+def raw_slow_zones(
+    context: AssetExecutionContext,
+) -> MaterializeResult:
+    """Download active right whale slow zones."""
+    _run_script(
+        context,
+        "pipeline/ingestion/download_slow_zones.py",
+    )
+    return MaterializeResult(
+        metadata={
+            "file": str(SLOW_ZONES_FILE),
+            "exists": SLOW_ZONES_FILE.exists(),
+        },
+    )
+
+
+# ── Climate projection covariates ────────────────────────────
+
+
+@asset(
+    group_name="ingestion",
+    kinds={"python"},
+    deps=["raw_ocean_covariates"],
+    description=(
+        "Generate CMIP6 climate-projected ocean covariates "
+        "(SSP2-4.5 / SSP5-8.5, 2030s-2080s). Applies delta "
+        "method to observed seasonal baseline."
+    ),
+)
+def raw_cmip6_projections(
+    context: AssetExecutionContext,
+) -> MaterializeResult:
+    """Generate projected covariate parquet from baseline + CMIP6 deltas."""
+    _run_script(
+        context,
+        "pipeline/ingestion/download_cmip6_projections.py",
+    )
+    return MaterializeResult(
+        metadata={
+            "file": str(CMIP6_PROJECTIONS_FILE),
+            "exists": CMIP6_PROJECTIONS_FILE.exists(),
         },
     )

@@ -1,6 +1,13 @@
 -- Intermediate model: speed zone coverage per hex cell
 -- Identifies which H3 cells overlap with NARW speed
 -- management zones (both proposed and current SMAs).
+
+{{ config(
+    indexes=[
+        {'columns': ['h3_cell']},
+    ]
+) }}
+
 --
 -- Uses ST_Intersects between cell centroid and zone polygons.
 -- A cell can overlap multiple zones with different seasons.

@@ -243,8 +243,8 @@ models:
     description: >
       Cetacean sighting counts per H3 cell. Each sighting is
       assigned to the nearest cell centroid within 660m (H3 res-7
-      circumradius). Filtered to US coastal waters (lat 23–50,
-      lon −131 to −64). One row per cell, time-aggregated.
+      circumradius). Filtered to the study bounding box. One row
+      per cell, time-aggregated.
     columns:
       - name: h3_cell
         description: "H3 cell index (resolution 7)"
@@ -620,6 +620,69 @@ models:
       - unique:
           column_name: "h3_cell || '-' || season"
 
+  # ── Ocean Covariates Projected ──────────────────────────
+  - name: int_ocean_covariates_projected
+    description: >
+      CMIP6 climate-projected ocean environmental covariates spatially
+      joined to H3 cells via nearest-neighbour matching (within 0.3°).
+      Same structure as int_ocean_covariates_seasonal but with
+      additional scenario and decade dimensions for climate projections.
+      Grain: one row per (h3_cell, season, scenario, decade).
+    config:
+      indexes:
+        - columns: ['h3_cell', 'season', 'scenario', 'decade']
+    columns:
+      - name: h3_cell
+        description: "H3 cell index (resolution 7)"
+        tests:
+          - not_null
+
+      - name: season
+        description: "Season name: winter, spring, summer, fall"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['winter', 'spring', 'summer', 'fall']
+
+      - name: scenario
+        description: "CMIP6 scenario: ssp245 or ssp585"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['ssp245', 'ssp585']
+
+      - name: decade
+        description: "Projection decade: 2030s, 2040s, 2060s, 2080s"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['2030s', '2040s', '2060s', '2080s']
+
+      - name: sst
+        description: "Projected sea surface temperature (°C)"
+
+      - name: sst_sd
+        description: "Projected SST standard deviation (°C)"
+
+      - name: mld
+        description: "Projected mixed layer depth (m)"
+
+      - name: sla
+        description: "Projected sea level anomaly (m)"
+
+      - name: pp_upper_200m
+        description: "Projected primary production in upper 200m (mg C m⁻² day⁻¹)"
+
+      - name: covariate_dist_km
+        description: "Distance (km) from H3 centroid to nearest covariate grid point"
+
+    tests:
+      - unique:
+          column_name: "h3_cell || '-' || season || '-' || scenario || '-' || decade"
+
   # ── Vessel Traffic Seasonal ─────────────────────────────
   - name: int_vessel_traffic_seasonal
     description: >
@@ -941,14 +1004,20 @@ models:
       - name: sdm_sperm_whale
         description: "Predicted P(sperm whale present) from OBIS SDM (0–1)"
 
+      - name: sdm_right_whale
+        description: "Predicted P(right whale present) from OBIS SDM (0–1)"
+
+      - name: sdm_minke_whale
+        description: "Predicted P(minke whale present) from OBIS SDM (0–1)"
+
       - name: max_whale_prob
-        description: "Highest P(present) across 4 per-species SDM models"
+        description: "Highest P(present) across 6 per-species SDM models"
 
       - name: mean_whale_prob
-        description: "Average P(present) across 4 per-species SDM models"
+        description: "Average P(present) across 6 per-species SDM models"
 
       - name: any_whale_prob_joint
-        description: "P(any whale) = 1 - ∏(1 - P_i), independence assumption across 4 species"
+        description: "P(any whale) = 1 - ∏(1 - P_i), independence assumption across 6 species"
 
     tests:
       - unique:

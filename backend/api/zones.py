@@ -1,7 +1,9 @@
 """Regulatory zone geometry endpoints.
 
-3 endpoints returning actual polygon/multipolygon GeoJSON for
-map overlays: current SMAs, proposed speed zones, and MPAs.
+3+4 endpoints returning actual polygon/multipolygon GeoJSON for
+map overlays: current SMAs, proposed speed zones, MPAs,
+Biologically Important Areas, Critical Habitat, shipping lanes,
+and active slow zones.
 """
 
 from __future__ import annotations
@@ -12,12 +14,20 @@ from fastapi import APIRouter, HTTPException, Query
 
 from backend.config import DEFAULT_PAGE_SIZE, MAX_BBOX_AREA_DEG2, MAX_PAGE_SIZE
 from backend.models.zones import (
+    BIAListResponse,
+    BiologicallyImportantArea,
+    CriticalHabitat,
+    CriticalHabitatListResponse,
     CurrentSpeedZone,
     CurrentSpeedZoneListResponse,
     MarineProtectedArea,
     MPAListDetailResponse,
     ProposedSpeedZone,
     ProposedSpeedZoneListResponse,
+    ShippingLane,
+    ShippingLaneListResponse,
+    SlowZone,
+    SlowZoneListResponse,
 )
 from backend.services import zones as zone_svc
 
@@ -151,3 +161,152 @@ def list_mpa_features(
     )
     data = [MarineProtectedArea(**r) for r in rows]
     return MPAListDetailResponse(total=total, offset=offset, limit=limit, data=data)
+
+
+# ── BIAs ────────────────────────────────────────────────────
+
+
+@router.get(
+    "/bia",
+    response_model=BIAListResponse,
+)
+def list_bia_features(
+    lat_min: float = Query(..., ge=-90, le=90),
+    lat_max: float = Query(..., ge=-90, le=90),
+    lon_min: float = Query(..., ge=-180, le=180),
+    lon_max: float = Query(..., ge=-180, le=180),
+    bia_type: str | None = Query(
+        None,
+        description=(
+            "Filter by BIA category (e.g. 'Feeding', 'Migration', 'Reproduction')"
+        ),
+    ),
+    species: str | None = Query(
+        None,
+        description="Filter by species (partial match on scientific or common name)",
+    ),
+    limit: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+    offset: int = Query(0, ge=0),
+):
+    """Cetacean Biologically Important Areas (NOAA CetMap).
+
+    Returns BIA polygons intersecting the bounding box.
+    Includes species, BIA type, active months, and geometry.
+    """
+    _validate_bbox(lat_min, lat_max, lon_min, lon_max)
+    total = zone_svc.count_bia_features(
+        lat_min,
+        lat_max,
+        lon_min,
+        lon_max,
+        bia_type=bia_type,
+        species=species,
+    )
+    rows = zone_svc.get_bia_features(
+        lat_min,
+        lat_max,
+        lon_min,
+        lon_max,
+        bia_type=bia_type,
+        species=species,
+        limit=limit,
+        offset=offset,
+    )
+    data = [BiologicallyImportantArea(**r) for r in rows]
+    return BIAListResponse(total=total, offset=offset, limit=limit, data=data)
+
+
+# ── Critical Habitat ────────────────────────────────────────
+
+
+@router.get(
+    "/critical-habitat",
+    response_model=CriticalHabitatListResponse,
+)
+def list_critical_habitat(
+    species: str | None = Query(
+        None,
+        description="Filter by species label or scientific name (partial match)",
+    ),
+):
+    """Whale ESA Critical Habitat designations (NMFS).
+
+    Small dataset (31 polygons) — returns all matching features.
+    No bbox required; the frontend renders only visible polygons.
+    """
+    rows = zone_svc.get_critical_habitat(species=species)
+    data = [CriticalHabitat(**r) for r in rows]
+    return CriticalHabitatListResponse(total=len(data), data=data)
+
+
+# ── Shipping Lanes ──────────────────────────────────────────
+
+
+@router.get(
+    "/shipping-lanes",
+    response_model=ShippingLaneListResponse,
+)
+def list_shipping_lanes(
+    lat_min: float = Query(..., ge=-90, le=90),
+    lat_max: float = Query(..., ge=-90, le=90),
+    lon_min: float = Query(..., ge=-180, le=180),
+    lon_max: float = Query(..., ge=-180, le=180),
+    zone_type: str | None = Query(
+        None,
+        description=(
+            "Filter by zone type "
+            "(e.g. 'Traffic Separation Schemes', "
+            "'Area to be Avoided', 'Precautionary Areas')"
+        ),
+    ),
+    limit: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+    offset: int = Query(0, ge=0),
+):
+    """Shipping lanes and routing regulations (NOAA Coast Survey).
+
+    Returns TSS, traffic lanes, ATBAs, fairways, and other
+    maritime routing polygons intersecting the bounding box.
+    """
+    _validate_bbox(lat_min, lat_max, lon_min, lon_max)
+    total = zone_svc.count_shipping_lanes(
+        lat_min,
+        lat_max,
+        lon_min,
+        lon_max,
+        zone_type=zone_type,
+    )
+    rows = zone_svc.get_shipping_lanes(
+        lat_min,
+        lat_max,
+        lon_min,
+        lon_max,
+        zone_type=zone_type,
+        limit=limit,
+        offset=offset,
+    )
+    data = [ShippingLane(**r) for r in rows]
+    return ShippingLaneListResponse(
+        total=total,
+        offset=offset,
+        limit=limit,
+        data=data,
+    )
+
+
+# ── Slow Zones ──────────────────────────────────────────────
+
+
+@router.get(
+    "/slow-zones",
+    response_model=SlowZoneListResponse,
+)
+def list_slow_zones():
+    """Active Right Whale Slow Zones (voluntary DMAs).
+
+    Small ephemeral dataset (≤10 zones). Returns all zones
+    with an ``is_expired`` flag. Re-run the download script
+    periodically to refresh the data.
+    """
+    rows = zone_svc.get_slow_zones()
+    data = [SlowZone(**r) for r in rows]
+    return SlowZoneListResponse(total=len(data), data=data)

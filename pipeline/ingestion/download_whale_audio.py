@@ -148,13 +148,66 @@ INTERNET_ARCHIVE_WATKINS: dict[str, str] = {
 # 15,254 individual MP3 clips identified by numeric recording codes.
 # We use the raw-source.csv metadata (GS column = scientific name,
 # RN column = recording code / filename stem) to select species.
-# Only used for species NOT covered by the "Best Of" zips above.
+#
+# IMPORTANT: the GS column contains compound annotations like
+#   "Orcinus orca  BE7A | Ambient X"
+# We parse the PRIMARY species (text before " | ", stripped) so that
+# noise-tagged variants are grouped with clean clips for the same species.
 WMMSDB_BASE_URL = "https://archive.org/download/wmmsdb"
 WMMSDB_CSV_URL = f"{WMMSDB_BASE_URL}/data/raw-source.csv"
+
+# Critical-pass gap-fill species from WMMSDB.
+# Blue whale and sei whale are under-represented in the Best-Of zips.
+# Sperm whale is listed under its old synonym "Physeter catodon" in WMMSDB.
+# Bowhead (bowhead_whale) is ESA-listed and has 306 clean clips.
 WMMSDB_SPECIES: dict[str, str] = {
-    # species_key → substring to match in the GS (Genus Species) CSV column
+    # species_key → substring to match in the PRIMARY scientific name
     "blue_whale": "musculus",
     "sei_whale": "borealis",
+    "sperm_whale": "catodon",  # Physeter catodon = old synonym
+    "bowhead_whale": "mysticetus",
+}
+
+# Broad-pass species from WMMSDB — non-critical cetaceans only.
+# Ordered by confirmed clip count from audit (highest first).
+# harbor_porpoise / phocoenoides (Dall's) EXCLUDED: ultrasonic clicks
+# (100-150 kHz) are outside our AUDIO_FMAX=8000 Hz mel pipeline.
+# Non-cetaceans (walrus, seals, manatee) are listed in
+# WMMSDB_HARD_NEGATIVE_SPECIES below — used for unknown_cetacean training.
+WMMSDB_BROAD_SPECIES: dict[str, str] = {
+    "spotted_dolphin": "attenuata",
+    "long_finned_pilot_whale": "melaena",
+    "atlantic_white_sided_dolphin": "acutus",
+    "spinner_dolphin": "longirostris",
+    "striped_dolphin": "coeruleoalba",
+    "rissos_dolphin": "griseus",
+    "clymene_dolphin": "clymene",
+    "common_dolphin": "delphis",
+    "atlantic_spotted_dolphin": "frontalis",
+    "short_finned_pilot_whale": "macrorhynchus",
+    "bottlenose_dolphin": "truncatus",
+    "beluga": "leucas",
+    "narwhal": "monoceros",
+    "gray_whale": "robustus",
+}
+
+# Rare-pass species (5–19 WMMSDB clips) — used to build embedding library
+# only, never trained with a softmax head.
+WMMSDB_RARE_SPECIES: dict[str, str] = {
+    "amazon_river_dolphin": "geoffrensis",
+    "heavisides_dolphin": "heavisidii",
+    "tucuxi": "fluviatilis",
+    "melon_headed_whale": "electra",
+    "lagenodelphis_dolphin": "hosei",
+}
+
+# Hard-negative sources — non-cetacean marine mammals with audible
+# sub-8kHz calls. Their clips are mixed into other_cetacean /
+# unknown_cetacean training pools but are never prediction targets.
+WMMSDB_HARD_NEGATIVE_SPECIES: dict[str, str] = {
+    "walrus": "rosmarus",
+    "weddell_seal": "weddelli",
+    "manatee": "manatus",
 }
 
 # ── NOAA SanctSound ─────────────────────────────────────────
@@ -322,22 +375,60 @@ def _extract_audio_from_zip(
     return n_audio
 
 
+def _parse_primary_gs(gs_value: str) -> str:
+    """Extract the primary scientific name from a WMMSDB GS cell.
+
+    The GS column often contains compound annotations, e.g.:
+        "Orcinus orca  BE7A | Ambient X"
+        "Physeter catodon  BA2A | Ship noise  X"
+    We want only the part before " | " (the primary species), stripped of
+    the recording-code suffix (all-caps token).  This ensures that
+    noise-contaminated variants are grouped with clean clips for the same
+    species rather than appearing as separate rows in the species tally.
+
+    Examples
+    --------
+    >>> _parse_primary_gs("Orcinus orca  BE7A | Ambient X")
+    "orcinus orca"
+    >>> _parse_primary_gs("Physeter catodon  BA2A")
+    "physeter catodon"
+    """
+    primary = gs_value.split("|")[0].strip()
+    # Strip trailing recording-code tokens (all-uppercase, no spaces)
+    tokens = primary.split()
+    clean_tokens = [t for t in tokens if not (t.isupper() and len(t) <= 8)]
+    return " ".join(clean_tokens).lower().strip()
+
+
 def download_wmmsdb(
     species: list[str] | None = None,
     output_dir: Path | None = None,
+    species_mapping: dict[str, str] | None = None,
+    hard_negatives_mapping: dict[str, str] | None = None,
 ) -> dict[str, int]:
     """Download individual clips from the full Watkins database on Internet Archive.
 
-    Uses the raw-source.csv metadata to identify recordings by scientific name,
-    then fetches each MP3 individually.  Intended for species not covered by
-    the "Best Of" zip bundles (blue whale, sei whale).
+    Uses the raw-source.csv metadata to identify recordings by scientific name.
+    Parses the PRIMARY species from compound GS annotations (text before \" | \")
+    so noise-tagged variants are correctly grouped with their species.
+
+    Parameters
+    ----------
+    species_mapping :
+        Dict mapping ``species_key → scientific-name substring`` for the
+        primary GS name.  Defaults to ``WMMSDB_SPECIES``.
+    hard_negatives_mapping :
+        Optional additional dict of non-target species whose clips should be
+        downloaded into an ``_hard_negatives/`` subdirectory of ``output_dir``
+        for use in ``other_cetacean`` / ``unknown_cetacean`` training.
 
     Returns dict of {species: n_files_downloaded}.
     """
     import csv as csv_mod
 
     output_dir = output_dir or WHALE_AUDIO_RAW_DIR
-    species = species or list(WMMSDB_SPECIES.keys())
+    mapping = species_mapping or WMMSDB_SPECIES
+    species = species or list(mapping.keys())
     stats: dict[str, int] = {}
 
     # Download the metadata CSV once
@@ -353,75 +444,120 @@ def download_wmmsdb(
     rows = list(reader)
     log.info("WMMSDB metadata: %d records loaded", len(rows))
 
-    for sp in species:
-        search_term = WMMSDB_SPECIES.get(sp)
-        if not search_term:
-            log.info("No WMMSDB mapping for '%s' — skipping", sp)
-            stats[sp] = 0
-            continue
+    # Build a list of (primary_gs, recording_id) pairs once for efficiency
+    parsed_rows: list[tuple[str, str]] = []
+    for r in rows:
+        gs_raw = r.get("GS", "")
+        rn = r.get("RN", "").strip()
+        if rn:
+            parsed_rows.append((_parse_primary_gs(gs_raw), rn))
 
-        sp_dir = output_dir / sp / "watkins"
-        sp_dir.mkdir(parents=True, exist_ok=True)
-
-        # Check if we already have watkins files (from Best-Of zips or previous run)
-        existing = [
-            f for f in sp_dir.iterdir() if f.suffix.lower() in _AUDIO_EXTENSIONS
-        ]
-        if existing:
-            log.info(
-                "WMMSDB/%s: %d files already present -- skipping",
-                sp,
-                len(existing),
-            )
-            stats[sp] = len(existing)
-            continue
-
-        # Find matching recording IDs
-        rec_ids = [
-            r["RN"]
-            for r in rows
-            if search_term.lower() in r.get("GS", "").lower()
-            and r.get("RN", "").strip()
-        ]
-        log.info(
-            "WMMSDB/%s: found %d recordings matching '%s'",
-            sp,
-            len(rec_ids),
-            search_term,
-        )
-
-        n_downloaded = 0
-        for rid in rec_ids:
-            mp3_url = f"{WMMSDB_BASE_URL}/{rid}.mp3"
-            target = sp_dir / f"{rid}.mp3"
-            if target.exists():
-                n_downloaded += 1
+    def _download_species_set(
+        sp_mapping: dict[str, str],
+        sp_list: list[str],
+        base_dir: Path,
+        label: str,
+    ) -> dict[str, int]:
+        result: dict[str, int] = {}
+        for sp in sp_list:
+            search_term = sp_mapping.get(sp)
+            if not search_term:
+                log.info("No WMMSDB mapping for '%s' — skipping", sp)
+                result[sp] = 0
                 continue
-            try:
-                file_resp = requests.get(
-                    mp3_url,
-                    timeout=HTTP_TIMEOUT,
-                    allow_redirects=True,
-                )
-                file_resp.raise_for_status()
-                # Verify we got audio, not an error page
-                ct = file_resp.headers.get("Content-Type", "")
-                if "html" in ct.lower():
-                    log.warning("WMMSDB/%s: %s returned HTML — skipping", sp, rid)
-                    continue
-                target.write_bytes(file_resp.content)
-                n_downloaded += 1
-                log.info(
-                    "WMMSDB/%s: downloaded %s (%.0f KB)",
-                    sp,
-                    rid,
-                    len(file_resp.content) / 1024,
-                )
-            except requests.RequestException as exc:
-                log.warning("WMMSDB/%s: failed to download %s: %s", sp, rid, exc)
 
-        stats[sp] = n_downloaded
-        log.info("WMMSDB/%s: %d audio files ready", sp, n_downloaded)
+            sp_dir = base_dir / sp / "watkins"
+            sp_dir.mkdir(parents=True, exist_ok=True)
+
+            existing = [
+                f for f in sp_dir.iterdir() if f.suffix.lower() in _AUDIO_EXTENSIONS
+            ]
+            if existing:
+                log.info(
+                    "%s/%s: %d files already present — skipping",
+                    label,
+                    sp,
+                    len(existing),
+                )
+                result[sp] = len(existing)
+                continue
+
+            # Match on primary GS (parsed, lowercased)
+            rec_ids = [
+                rn
+                for primary_gs, rn in parsed_rows
+                if search_term.lower() in primary_gs
+            ]
+            log.info(
+                "%s/%s: found %d recordings matching '%s' in primary GS",
+                label,
+                sp,
+                len(rec_ids),
+                search_term,
+            )
+
+            n_downloaded = 0
+            for rid in rec_ids:
+                mp3_url = f"{WMMSDB_BASE_URL}/{rid}.mp3"
+                target = sp_dir / f"{rid}.mp3"
+                if target.exists():
+                    n_downloaded += 1
+                    continue
+                try:
+                    file_resp = requests.get(
+                        mp3_url,
+                        timeout=HTTP_TIMEOUT,
+                        allow_redirects=True,
+                    )
+                    file_resp.raise_for_status()
+                    ct = file_resp.headers.get("Content-Type", "")
+                    if "html" in ct.lower():
+                        log.warning(
+                            "%s/%s: %s returned HTML — skipping",
+                            label,
+                            sp,
+                            rid,
+                        )
+                        continue
+                    target.write_bytes(file_resp.content)
+                    n_downloaded += 1
+                    log.info(
+                        "%s/%s: downloaded %s (%.0f KB)",
+                        label,
+                        sp,
+                        rid,
+                        len(file_resp.content) / 1024,
+                    )
+                except requests.RequestException as exc:
+                    log.warning(
+                        "%s/%s: failed to download %s: %s",
+                        label,
+                        sp,
+                        rid,
+                        exc,
+                    )
+
+            result[sp] = n_downloaded
+            log.info("%s/%s: %d audio files ready", label, sp, n_downloaded)
+        return result
+
+    # ── Primary species ──────────────────────────────────────
+    stats.update(_download_species_set(mapping, species, output_dir, "WMMSDB"))
+
+    # ── Hard negatives ───────────────────────────────────────
+    if hard_negatives_mapping:
+        neg_dir = output_dir / "_hard_negatives"
+        neg_dir.mkdir(parents=True, exist_ok=True)
+        hn_stats = _download_species_set(
+            hard_negatives_mapping,
+            list(hard_negatives_mapping.keys()),
+            neg_dir,
+            "WMMSDB/hard_neg",
+        )
+        log.info(
+            "Hard negatives: %d species downloaded",
+            sum(1 for v in hn_stats.values() if v > 0),
+        )
 
     return stats
 
@@ -669,6 +805,18 @@ def main():
         action="store_true",
         help="Skip downloads, just rebuild the training manifest from existing files",
     )
+    parser.add_argument(
+        "--stage",
+        choices=["critical", "broad", "rare"],
+        default="critical",
+        help=(
+            "Download stage: 'critical' fetches the 9 ESA-listed large-whale "
+            "species incl. bowhead (default). 'broad' fetches ~14 non-critical "
+            "cetaceans for the second-pass classifier. 'rare' downloads rare "
+            "species for embedding library plus hard negatives "
+            "(walrus/seal/manatee) for other_cetacean training."
+        ),
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -695,7 +843,19 @@ def main():
         log.info("=" * 60)
         log.info("WMMSDB — FULL WATKINS DATABASE (gap-fill)")
         log.info("=" * 60)
-        stats = download_wmmsdb(species=args.species)
+        if args.stage == "broad":
+            wmmsdb_mapping = WMMSDB_BROAD_SPECIES
+        elif args.stage == "rare":
+            wmmsdb_mapping = WMMSDB_RARE_SPECIES
+        else:
+            wmmsdb_mapping = WMMSDB_SPECIES
+        hard_negs = WMMSDB_HARD_NEGATIVE_SPECIES if args.stage == "rare" else None
+        wmmsdb_species = args.species or list(wmmsdb_mapping.keys())
+        stats = download_wmmsdb(
+            species=wmmsdb_species,
+            species_mapping=wmmsdb_mapping,
+            hard_negatives_mapping=hard_negs,
+        )
         for sp, n in stats.items():
             log.info("  %-20s %d files", sp, n)
 

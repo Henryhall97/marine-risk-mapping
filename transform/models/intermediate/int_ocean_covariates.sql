@@ -1,6 +1,13 @@
 -- Intermediate model: ocean covariates per hex cell (annual mean)
 -- Spatially joins ocean environmental data to the H3 hex grid
 -- using nearest-neighbour matching.
+
+{{ config(
+    indexes=[
+        {'columns': ['h3_cell']},
+    ]
+) }}
+
 --
 -- The source data is now seasonal (4 seasons per grid point).
 -- This model averages across all 4 seasons to produce a single

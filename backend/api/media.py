@@ -11,10 +11,12 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
+from backend.config import PROJECT_ROOT
+
 router = APIRouter(prefix="/media", tags=["media"])
 
-_UPLOAD_ROOT = Path("data/uploads/submissions")
-_AVATAR_ROOT = Path("data/uploads/avatars")
+_UPLOAD_ROOT = PROJECT_ROOT / "data/uploads/submissions"
+_AVATAR_ROOT = PROJECT_ROOT / "data/uploads/avatars"
 
 _PHOTO_MEDIA_TYPES: dict[str, str] = {
     ".jpg": "image/jpeg",
@@ -72,6 +74,40 @@ def get_audio(submission_id: str) -> FileResponse:
         media_type=media_type,
         headers={"Cache-Control": "public, max-age=86400"},
     )
+
+
+_EVIDENCE_ROOT = PROJECT_ROOT / "data/uploads/credentials"
+_EVIDENCE_MEDIA_TYPES: dict[str, str] = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".pdf": "application/pdf",
+    ".doc": "application/msword",
+    ".docx": (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    ),
+}
+
+
+@router.get("/credential-evidence/{credential_id}")
+def get_credential_evidence(credential_id: int) -> FileResponse:
+    """Serve the evidence file for a credential."""
+    folder = _EVIDENCE_ROOT / str(credential_id)
+    if not folder.is_dir():
+        raise HTTPException(404, "No evidence file")
+
+    for child in folder.iterdir():
+        if child.stem == "evidence":
+            ext = child.suffix.lower()
+            mt = _EVIDENCE_MEDIA_TYPES.get(ext, "application/octet-stream")
+            return FileResponse(
+                child,
+                media_type=mt,
+                headers={"Cache-Control": "public, max-age=3600"},
+            )
+
+    raise HTTPException(404, "No evidence file")
 
 
 @router.get("/avatar/{user_id}")

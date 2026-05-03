@@ -1,6 +1,6 @@
 # 🐋 Marine Risk Mapping Platform
 
-This is a platform for predicting and displaying areas of high risk for marine life on the US Coast.
+This is a platform for predicting and displaying areas of high risk for marine life across the study area (lat 2°S–52°N, lon 180°W–59°W — CONUS, Alaska, Hawaii, Caribbean, and adjacent waters).
 
 ## Overview
 
@@ -91,7 +91,7 @@ Next.js (React) frontend with Deck.gl for map rendering. Users see an interactiv
 
 ## 🤖 Machine Learning Models
 
-Twelve XGBoost binary classifiers predict whale presence and collision risk across all US coastal waters, using spatial block cross-validation (H3 resolution 2, ~158 km blocks, 5 folds) and MLflow experiment tracking.
+Twelve XGBoost binary classifiers predict whale presence and collision risk across the study area (lat 2°S–52°N, lon 180°W–59°W), using spatial block cross-validation (H3 resolution 2, ~158 km blocks, 5 folds) and MLflow experiment tracking.
 
 ### Model Suite
 
@@ -111,12 +111,23 @@ Twelve XGBoost binary classifiers predict whale presence and collision risk acro
 | ISDM Humpback | 272K | 50/50 | 0.971 ± 0.001 | 0.971 ± 0.000 | Nisi et al. cross-validation |
 | ISDM Sperm | 47K | 50/50 | 0.940 ± 0.002 | 0.942 ± 0.002 | Nisi et al. cross-validation |
 
+### ISDM+SDM Ensemble for Collision Risk
+
+The ML-enhanced risk mart (`fct_collision_risk_ml`) ensembles two complementary model families for whale habitat predictions:
+
+- **4 shared species** (blue, fin, humpback, sperm): `avg(ISDM, SDM)` — ISDM trained on Nisi et al. expert data, SDM trained on OBIS observations.
+- **2 SDM-only species** (right whale, minke): SDM prediction used directly — ISDM does not cover these species.
+- **Composites**: `any_whale_prob = 1 − ∏(1 − Pᵢ)`, `max_whale_prob`, `mean_whale_prob` over all 6 ensembled species.
+
+The same ensemble methodology is used for **climate-projected risk** (`fct_collision_risk_ml_projected`), which scores under CMIP6 scenarios (SSP2-4.5/SSP5-8.5) for 2030s–2080s. The projected mart uses 6 sub-scores (no proximity — sighting/strike locations don't exist for future decades), with weights renormalised from the current 7-sub-score mart.
+
 ### Key Design Decisions
 
 - **Spatial block CV:** H3 parent cells at resolution 2 (~158 km edge) prevent spatial autocorrelation leakage. All 4 seasons for a given cell always land in the same fold.
 - **No traffic in SDMs:** Traffic features excluded from whale SDMs to avoid detection bias (survey effort correlates with shipping lanes).
 - **SHAP explainability:** TreeExplainer with XGBoost 3.x compatibility patch generates per-feature importance and interaction effects.
 - **ISDM grid scoring:** Nisi et al. models scored across our full H3 grid (7.3M cell-seasons) for independent validation.
+- **Consistent ensemble methodology:** Both current and projected risk use ISDM+SDM ensemble, enabling clean delta comparisons where risk changes are attributable to climate signal rather than model differences.
 
 ### ML Scripts
 
@@ -197,7 +208,23 @@ uv run python pipeline/analysis/train_photo_classifier.py --tune
 
 # Evaluate an existing model
 uv run python pipeline/analysis/train_photo_classifier.py --evaluate-only
+
+# Train the ArcFace alternative locally (Kaggle 1st-place style)
+uv run python pipeline/analysis/train_arcface_classifier.py
+
+# Launch ArcFace training on an AWS / EC2 VM over SSH
+uv run python pipeline/analysis/train_arcface_remote.py \
+      --host ec2-xx-xx-xx-xx.compute.amazonaws.com \
+      --user ubuntu \
+      --identity-file ~/.ssh/marine-risk.pem \
+      --sync-photos \
+      --download-artifacts
 ```
+
+The remote launcher syncs `pipeline/`, `pyproject.toml`, `uv.lock`, and
+optionally `data/raw/whale_photos/` to the VM via `rsync`, installs `uv`
+remotely if needed, runs `uv sync`, executes the ArcFace trainer, and can
+pull the trained model directory back into `data/processed/ml/`.
 
 ## 📊 Data Sources
 
@@ -215,6 +242,10 @@ uv run python pipeline/analysis/train_photo_classifier.py --evaluate-only
 | Watkins Sound Database | [WHOI](https://whoicf2.whoi.edu/science/B/whalesounds/) | WAV/AIF | ~15K whale vocalisation clips across 8 target species |
 | Zenodo Whale Audio | [Zenodo](https://zenodo.org/) | WAV | Annotated recordings: blue (3624145), humpback (4293955), fin (8147524) |
 | Happywhale Photos | [Kaggle](https://www.kaggle.com/c/happy-whale-and-dolphin) | JPG + CSV | ~51K whale/dolphin photos; filtered to 8 target species for classification |
+| Cetacean BIAs | NOAA CetMap ArcGIS FeatureServer | GeoJSON | 85 Biologically Important Areas (feeding, migratory, reproductive) |
+| Whale Critical Habitat | NMFS ESA MapServer | GeoJSON | 31 designated/proposed critical habitat polygons for ESA-listed whale species |
+| Shipping Lanes | NOAA Coast Survey (ENC) | GeoJSON | 300 shipping lanes, TSS, and precautionary areas |
+| Right Whale Slow Zones | NOAA Fisheries (web scrape) | GeoJSON | Active Dynamic Management Areas (DMAs) with speed restrictions |
 
 ## � Manual Data Prerequisites
 
@@ -259,7 +290,7 @@ uv run ruff format .
 ```
 marine_risk_mapping/
 ├── pipeline/              # Python ingestion & validation code
-│   ├── ingestion/         # Download scripts (AIS, cetaceans, MPA, bathymetry, whale audio)
+│   ├── ingestion/         # Download scripts (AIS, cetaceans, MPA, bathymetry, whale audio, BIA, critical habitat, shipping lanes, slow zones)
 │   ├── database/          # PostGIS schema & data loading, DuckDB views
 │   ├── aggregation/       # AIS H3 aggregation (DuckDB two-pass pipeline)
 │   ├── audio/             # Whale audio classification (preprocessing + classifier)
@@ -290,9 +321,9 @@ marine_risk_mapping/
 
 ## 🔌 Backend API
 
-FastAPI REST API with 45 endpoints across 12 route modules, serving collision risk data,
-species distributions, vessel traffic, ML classifications, sighting reports, and community
-features from the dbt marts in PostGIS.
+FastAPI REST API with 72 endpoints across 14 route modules, serving collision risk data,
+species distributions, vessel traffic, ML classifications, sighting reports, vessel violation
+reports, and community features from the dbt marts in PostGIS.
 
 ### Quick start
 
@@ -305,16 +336,19 @@ uv run uvicorn backend.app:app --reload --port 8000
 
 | Group | Endpoints | Description |
 |-------|-----------|-------------|
-| **Risk** | 9 | Zones, stats, cell detail, seasonal, ML-enhanced, breakdown, compare |
-| **Layers** | 10 | Bathymetry, ocean, whale predictions, MPA, speed zones, proximity, Nisi, cetacean/strike/traffic density |
-| **Species** | 3 | List, per-species risk, seasonal density |
+| **Health** | 1 | DB connectivity check |
+| **Risk** | 10 | Zones, stats, cell detail, seasonal, ML-enhanced ×3, breakdown, compare |
+| **Layers** | 12 | Bathymetry, ocean, whale/SDM predictions, MPA, speed zones, proximity, Nisi, cetacean/strike/traffic density, cell context |
+| **Species** | 4 | List, per-species risk, seasonal density, crosswalk (77 taxa) |
 | **Traffic** | 2 | Monthly + seasonal aggregates |
 | **Classification** | 2 | Photo (EfficientNet-B4) + Audio (XGBoost/CNN) upload |
 | **Sightings** | 1 | Combined photo+audio+risk report |
-| **Zones** | 3 | GeoJSON geometries for SMAs, proposed zones, MPAs |
-| **Auth** | 6 | Register, login, profile, reputation, credentials |
-| **Submissions** | 6 | CRUD, community verification, public feed |
+| **Zones** | 7 | GeoJSON geometries for SMAs, proposed zones, MPAs, BIAs, critical habitat, shipping lanes, slow zones |
+| **Auth** | 9 | Register, login, profile, reputation, credentials, user management |
+| **Submissions** | 14 | CRUD, community verification, public feed, user submissions |
 | **Macro** | 2 | Coast-wide H3 res-4 overview, bathymetry contours |
+| **Violations** | 5 | Vessel violation reports and tracking |
+| **Media** | 3 | Media upload and management |
 
 ### Key patterns
 - JWT authentication with bcrypt password hashing
@@ -344,20 +378,28 @@ npm run dev          # http://localhost:3000 (requires backend on port 8000)
 | **Zoomed out** | `HeatmapLayer` | `macro_risk_overview` (H3 res-4) | 14,176 per season |
 | **Zoomed in** | `H3HexagonLayer` | Full-detail API endpoints (H3 res-7) | Up to 5,000 per viewport |
 
-### 13 switchable layers
+### 14 switchable layers + 8 zone overlays
 Risk (standard + ML), cetacean density, strike density, whale predictions (ISDM),
+SDM predictions (OBIS), SDM projections (CMIP6 climate scenarios),
 bathymetry, ocean covariates, MPA coverage, speed zones, proximity, Nisi reference,
 traffic density (with 6 sub-metrics), protection gap.
+
+**Zone overlays** (GeoJSON): Active SMAs, proposed speed zones, MPAs, BIAs,
+critical habitat, shipping lanes, slow zones (DMAs), depth contours.
 
 ### Traffic density sub-metrics
 Six switchable danger metrics with distinct color ramps: vessel density, speed lethality,
 high-speed fraction, draft risk, night traffic ratio, commercial vessel count.
 Available in both overview heatmap and detail hex view.
 
-### 9 page routes
-Landing (`/`), interactive map (`/map`), sighting report (`/report`),
-classification (`/classify`), community feed (`/community`),
-login, register, profile, submissions management.
+### 24 page routes
+Landing (`/`), interactive map (`/map`), insights (5 sub-pages: overview, researchers,
+captains, conservation, policy, ports), species crosswalk (`/species`),
+classification with runner-up predictions (`/classify`),
+sighting report with species ID wizard (`/report`), vessel interaction report (`/report-vessel`),
+community feed + events (`/community`), event detail & join, auth (`/auth`),
+user profiles (`/users/[id]`), vessel detail (`/boat/[id]`), submissions,
+verification queue (`/verify`), attribution, privacy.
 ## �📋 Project Status
 
 ### Phase 1: Project Setup
@@ -386,6 +428,7 @@ login, register, profile, submissions management.
 | 2.9 | Download Nisi et al. 2024 data (risk grid, shipping density, ISDM training) | ✅ |
 | 2.10 | Download Proposed Right Whale Speed Zone polygons | ✅ |
 | 2.11 | Load ship strikes + Nisi data + speed zones into PostGIS (5 new tables) | ✅ |
+| 2.12 | Download BIAs, critical habitat, shipping lanes, slow zones (4 new spatial layers) | ✅ |
 
 ### Phase 3: Database Setup
 
@@ -476,15 +519,19 @@ login, register, profile, submissions management.
 | 8.1 | Set up FastAPI project structure (app, config, lifespan, CORS) | ✅ |
 | 8.2 | Build risk score endpoints (9 routes: zones, stats, detail, seasonal, ML×3, breakdown, compare) | ✅ |
 | 8.3 | Build species + traffic + photo + audio endpoints (8 routes) | ✅ |
-| 8.4 | Pydantic models + service layer + DB pool (12 model modules, 14 service modules) | ✅ |
-| 8.5 | Backend pytest suite (223 tests, all passing) | ✅ |
+| 8.4 | Pydantic models + service layer + DB pool (13 model modules, 14 service modules) | ✅ |
+| 8.5 | Backend pytest suite (226 tests, all passing) | ✅ |
 | 8.6 | Spatial layer overlays (10 endpoints: bathymetry, ocean, whale predictions, MPA, speed zones, proximity, Nisi, cetacean density, strike density, traffic density) | ✅ |
 | 8.7 | Sighting report + zone geometry endpoints (4 routes) | ✅ |
 | 8.8 | JWT authentication (register, login, profile, reputation, credentials) | ✅ |
 | 8.9 | Community submissions (CRUD, verification, public feed) | ✅ |
 | 8.10 | Macro overview (coast-wide H3 res-4 pre-aggregated data + bathymetry contours) | ✅ |
-| 8.11 | Add rate limiting | ⬜ |
-| 8.12 | Write API documentation | ⬜ |
+| 8.11 | Spatial zone API endpoints (BIAs, critical habitat, shipping lanes, slow zones) | ✅ |
+| 8.12 | Vessel violation endpoints (5 routes) | ✅ |
+| 8.13 | Media upload endpoints (3 routes) | ✅ |
+| 8.14 | Species crosswalk endpoint + cell context endpoint | ✅ |
+| 8.15 | Add rate limiting | ⬜ |
+| 8.13 | Write API documentation | ⬜ |
 
 ### Phase 9: Frontend Dashboard
 
@@ -502,7 +549,14 @@ login, register, profile, submissions management.
 | 9.10 | Community feed page (verified public sightings) | ✅ |
 | 9.11 | Traffic density layer with 6 switchable danger metrics | ✅ |
 | 9.12 | Macro overview heatmap with per-metric granular data | ✅ |
-| 9.13 | Style and polish UI | ⬜ |
+| 9.13 | Spatial zone overlays (BIAs, critical habitat, shipping lanes, slow zones) | ✅ |
+| 9.14 | Species crosswalk page with model coverage matrix + search + filter | ✅ |
+| 9.15 | CellDetail enrichment (expandable metrics, species/habitat context, ISDM predictions) | ✅ |
+| 9.16 | Season UX (auto-refresh on change, hide selector for non-seasonal layers) | ✅ |
+| 9.17 | Insights report page with risk analytics | ✅ |
+| 9.18 | Vessel interaction report page | ✅ |
+| 9.19 | 3D animated ocean scene (WebGL: whales, stars, god rays, shooting stars, bubbles) | ✅ |
+| 9.20 | Style and polish UI | ⬜ |
 
 ### Phase 10: Testing
 

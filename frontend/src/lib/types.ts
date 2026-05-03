@@ -13,12 +13,13 @@ export interface BBox {
 
 /** Selectable data layer identifiers. */
 export type LayerType =
+  | "none"
   | "risk"
   | "risk_ml"
   | "bathymetry"
   | "ocean"
   | "whale_predictions"
-  | "sdm_predictions"
+  | "sdm"
   | "cetacean_density"
   | "strike_density"
   | "traffic_density";
@@ -37,7 +38,18 @@ export type IsdmSpecies =
   | "blue_whale"
   | "fin_whale"
   | "humpback_whale"
-  | "sperm_whale";
+  | "sperm_whale"
+  | "right_whale"
+  | "minke_whale";
+
+/** SDM time period: current observations or future climate projection decade. */
+export type SdmTimePeriod = "current" | "2030s" | "2040s" | "2060s" | "2080s";
+
+/** Climate scenario for SDM projections. */
+export type ClimateScenario = "ssp245" | "ssp585";
+
+/** Projection display mode: absolute probabilities or change vs baseline. */
+export type ProjectionMode = "absolute" | "change";
 
 /** Traffic danger metric for colouring hex cells. */
 export type TrafficMetric =
@@ -48,11 +60,24 @@ export type TrafficMetric =
   | "night_traffic"
   | "commercial";
 
+/** Selectable metric within the Ocean layer. */
+export type OceanMetric =
+  | "sst"
+  | "sst_sd"
+  | "mld"
+  | "sla"
+  | "pp_upper_200m";
+
 /** Which polygon overlay types are visible. */
 export interface OverlayToggles {
   activeSMAs: boolean;
   proposedZones: boolean;
   mpas: boolean;
+  bias: boolean;
+  criticalHabitat: boolean;
+  shippingLanes: boolean;
+  slowZones: boolean;
+  communitySightings: boolean;
 }
 
 /* ── Row types returned from API (after h3 enrichment) ───── */
@@ -108,7 +133,22 @@ export interface SdmPredictionCell extends HexCell {
   sdm_fin_whale: number;
   sdm_humpback_whale: number;
   sdm_sperm_whale: number;
+  sdm_right_whale: number;
+  sdm_minke_whale: number;
   any_whale_prob_joint: number;
+}
+
+export interface SdmProjectionCell extends HexCell {
+  season: string;
+  scenario: string;
+  decade: string;
+  sdm_any_whale: number;
+  sdm_blue_whale: number;
+  sdm_fin_whale: number;
+  sdm_humpback_whale: number;
+  sdm_sperm_whale: number;
+  sdm_right_whale: number;
+  sdm_minke_whale: number;
 }
 
 export interface SpeedZone {
@@ -131,6 +171,36 @@ export interface MPA {
   geometry: GeoJSON.Geometry;
 }
 
+export interface BIA {
+  bia_name: string | null;
+  cmn_name: string | null;
+  bia_type: string | null;
+  bia_months: string | null;
+  geometry: GeoJSON.Geometry;
+}
+
+export interface CriticalHabitatZone {
+  species_label: string;
+  cmn_name: string | null;
+  ch_status: string | null;
+  is_proposed: boolean;
+  geometry: GeoJSON.Geometry;
+}
+
+export interface ShippingLane {
+  zone_type: string;
+  name: string | null;
+  geometry: GeoJSON.Geometry;
+}
+
+export interface SlowZone {
+  zone_name: string;
+  effective_start: string | null;
+  effective_end: string | null;
+  is_expired: boolean | null;
+  geometry: GeoJSON.Geometry;
+}
+
 /** Paginated API response wrapper. */
 export interface PaginatedResponse<T> {
   total: number;
@@ -138,3 +208,32 @@ export interface PaginatedResponse<T> {
   limit: number;
   data: T[];
 }
+
+/* ── Community sightings map types ───────────────────────── */
+
+/** Lightweight sighting point from map-sightings endpoint. */
+export interface MapSighting {
+  id: string;
+  lat: number;
+  lon: number;
+  species: string | null;
+  species_guess: string | null;
+  verification_status: string;
+  community_agree: number;
+  community_disagree: number;
+  has_photo: boolean;
+  has_audio: boolean;
+  interaction_type: string | null;
+  created_at: string;
+}
+
+/** How to colour sighting markers. */
+export type SightingColorBy = "species" | "verification" | "interaction";
+
+/** Verification status filter for sighting overlay. */
+export type SightingStatusFilter =
+  | "all"
+  | "verified"
+  | "community_verified"
+  | "unverified"
+  | "disputed";

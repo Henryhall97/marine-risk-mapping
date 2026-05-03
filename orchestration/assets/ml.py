@@ -11,6 +11,16 @@ Asset lineage (SDM family):
                                                      --> isdm_model
     {strike_model, sdm_model} --> model_comparison
 
+Asset lineage (Prediction loading):
+    isdm_model          --> ml_predictions_loaded  --> dbt int_ml_whale_predictions
+    sdm_seasonal_model  --> sdm_predictions_loaded --> dbt int_sdm_whale_predictions
+
+Asset lineage (Climate projections):
+    sdm_seasonal_model + raw_cmip6_projections --> sdm_future_scores
+        --> sdm_projections_loaded --> dbt fct_collision_risk_ml_projected
+    isdm_model + raw_cmip6_projections --> isdm_future_scores
+        --> isdm_projections_loaded --> dbt fct_collision_risk_ml_projected
+
 Asset lineage (Audio family):
     raw_whale_audio --> audio_xgboost_model
                     --> audio_cnn_model
@@ -25,9 +35,11 @@ from dagster import AssetExecutionContext, MaterializeResult, asset
 
 from orchestration.constants import (
     AUDIO_MODEL_DIR,
+    ISDM_PROJECTIONS_DIR,
     ML_DIR,
     PHOTO_MODEL_DIR,
     PROJECT_ROOT,
+    SDM_PROJECTIONS_DIR,
     WHALE_AUDIO_RAW_DIR,
     WHALE_PHOTO_RAW_DIR,
 )
@@ -224,6 +236,154 @@ def isdm_model(
         "n_prediction_files": n_pred_files,
     }
     return MaterializeResult(metadata=metadata)
+
+
+# ═══════════════════════════════════════════════════════════
+# ML prediction loading (Python → PostGIS)
+# ═══════════════════════════════════════════════════════════
+
+
+@asset(
+    group_name="ml",
+    kinds={"python", "postgres"},
+    deps=["isdm_model"],
+    description=(
+        "Load ISDM grid-scored predictions (4 species × 4 seasons "
+        "× 1.8M cells) into PostGIS ml_whale_predictions table."
+    ),
+)
+def ml_predictions_loaded(
+    context: AssetExecutionContext,
+) -> MaterializeResult:
+    """Load ISDM predictions parquets into PostGIS."""
+    _run_script(
+        context,
+        "pipeline/database/load_ml_predictions.py",
+    )
+    return MaterializeResult(
+        metadata={"table": "ml_whale_predictions"},
+    )
+
+
+@asset(
+    group_name="ml",
+    kinds={"python", "postgres"},
+    deps=["sdm_seasonal_model"],
+    description=(
+        "Load SDM out-of-fold predictions (7 species × 4 seasons "
+        "× 1.8M cells) into PostGIS ml_sdm_predictions table."
+    ),
+)
+def sdm_predictions_loaded(
+    context: AssetExecutionContext,
+) -> MaterializeResult:
+    """Load SDM OOF predictions parquets into PostGIS."""
+    _run_script(
+        context,
+        "pipeline/database/load_sdm_predictions.py",
+    )
+    return MaterializeResult(
+        metadata={"table": "ml_sdm_predictions"},
+    )
+
+
+# ═══════════════════════════════════════════════════════════
+# Climate projection scoring
+# ═══════════════════════════════════════════════════════════
+
+
+@asset(
+    group_name="ml",
+    kinds={"python", "xgboost"},
+    deps=["sdm_seasonal_model", "raw_cmip6_projections"],
+    description=(
+        "Score trained seasonal SDMs on CMIP6-projected covariates. "
+        "Produces parquets for 7 species × 2 scenarios × 4 decades."
+    ),
+)
+def sdm_future_scores(
+    context: AssetExecutionContext,
+) -> MaterializeResult:
+    """Score SDMs under projected future ocean conditions."""
+    _run_script(
+        context,
+        "pipeline/analysis/score_future_sdm.py",
+        ["--force"],
+    )
+    out_dir = SDM_PROJECTIONS_DIR
+    n_files = len(list(out_dir.glob("*.parquet"))) if out_dir.exists() else 0
+    return MaterializeResult(
+        metadata={"n_projection_files": n_files},
+    )
+
+
+@asset(
+    group_name="ml",
+    kinds={"python", "xgboost"},
+    deps=["isdm_model", "raw_cmip6_projections"],
+    description=(
+        "Score trained ISDM models on CMIP6-projected covariates. "
+        "Produces parquets for 4 species × 2 scenarios × 4 decades."
+    ),
+)
+def isdm_future_scores(
+    context: AssetExecutionContext,
+) -> MaterializeResult:
+    """Score ISDMs under projected future ocean conditions."""
+    _run_script(
+        context,
+        "pipeline/analysis/score_future_isdm.py",
+        ["--force"],
+    )
+    out_dir = ISDM_PROJECTIONS_DIR
+    n_files = len(list(out_dir.glob("*.parquet"))) if out_dir.exists() else 0
+    return MaterializeResult(
+        metadata={"n_projection_files": n_files},
+    )
+
+
+@asset(
+    group_name="ml",
+    kinds={"python", "postgres"},
+    deps=["sdm_future_scores"],
+    description=(
+        "Load CMIP6-projected SDM predictions into PostGIS "
+        "whale_sdm_projections table (58M rows)."
+    ),
+)
+def sdm_projections_loaded(
+    context: AssetExecutionContext,
+) -> MaterializeResult:
+    """Load projected SDM parquets into PostGIS."""
+    _run_script(
+        context,
+        "pipeline/database/load_sdm_projections.py",
+    )
+    return MaterializeResult(
+        metadata={"table": "whale_sdm_projections"},
+    )
+
+
+@asset(
+    group_name="ml",
+    kinds={"python", "postgres"},
+    deps=["isdm_future_scores"],
+    description=(
+        "Load CMIP6-projected ISDM predictions into PostGIS "
+        "whale_isdm_projections table."
+    ),
+)
+def isdm_projections_loaded(
+    context: AssetExecutionContext,
+) -> MaterializeResult:
+    """Load projected ISDM parquets into PostGIS."""
+    _run_script(
+        context,
+        "pipeline/database/load_isdm_projections.py",
+    )
+    return MaterializeResult(
+        metadata={"table": "whale_isdm_projections"},
+    )
 
 
 # ═══════════════════════════════════════════════════════════

@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from backend.models.photo import (
     PhotoClassificationResponse,
@@ -17,6 +19,7 @@ from backend.models.photo import (
 from backend.services import photo as photo_svc
 
 router = APIRouter(prefix="/photo", tags=["photo"])
+limiter = Limiter(key_func=get_remote_address)
 logger = logging.getLogger(__name__)
 
 _ALLOWED_CONTENT_TYPES = {
@@ -29,7 +32,9 @@ _MAX_FILE_SIZE_MB = 20
 
 
 @router.post("/classify", response_model=PhotoClassificationResponse)
-async def classify_photo(
+@limiter.limit("10/minute")
+def classify_photo(
+    request: Request,
     file: UploadFile = File(  # noqa: B008
         ..., description="Whale photograph (JPEG/PNG/WebP/TIFF)"
     ),
@@ -62,7 +67,7 @@ async def classify_photo(
         )
 
     # Read file bytes and check size
-    image_bytes = await file.read()
+    image_bytes = file.file.read()
     size_mb = len(image_bytes) / (1024 * 1024)
     if size_mb > _MAX_FILE_SIZE_MB:
         raise HTTPException(

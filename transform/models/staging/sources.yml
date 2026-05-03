@@ -94,7 +94,7 @@ sources:
       - name: ocean_mask
         description: >
           Natural Earth 1:10m ocean polygons (ne_10m_ocean) clipped to
-          the US coastal bounding box. Used by int_bathymetry to flag
+          the study bounding box. Used by int_bathymetry to flag
           H3 cells as ocean vs inland (Great Lakes, rivers, etc.).
           Replaces the naive depth_m >= 0 heuristic.
         columns:
@@ -220,8 +220,8 @@ sources:
 
       - name: ocean_covariates
         description: >
-          Seasonal ocean environmental covariates for US coastal
-          waters. SST, MLD, SLA, primary productivity — climatological
+          Seasonal ocean environmental covariates for the study area.
+          SST, MLD, SLA, primary productivity — climatological
           means computed per season from 2019–2024 monthly data.
           Resolution: 0.25°, grain: (lat, lon, season).
         columns:
@@ -241,6 +241,37 @@ sources:
             description: "Sea level anomaly (m)"
           - name: pp_upper_200m
             description: "Primary productivity upper 200m (mg C/m²/day)"
+          - name: geom
+            description: "PostGIS POINT geometry (SRID 4326)"
+
+      - name: cmip6_ocean_covariates
+        description: >
+          CMIP6 climate-projected ocean environmental covariates.
+          SST, MLD, SLA, PP projected under SSP2-4.5 and SSP5-8.5
+          for 2030s–2080s.  Produced by download_cmip6_projections.py
+          from baseline + CMIP6 deltas.  Resolution: ~0.25°,
+          grain: (lat, lon, season, scenario, decade).  ~3.5M rows.
+        columns:
+          - name: lat
+            description: "Latitude WGS-84"
+          - name: lon
+            description: "Longitude WGS-84"
+          - name: season
+            description: "Season name: winter, spring, summer, fall"
+          - name: scenario
+            description: "CMIP6 scenario: ssp245 or ssp585"
+          - name: decade
+            description: "Projection decade: 2030s, 2040s, 2060s, 2080s"
+          - name: sst
+            description: "Projected sea surface temperature (°C)"
+          - name: sst_sd
+            description: "Projected SST standard deviation (°C)"
+          - name: mld
+            description: "Projected mixed layer depth (m)"
+          - name: sla
+            description: "Projected sea level anomaly (m)"
+          - name: pp_upper_200m
+            description: "Projected primary productivity upper 200m (mg C/m²/day)"
           - name: geom
             description: "PostGIS POINT geometry (SRID 4326)"
 
@@ -288,3 +319,64 @@ sources:
             description: "Predicted P(humpback whale present) from OBIS SDM (0–1)"
           - name: sdm_sperm_whale
             description: "Predicted P(sperm whale present) from OBIS SDM (0–1)"
+          - name: sdm_right_whale
+            description: "Predicted P(right whale present) from OBIS SDM (0–1)"
+          - name: sdm_minke_whale
+            description: "Predicted P(minke whale present) from OBIS SDM (0–1)"
+
+      - name: whale_isdm_projections
+        description: >
+          CMIP6 climate-projected ISDM whale habitat probabilities.
+          Produced by scoring trained ISDM models on projected ocean
+          covariates (SSP2-4.5, SSP5-8.5) for 2030s–2080s.
+          Loaded by pipeline/database/load_isdm_projections.py.
+          Grain: one row per (h3_cell, season, scenario, decade). ~58M rows.
+        columns:
+          - name: h3_cell
+            description: "H3 cell index (resolution 7, BIGINT)"
+          - name: season
+            description: "Season name: winter, spring, summer, fall"
+          - name: scenario
+            description: "CMIP6 scenario: ssp245 or ssp585"
+          - name: decade
+            description: "Projection decade: 2030s, 2040s, 2060s, 2080s"
+          - name: isdm_blue_whale
+            description: "Projected P(blue whale present) from ISDM (0–1)"
+          - name: isdm_fin_whale
+            description: "Projected P(fin whale present) from ISDM (0–1)"
+          - name: isdm_humpback_whale
+            description: "Projected P(humpback whale present) from ISDM (0–1)"
+          - name: isdm_sperm_whale
+            description: "Projected P(sperm whale present) from ISDM (0–1)"
+
+      - name: whale_sdm_projections
+        description: >
+          CMIP6 climate-projected SDM (OBIS-trained) whale habitat
+          probabilities.  Produced by scoring trained seasonal SDMs on
+          projected ocean covariates (SSP2-4.5, SSP5-8.5) for 2030s–2080s.
+          Covers 7 species (4 shared with ISDM + right whale + minke).
+          Loaded by pipeline/database/load_sdm_projections.py.
+          Grain: one row per (h3_cell, season, scenario, decade). ~58M rows.
+        columns:
+          - name: h3_cell
+            description: "H3 cell index (resolution 7, BIGINT)"
+          - name: season
+            description: "Season name: winter, spring, summer, fall"
+          - name: scenario
+            description: "CMIP6 scenario: ssp245 or ssp585"
+          - name: decade
+            description: "Projection decade: 2030s, 2040s, 2060s, 2080s"
+          - name: sdm_any_whale
+            description: "Projected P(any cetacean present) from SDM (0–1)"
+          - name: sdm_blue_whale
+            description: "Projected P(blue whale present) from SDM (0–1)"
+          - name: sdm_fin_whale
+            description: "Projected P(fin whale present) from SDM (0–1)"
+          - name: sdm_humpback_whale
+            description: "Projected P(humpback whale present) from SDM (0–1)"
+          - name: sdm_sperm_whale
+            description: "Projected P(sperm whale present) from SDM (0–1)"
+          - name: sdm_right_whale
+            description: "Projected P(right whale present) from SDM (0–1) — SDM-only, no ISDM"
+          - name: sdm_minke_whale
+            description: "Projected P(minke whale present) from SDM (0–1) — SDM-only, no ISDM"

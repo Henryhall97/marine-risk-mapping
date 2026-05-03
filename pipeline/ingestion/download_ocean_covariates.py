@@ -21,7 +21,7 @@ PP : Copernicus Global Ocean Biogeochemistry Hindcast (0.25°, monthly)
 
 Bounding box
 ------------
-All US coastal waters (CONUS):  lat 24–50°N, lon 130–60°W
+Study area (CONUS):  lat 24–50°N, lon 130–60°W
 
 Time period
 -----------

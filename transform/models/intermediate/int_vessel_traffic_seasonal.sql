@@ -1,5 +1,12 @@
 -- Intermediate model: vessel traffic per hex cell per season
 -- Aggregates monthly AIS traffic data into seasonal summaries.
+
+{{ config(
+    indexes=[
+        {'columns': ['h3_cell', 'season']},
+    ]
+) }}
+
 --
 -- Same metrics as int_vessel_traffic but at (h3_cell, season) grain
 -- instead of (h3_cell, month). Uses the season_from_month macro.

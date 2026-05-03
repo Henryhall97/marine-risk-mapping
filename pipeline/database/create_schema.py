@@ -197,6 +197,23 @@ CREATE TABLE IF NOT EXISTS ocean_covariates (
 );
 """
 
+CREATE_CMIP6_OCEAN_TABLE = """
+CREATE TABLE IF NOT EXISTS cmip6_ocean_covariates (
+    id              SERIAL PRIMARY KEY,
+    lat             DOUBLE PRECISION NOT NULL,
+    lon             DOUBLE PRECISION NOT NULL,
+    season          VARCHAR(10) NOT NULL,
+    scenario        VARCHAR(10) NOT NULL,
+    decade          VARCHAR(10) NOT NULL,
+    sst             DOUBLE PRECISION,
+    sst_sd          DOUBLE PRECISION,
+    mld             DOUBLE PRECISION,
+    sla             DOUBLE PRECISION,
+    pp_upper_200m   DOUBLE PRECISION,
+    geom            GEOMETRY(Point, 4326)
+);
+"""
+
 CREATE_SMA_TABLE = """
 CREATE TABLE IF NOT EXISTS seasonal_management_areas (
     id              SERIAL PRIMARY KEY,
@@ -218,6 +235,75 @@ CREATE_OCEAN_MASK_TABLE = """
 CREATE TABLE IF NOT EXISTS ocean_mask (
     id              SERIAL PRIMARY KEY,
     geom            GEOMETRY(MultiPolygon, 4326) NOT NULL
+);
+"""
+
+CREATE_BIA_TABLE = """
+CREATE TABLE IF NOT EXISTS cetacean_bia (
+    id              SERIAL PRIMARY KEY,
+    bia_id          TEXT,
+    region          TEXT,
+    sci_name        TEXT,
+    cmn_name        TEXT,
+    stock_pop       TEXT,
+    bia_name        TEXT,
+    bia_type        TEXT,
+    bia_time        TEXT,
+    migr_dir        TEXT,
+    bia_size        DOUBLE PRECISION,
+    bia_months      TEXT,
+    area_sq_m       DOUBLE PRECISION,
+    perimeter_m     DOUBLE PRECISION,
+    geom            GEOMETRY(Geometry, 4326) NOT NULL
+);
+"""
+
+CREATE_CRITICAL_HABITAT_TABLE = """
+CREATE TABLE IF NOT EXISTS whale_critical_habitat (
+    id              SERIAL PRIMARY KEY,
+    species_label   TEXT NOT NULL,
+    sci_name        TEXT,
+    cmn_name        TEXT,
+    list_status     TEXT,
+    ch_status       TEXT,
+    unit            TEXT,
+    taxon           TEXT,
+    lead_office     TEXT,
+    pub_date        TEXT,
+    effect_date     TEXT,
+    area_sq_km      DOUBLE PRECISION,
+    hab_type        TEXT,
+    layer_id        SMALLINT,
+    is_proposed     BOOLEAN DEFAULT FALSE,
+    geom            GEOMETRY(Geometry, 4326) NOT NULL
+);
+"""
+
+CREATE_SHIPPING_LANES_TABLE = """
+CREATE TABLE IF NOT EXISTS shipping_lanes (
+    id              SERIAL PRIMARY KEY,
+    zone_type       TEXT NOT NULL,
+    name            TEXT,
+    description     TEXT,
+    geom            GEOMETRY(Polygon, 4326) NOT NULL
+);
+"""
+
+CREATE_SLOW_ZONES_TABLE = """
+CREATE TABLE IF NOT EXISTS right_whale_slow_zones (
+    id              SERIAL PRIMARY KEY,
+    zone_name       TEXT NOT NULL,
+    zone_type       TEXT,
+    effective_start DATE,
+    effective_end   DATE,
+    speed_limit_kn  SMALLINT DEFAULT 10,
+    voluntary       BOOLEAN DEFAULT TRUE,
+    duration_days   SMALLINT DEFAULT 15,
+    north_lat       DOUBLE PRECISION,
+    south_lat       DOUBLE PRECISION,
+    east_lon        DOUBLE PRECISION,
+    west_lon        DOUBLE PRECISION,
+    geom            GEOMETRY(Polygon, 4326) NOT NULL
 );
 """
 
@@ -246,8 +332,13 @@ def create_tables() -> None:
             "nisi_isdm_training": CREATE_NISI_ISDM_TABLE,
             "right_whale_speed_zones": CREATE_SPEED_ZONES_TABLE,
             "ocean_covariates": CREATE_OCEAN_COVARIATES_TABLE,
+            "cmip6_ocean_covariates": CREATE_CMIP6_OCEAN_TABLE,
             "seasonal_management_areas": CREATE_SMA_TABLE,
             "ocean_mask": CREATE_OCEAN_MASK_TABLE,
+            "cetacean_bia": CREATE_BIA_TABLE,
+            "whale_critical_habitat": CREATE_CRITICAL_HABITAT_TABLE,
+            "shipping_lanes": CREATE_SHIPPING_LANES_TABLE,
+            "right_whale_slow_zones": CREATE_SLOW_ZONES_TABLE,
         }
 
         for table_name, sql in tables.items():
@@ -297,12 +388,37 @@ def create_tables() -> None:
             # Ocean covariates
             "CREATE INDEX IF NOT EXISTS idx_ocean_cov_geom"
             " ON ocean_covariates USING GIST (geom);",
+            # CMIP6 projected ocean covariates
+            "CREATE INDEX IF NOT EXISTS idx_cmip6_ocean_geom"
+            " ON cmip6_ocean_covariates USING GIST (geom);",
+            "CREATE INDEX IF NOT EXISTS idx_cmip6_ocean_scenario_decade"
+            " ON cmip6_ocean_covariates (scenario, decade);",
+            "CREATE INDEX IF NOT EXISTS idx_cmip6_ocean_latlon"
+            " ON cmip6_ocean_covariates (lat, lon);",
             # Seasonal management areas
             "CREATE INDEX IF NOT EXISTS idx_sma_geom"
             " ON seasonal_management_areas USING GIST (geom);",
             # Ocean mask (Natural Earth)
             "CREATE INDEX IF NOT EXISTS idx_ocean_mask_geom"
             " ON ocean_mask USING GIST (geom);",
+            # Cetacean Biologically Important Areas
+            "CREATE INDEX IF NOT EXISTS idx_bia_geom"
+            " ON cetacean_bia USING GIST (geom);",
+            "CREATE INDEX IF NOT EXISTS idx_bia_species ON cetacean_bia (sci_name);",
+            "CREATE INDEX IF NOT EXISTS idx_bia_type ON cetacean_bia (bia_type);",
+            # Whale Critical Habitat
+            "CREATE INDEX IF NOT EXISTS idx_critical_habitat_geom"
+            " ON whale_critical_habitat USING GIST (geom);",
+            "CREATE INDEX IF NOT EXISTS idx_critical_habitat_species"
+            " ON whale_critical_habitat (species_label);",
+            # Shipping lanes / routing
+            "CREATE INDEX IF NOT EXISTS idx_shipping_lanes_geom"
+            " ON shipping_lanes USING GIST (geom);",
+            "CREATE INDEX IF NOT EXISTS idx_shipping_lanes_type"
+            " ON shipping_lanes (zone_type);",
+            # Right whale slow zones (ephemeral)
+            "CREATE INDEX IF NOT EXISTS idx_slow_zones_geom"
+            " ON right_whale_slow_zones USING GIST (geom);",
         ]
 
         for idx_sql in indexes:

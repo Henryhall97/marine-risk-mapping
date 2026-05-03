@@ -1,6 +1,13 @@
 -- Intermediate model: MPA coverage per hex cell
 -- Identifies which H3 cells overlap with Marine Protected Areas
 -- using ST_Intersects between cell centroid and MPA polygons.
+
+{{ config(
+    indexes=[
+        {'columns': ['h3_cell']},
+    ]
+) }}
+
 --
 -- Aggregates to one row per cell: a cell that overlaps 3 MPAs
 -- gets mpa_count = 3 with the highest protection level.

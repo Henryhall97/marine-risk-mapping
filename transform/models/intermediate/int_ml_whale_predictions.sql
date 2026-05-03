@@ -3,6 +3,12 @@
 -- Joins ISDM (Integrated Species Distribution Model) predictions to the
 -- hex grid spine. Each ISDM model predicts P(species present) for one of
 -- four species: blue, fin, humpback, sperm whale.
+
+{{ config(
+    indexes=[
+        {'columns': ['h3_cell', 'season']},
+    ]
+) }}
 --
 -- Derived columns:
 --   - max_whale_prob:  highest P(present) across all 4 species

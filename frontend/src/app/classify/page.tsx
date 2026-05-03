@@ -1,12 +1,19 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import { SonarPing } from "@/components/animations";
+import { IconCamera, IconMicrophone } from "@/components/icons/MarineIcons";
 
 const PhotoClassifier = dynamic(
   () => import("@/components/PhotoClassifier"),
   {
     ssr: false,
-    loading: () => <Skeleton />,
+    loading: () => (
+      <div className="flex flex-col items-center gap-2 py-8">
+        <SonarPing size={64} ringCount={3} active />
+        <span className="text-xs text-ocean-400/70">Loading classifier…</span>
+      </div>
+    ),
   },
 );
 
@@ -14,31 +21,31 @@ const AudioClassifier = dynamic(
   () => import("@/components/AudioClassifier"),
   {
     ssr: false,
-    loading: () => <Skeleton />,
+    loading: () => (
+      <div className="flex flex-col items-center gap-2 py-8">
+        <SonarPing size={64} ringCount={3} active />
+        <span className="text-xs text-ocean-400/70">Loading classifier…</span>
+      </div>
+    ),
   },
 );
-
-function Skeleton() {
-  return (
-    <div className="flex justify-center py-20">
-      <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-blue-400 border-t-transparent" />
-    </div>
-  );
-}
 
 export default function ClassifyPage() {
   return (
     <>
       <main className="min-h-screen bg-abyss-950 px-4 pb-12 pt-20">
-        {/* Header */}
+        {/* Header with Sonar Ping */}
         <div className="mx-auto mb-10 max-w-5xl text-center">
+          <div className="mx-auto mb-6 flex justify-center">
+            <SonarPing size={80} ringCount={3} active />
+          </div>
           <h1 className="text-2xl font-bold tracking-tight">
-            🔬 Species Classification
+            Species Classification
           </h1>
           <p className="mt-2 text-sm leading-relaxed text-slate-400">
-            Upload a whale photograph and/or underwater audio recording. Our
-            trained models will identify the species and, with GPS coordinates,
-            provide local collision risk context from our H3 risk grid.
+            Upload a whale photograph or underwater audio recording. Our
+            trained models will identify the species and show you similar
+            look-alikes to double-check the result.
           </p>
         </div>
 
@@ -47,7 +54,7 @@ export default function ClassifyPage() {
           {/* Photo classifier */}
           <section>
             <div className="mb-4 flex items-center gap-2">
-              <span className="text-2xl">📷</span>
+              <IconCamera className="h-5 w-5 text-bioluminescent-400" />
               <div>
                 <h2 className="text-sm font-semibold text-bioluminescent-400">
                   Photo Classification
@@ -63,7 +70,7 @@ export default function ClassifyPage() {
           {/* Audio classifier */}
           <section>
             <div className="mb-4 flex items-center gap-2">
-              <span className="text-2xl">🎙️</span>
+              <IconMicrophone className="h-5 w-5 text-bioluminescent-400" />
               <div>
                 <h2 className="text-sm font-semibold text-bioluminescent-400">
                   Audio Classification

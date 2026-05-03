@@ -1,6 +1,13 @@
 -- Intermediate model: cetacean sighting density per hex cell per season
 -- Aggregates OBIS sighting records into seasonal summaries by
 -- extracting the observation month from event_date.
+
+{{ config(
+    indexes=[
+        {'columns': ['h3_cell', 'season']},
+    ]
+) }}
+
 --
 -- Only sightings with valid ISO dates (YYYY-MM-DD pattern) are
 -- included — about 95% of records.

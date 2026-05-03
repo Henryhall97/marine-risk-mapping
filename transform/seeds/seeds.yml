@@ -68,11 +68,30 @@ seeds:
       - name: conservation_priority
         description: >
           Relative conservation priority for ship strike risk:
-          critical (right whale, vaquita), high (fin, blue, sei, sperm,
-          bowhead, any unidentified baleen), moderate (minke, gray,
-          harbor porpoise, orca, beluga), low (dolphins, beaked whales)
+          critical (right whale, vaquita, Rice's whale, Sousa teuszii),
+          high (fin, blue, sei, sperm, bowhead, any unidentified baleen),
+          moderate (minke, gray, harbor porpoise, orca, beluga, narwhal),
+          low (dolphins, beaked whales)
         tests:
           - not_null
           - accepted_values:
               arguments:
                 values: ["critical", "high", "moderate", "low", "unknown"]
+
+      - name: aphia_id
+        description: >
+          WoRMS (World Register of Marine Species) AphiaID — the
+          globally unique taxonomic identifier. Used to generate the
+          scientificNameID (LSID) for OBIS Darwin Core exports.
+        tests:
+          - unique
+          - not_null
+
+      - name: worms_lsid
+        description: >
+          WoRMS Life Science Identifier in the format
+          urn:lsid:marinespecies.org:taxname:{aphia_id}. This is the
+          scientificNameID field required by OBIS for data publishing.
+        tests:
+          - unique
+          - not_null

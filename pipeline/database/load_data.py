@@ -20,7 +20,10 @@ import psycopg2
 from psycopg2.extras import execute_values
 
 from pipeline.config import (
+    BIA_FILE,
     CETACEAN_FILE,
+    CMIP6_PROJECTIONS_FILE,
+    CRITICAL_HABITAT_FILE,
     DB_CONFIG,
     MPA_FILE,
     NISI_ISDM_FILES,
@@ -29,6 +32,8 @@ from pipeline.config import (
     OCEAN_COVARIATES_FILE,
     OCEAN_MASK_FILE,
     SHIP_STRIKES_FILE,
+    SHIPPING_LANES_FILE,
+    SLOW_ZONES_FILE,
     SMA_FILE,
     SPEED_ZONES_FILE,
 )
@@ -453,6 +458,75 @@ def load_ocean_covariates(cur) -> None:
     logger.info("Loaded %s seasonal ocean covariate records with geometry", f"{n:,}")
 
 
+def load_cmip6_ocean_covariates(cur) -> None:
+    """Load CMIP6 climate-projected ocean covariates into PostGIS.
+
+    The parquet file contains projected SST, MLD, SLA, PP at
+    (lat, lon, season, scenario, decade) grain — produced by
+    download_cmip6_projections.py from baseline + CMIP6 deltas.
+    ~3.5M rows (2 scenarios × 4 decades × 4 seasons × ~109K points).
+
+    Args:
+        cur: psycopg2 cursor.
+    """
+    if not CMIP6_PROJECTIONS_FILE.exists():
+        logger.warning(
+            "CMIP6 projections file not found: %s",
+            CMIP6_PROJECTIONS_FILE,
+        )
+        return
+
+    df = pd.read_parquet(CMIP6_PROJECTIONS_FILE)
+    logger.info("Read %s CMIP6 ocean covariate records", f"{len(df):,}")
+
+    # Keep only the columns we need
+    cols = [
+        "lat",
+        "lon",
+        "season",
+        "scenario",
+        "decade",
+        "sst",
+        "sst_sd",
+        "mld",
+        "sla",
+        "pp_upper_200m",
+    ]
+    missing = [c for c in cols if c not in df.columns]
+    if missing:
+        logger.error(
+            "CMIP6 parquet missing columns: %s. Available: %s",
+            missing,
+            list(df.columns),
+        )
+        return
+
+    df = df[cols]
+    n = bulk_insert(cur, "cmip6_ocean_covariates", df)
+
+    # Set geometry from lat/lon
+    cur.execute("""
+        UPDATE cmip6_ocean_covariates
+        SET geom = ST_SetSRID(ST_MakePoint(lon, lat), 4326)
+        WHERE geom IS NULL;
+    """)
+
+    # Log breakdown
+    cur.execute(
+        "SELECT scenario, decade, count(*)"
+        " FROM cmip6_ocean_covariates"
+        " GROUP BY scenario, decade"
+        " ORDER BY scenario, decade;"
+    )
+    for scenario, decade, count in cur.fetchall():
+        logger.info("  %s / %s: %s rows", scenario, decade, f"{count:,}")
+
+    logger.info(
+        "Loaded %s CMIP6 ocean covariate records with geometry",
+        f"{n:,}",
+    )
+
+
 def load_sma_data(cur) -> None:
     """Load current NARW Seasonal Management Area polygons into PostGIS.
 
@@ -545,6 +619,242 @@ def load_ocean_mask(cur) -> None:
     logger.info("Loaded %d ocean mask polygons", len(records))
 
 
+def load_bia_data(cur) -> None:
+    """Load Cetacean Biologically Important Areas into PostGIS.
+
+    Args:
+        cur: psycopg2 cursor.
+    """
+    if not BIA_FILE.exists():
+        logger.warning("BIA file not found: %s", BIA_FILE)
+        return
+
+    gdf = gpd.read_parquet(BIA_FILE)
+    logger.info("Read %d BIA polygons", len(gdf))
+
+    records = []
+    for _, row in gdf.iterrows():
+        records.append(
+            {
+                "bia_id": row.get("BIA_ID"),
+                "region": row.get("region"),
+                "sci_name": row.get("sci_name"),
+                "cmn_name": row.get("cmn_name"),
+                "stock_pop": row.get("stock_pop"),
+                "bia_name": row.get("BIA_name"),
+                "bia_type": row.get("BIA_type"),
+                "bia_time": row.get("BIA_time"),
+                "migr_dir": row.get("migr_dir"),
+                "bia_size": float(row["BIA_size"])
+                if pd.notna(row.get("BIA_size"))
+                else None,
+                "bia_months": row.get("BIA_months"),
+                "area_sq_m": float(row["Shape__Area"])
+                if pd.notna(row.get("Shape__Area"))
+                else None,
+                "perimeter_m": float(row["Shape__Length"])
+                if pd.notna(row.get("Shape__Length"))
+                else None,
+                "geom": row.geometry.wkt,
+            }
+        )
+
+    sql = """
+        INSERT INTO cetacean_bia
+            (bia_id, region, sci_name, cmn_name, stock_pop,
+             bia_name, bia_type, bia_time, migr_dir, bia_size,
+             bia_months, area_sq_m, perimeter_m, geom)
+        VALUES %s
+    """
+    template = (
+        "(%(bia_id)s, %(region)s, %(sci_name)s, %(cmn_name)s,"
+        " %(stock_pop)s, %(bia_name)s, %(bia_type)s, %(bia_time)s,"
+        " %(migr_dir)s, %(bia_size)s, %(bia_months)s,"
+        " %(area_sq_m)s, %(perimeter_m)s,"
+        " ST_GeomFromText(%(geom)s, 4326))"
+    )
+
+    execute_values(cur, sql, records, template=template)
+    logger.info("Loaded %d BIA polygons", len(records))
+
+
+def load_critical_habitat(cur) -> None:
+    """Load whale ESA Critical Habitat designations into PostGIS.
+
+    Args:
+        cur: psycopg2 cursor.
+    """
+    if not CRITICAL_HABITAT_FILE.exists():
+        logger.warning(
+            "Critical habitat file not found: %s",
+            CRITICAL_HABITAT_FILE,
+        )
+        return
+
+    gdf = gpd.read_parquet(CRITICAL_HABITAT_FILE)
+    logger.info("Read %d critical habitat polygons", len(gdf))
+
+    records = []
+    for _, row in gdf.iterrows():
+        records.append(
+            {
+                "species_label": row.get("species_label"),
+                "sci_name": row.get("SCIENAME"),
+                "cmn_name": row.get("COMNAME"),
+                "list_status": row.get("LISTSTATUS"),
+                "ch_status": row.get("CHSTATUS"),
+                "unit": row.get("UNIT"),
+                "taxon": row.get("TAXON"),
+                "lead_office": row.get("LEADOFFICE"),
+                "pub_date": row.get("PUBDATE"),
+                "effect_date": str(row["EFFECTDATE"])
+                if pd.notna(row.get("EFFECTDATE"))
+                else None,
+                "area_sq_km": float(row["AREASqKm"])
+                if pd.notna(row.get("AREASqKm"))
+                else None,
+                "hab_type": row.get("HABTYPE"),
+                "layer_id": int(row["layer_id"])
+                if pd.notna(row.get("layer_id"))
+                else None,
+                "is_proposed": bool(row.get("is_proposed", False)),
+                "geom": row.geometry.wkt,
+            }
+        )
+
+    sql = """
+        INSERT INTO whale_critical_habitat
+            (species_label, sci_name, cmn_name, list_status,
+             ch_status, unit, taxon, lead_office, pub_date,
+             effect_date, area_sq_km, hab_type, layer_id,
+             is_proposed, geom)
+        VALUES %s
+    """
+    template = (
+        "(%(species_label)s, %(sci_name)s, %(cmn_name)s,"
+        " %(list_status)s, %(ch_status)s, %(unit)s, %(taxon)s,"
+        " %(lead_office)s, %(pub_date)s, %(effect_date)s,"
+        " %(area_sq_km)s, %(hab_type)s, %(layer_id)s,"
+        " %(is_proposed)s,"
+        " ST_GeomFromText(%(geom)s, 4326))"
+    )
+
+    execute_values(cur, sql, records, template=template)
+    logger.info("Loaded %d critical habitat polygons", len(records))
+
+
+def load_shipping_lanes(cur) -> None:
+    """Load shipping lane / routing regulation polygons into PostGIS.
+
+    Args:
+        cur: psycopg2 cursor.
+    """
+    if not SHIPPING_LANES_FILE.exists():
+        logger.warning(
+            "Shipping lanes file not found: %s",
+            SHIPPING_LANES_FILE,
+        )
+        return
+
+    gdf = gpd.read_parquet(SHIPPING_LANES_FILE)
+    logger.info("Read %d shipping lane polygons", len(gdf))
+
+    records = []
+    for _, row in gdf.iterrows():
+        records.append(
+            {
+                "zone_type": row.get("zone_type"),
+                "name": row.get("name"),
+                "description": row.get("description"),
+                "geom": row.geometry.wkt,
+            }
+        )
+
+    sql = """
+        INSERT INTO shipping_lanes
+            (zone_type, name, description, geom)
+        VALUES %s
+    """
+    template = (
+        "(%(zone_type)s, %(name)s, %(description)s, ST_GeomFromText(%(geom)s, 4326))"
+    )
+
+    execute_values(cur, sql, records, template=template)
+    logger.info("Loaded %d shipping lane polygons", len(records))
+
+
+def load_slow_zones(cur) -> None:
+    """Load active Right Whale Slow Zones into PostGIS.
+
+    These are ephemeral 15-day voluntary zones scraped from
+    the NOAA Fisheries webpage. GeoJSON format.
+
+    Args:
+        cur: psycopg2 cursor.
+    """
+    import json
+
+    if not SLOW_ZONES_FILE.exists():
+        logger.warning("Slow zones file not found: %s", SLOW_ZONES_FILE)
+        return
+
+    with open(SLOW_ZONES_FILE) as f:
+        geojson = json.load(f)
+
+    features = geojson.get("features", [])
+    if not features:
+        logger.info("No active slow zones in file")
+        return
+
+    gdf = gpd.GeoDataFrame.from_features(features, crs="EPSG:4326")
+    logger.info("Read %d slow zone features", len(gdf))
+
+    records = []
+    for _, row in gdf.iterrows():
+        records.append(
+            {
+                "zone_name": row.get("zone_name"),
+                "zone_type": row.get("zone_type"),
+                "eff_start": row.get("effective_start"),
+                "eff_end": row.get("effective_end"),
+                "speed": int(row.get("speed_limit_knots", 10)),
+                "voluntary": bool(row.get("voluntary", True)),
+                "duration": int(row.get("duration_days", 15)),
+                "north": float(row["north_lat"])
+                if pd.notna(row.get("north_lat"))
+                else None,
+                "south": float(row["south_lat"])
+                if pd.notna(row.get("south_lat"))
+                else None,
+                "east": float(row["east_lon"])
+                if pd.notna(row.get("east_lon"))
+                else None,
+                "west": float(row["west_lon"])
+                if pd.notna(row.get("west_lon"))
+                else None,
+                "geom": row.geometry.wkt,
+            }
+        )
+
+    sql = """
+        INSERT INTO right_whale_slow_zones
+            (zone_name, zone_type, effective_start, effective_end,
+             speed_limit_kn, voluntary, duration_days,
+             north_lat, south_lat, east_lon, west_lon, geom)
+        VALUES %s
+    """
+    template = (
+        "(%(zone_name)s, %(zone_type)s,"
+        " %(eff_start)s, %(eff_end)s,"
+        " %(speed)s, %(voluntary)s, %(duration)s,"
+        " %(north)s, %(south)s, %(east)s, %(west)s,"
+        " ST_GeomFromText(%(geom)s, 4326))"
+    )
+
+    execute_values(cur, sql, records, template=template)
+    logger.info("Loaded %d slow zone features", len(records))
+
+
 def load_all_data(*, force: bool = False) -> None:
     """Load all raw data into PostGIS.
 
@@ -572,8 +882,13 @@ def load_all_data(*, force: bool = False) -> None:
             "nisi_isdm_training": load_nisi_isdm_training,
             "right_whale_speed_zones": load_speed_zones,
             "ocean_covariates": load_ocean_covariates,
+            "cmip6_ocean_covariates": load_cmip6_ocean_covariates,
             "seasonal_management_areas": load_sma_data,
             "ocean_mask": load_ocean_mask,
+            "cetacean_bia": load_bia_data,
+            "whale_critical_habitat": load_critical_habitat,
+            "shipping_lanes": load_shipping_lanes,
+            "right_whale_slow_zones": load_slow_zones,
         }
 
         for table, loader in loaders.items():

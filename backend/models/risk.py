@@ -85,7 +85,9 @@ class RiskZoneDetail(RiskZoneSummary):
 
     # Ocean covariates
     sst: float | None = None
+    sst_sd: float | None = None
     mld: float | None = None
+    sla: float | None = None
     pp_upper_200m: float | None = None
 
     # Proximity
@@ -148,3 +150,13 @@ class RiskStatsResponse(BaseModel):
         default_factory=dict,
         description="Count of cells per risk category",
     )
+
+
+class NearestRiskResponse(BaseModel):
+    """Nearest risk cell result with match metadata."""
+
+    is_exact_match: bool
+    query_lat: float
+    query_lon: float
+    distance_km: float
+    cell: RiskZoneDetail

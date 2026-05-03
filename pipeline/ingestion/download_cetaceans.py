@@ -1,7 +1,7 @@
 """Download cetacean sighting data from OBIS via local parquet files.
 
 Reads the raw OBIS occurrence parquet files (previously downloaded
-via robis), filters to cetacean sightings in US coastal waters,
+via robis), filters to cetacean sightings within the study bounding box,
 and saves a clean parquet file for downstream loading into PostGIS.
 
 The OBIS data uses the order 'Cetartiodactyla' which includes all
@@ -9,7 +9,7 @@ cetaceans (whales, dolphins, porpoises). We filter to:
   - order = Cetartiodactyla
   - not dropped (data quality flag)
   - not absence records (presence-only)
-  - US coastal bounding box (lat -2 to 52, lon -180 to -59)
+  - Study bounding box (lat -2 to 52, lon -180 to -59)
 
 Run with:
     uv run python -m pipeline.ingestion.download_cetaceans
@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 
 
 def extract_cetaceans() -> int:
-    """Filter OBIS parquet files to US coastal cetacean sightings.
+    """Filter OBIS parquet files to study-area cetacean sightings.
 
     Uses DuckDB to read parquet files with pushdown predicates,
     so only matching rows are materialised in memory.

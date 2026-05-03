@@ -2,6 +2,7 @@
 
 GET /api/v1/risk/zones        — List risk zones within a bounding box
 GET /api/v1/risk/zones/stats  — Aggregate statistics for a bounding box
+GET /api/v1/risk/zones/nearest — Nearest risk cell to a coordinate
 GET /api/v1/risk/zones/{h3}   — Full detail for a single H3 cell
 GET /api/v1/risk/seasonal     — Seasonal risk zones within a bounding box
 GET /api/v1/risk/ml           — ML-enhanced risk zones
@@ -22,12 +23,16 @@ from backend.models.layers import (
     MLRiskStatsResponse,
     MLRiskZoneDetail,
     MLRiskZoneSummary,
+    ProjectedMLRiskCell,
+    ProjectedMLRiskListResponse,
+    ProjectedMLRiskStatsResponse,
     RiskBreakdown,
     RiskCompare,
     RiskCompareListResponse,
     TrafficBreakdown,
 )
 from backend.models.risk import (
+    NearestRiskResponse,
     RiskFlags,
     RiskScores,
     RiskStatsResponse,
@@ -127,6 +132,29 @@ def risk_zone_stats(
     if stats is None:
         raise HTTPException(404, "No risk data found in this bounding box")
     return RiskStatsResponse(**stats)
+
+
+@router.get(
+    "/zones/nearest",
+    response_model=NearestRiskResponse,
+)
+def nearest_risk_zone(
+    lat: float = Query(..., ge=-90, le=90),
+    lon: float = Query(..., ge=-180, le=180),
+):
+    """Find the nearest risk cell to a coordinate."""
+    row = risk_svc.find_nearest_risk_cell(lat, lon)
+    if row is None:
+        raise HTTPException(404, "No risk cells found")
+    distance_km = row.pop("distance_km", 0.0)
+    detail = _row_to_detail(row)
+    return NearestRiskResponse(
+        is_exact_match=distance_km < 1.5,
+        query_lat=lat,
+        query_lon=lon,
+        distance_km=round(distance_km, 1),
+        cell=detail,
+    )
 
 
 @router.get("/zones/{h3_cell}", response_model=RiskZoneDetail)
@@ -251,7 +279,9 @@ def _row_to_detail(row: dict) -> RiskZoneDetail:
         is_continental_shelf=row.get("is_continental_shelf"),
         # Ocean
         sst=row.get("sst"),
+        sst_sd=row.get("sst_sd"),
         mld=row.get("mld"),
+        sla=row.get("sla"),
         pp_upper_200m=row.get("pp_upper_200m"),
         # Proximity
         dist_to_nearest_whale_km=row.get("dist_to_nearest_whale_km"),
@@ -394,6 +424,160 @@ def get_ml_risk_zone(
     return _row_to_ml_detail(row)
 
 
+# ── Projected ML risk (CMIP6 climate) ──────────────────────
+
+
+_VALID_SCENARIOS = {"ssp245", "ssp585"}
+_VALID_DECADES = {"2030s", "2040s", "2060s", "2080s"}
+
+
+@router.get(
+    "/ml/projected",
+    response_model=ProjectedMLRiskListResponse,
+)
+def list_projected_ml_risk(
+    lat_min: float = Query(..., ge=-90, le=90),
+    lat_max: float = Query(..., ge=-90, le=90),
+    lon_min: float = Query(..., ge=-180, le=180),
+    lon_max: float = Query(..., ge=-180, le=180),
+    scenario: str = Query(
+        ...,
+        description="Climate scenario: ssp245 or ssp585",
+    ),
+    decade: str = Query(
+        ...,
+        description="Projection decade: 2030s, 2040s, 2060s, 2080s",
+    ),
+    mode: str = Query(
+        "absolute",
+        description=(
+            "Display mode: absolute (projected scores) or "
+            "change (delta vs current risk)"
+        ),
+    ),
+    season: str | None = Query(None),
+    risk_category: str | None = Query(None),
+    limit: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+    offset: int = Query(0, ge=0),
+):
+    """Projected ML-enhanced collision risk under CMIP6 scenarios.
+
+    Projects the 7-sub-score ML risk into future decades by substituting
+    projected ISDM whale probabilities into the interaction (30%) and
+    whale_ml (15%) sub-scores.  Traffic, proximity, strike, protection,
+    and reference sub-scores (55%) remain at current levels.
+
+    Set **mode=change** to include deltas vs current-climate risk.
+    """
+    _validate_bbox(lat_min, lat_max, lon_min, lon_max)
+    if scenario not in _VALID_SCENARIOS:
+        raise HTTPException(
+            400,
+            f"Invalid scenario. Must be one of: {sorted(_VALID_SCENARIOS)}",
+        )
+    if decade not in _VALID_DECADES:
+        raise HTTPException(
+            400,
+            f"Invalid decade. Must be one of: {sorted(_VALID_DECADES)}",
+        )
+    if mode not in ("absolute", "change"):
+        raise HTTPException(
+            400,
+            "Invalid mode. Must be 'absolute' or 'change'.",
+        )
+    if season and season not in _VALID_SEASONS:
+        raise HTTPException(
+            400,
+            f"Invalid season. Must be one of: {sorted(_VALID_SEASONS)}",
+        )
+    if risk_category and risk_category not in _VALID_CATEGORIES:
+        raise HTTPException(
+            400,
+            f"Invalid risk_category. Must be one of: {sorted(_VALID_CATEGORIES)}",
+        )
+
+    total = layer_svc.count_projected_ml_risk(
+        lat_min,
+        lat_max,
+        lon_min,
+        lon_max,
+        scenario=scenario,
+        decade=decade,
+        season=season,
+        risk_category=risk_category,
+    )
+    rows = layer_svc.get_projected_ml_risk(
+        lat_min,
+        lat_max,
+        lon_min,
+        lon_max,
+        scenario=scenario,
+        decade=decade,
+        mode=mode,
+        season=season,
+        risk_category=risk_category,
+        limit=limit,
+        offset=offset,
+    )
+    data = [ProjectedMLRiskCell(**r) for r in rows]
+    return ProjectedMLRiskListResponse(
+        total=total,
+        offset=offset,
+        limit=limit,
+        data=data,
+    )
+
+
+@router.get(
+    "/ml/projected/stats",
+    response_model=ProjectedMLRiskStatsResponse,
+)
+def projected_ml_risk_stats(
+    lat_min: float = Query(..., ge=-90, le=90),
+    lat_max: float = Query(..., ge=-90, le=90),
+    lon_min: float = Query(..., ge=-180, le=180),
+    lon_max: float = Query(..., ge=-180, le=180),
+    scenario: str = Query(...),
+    decade: str = Query(...),
+    season: str | None = Query(None),
+):
+    """Aggregate projected ML risk statistics for a bounding box.
+
+    Includes delta vs current risk (average shift in risk score).
+    """
+    _validate_bbox(lat_min, lat_max, lon_min, lon_max)
+    if scenario not in _VALID_SCENARIOS:
+        raise HTTPException(
+            400,
+            f"Invalid scenario. Must be one of: {sorted(_VALID_SCENARIOS)}",
+        )
+    if decade not in _VALID_DECADES:
+        raise HTTPException(
+            400,
+            f"Invalid decade. Must be one of: {sorted(_VALID_DECADES)}",
+        )
+    if season and season not in _VALID_SEASONS:
+        raise HTTPException(
+            400,
+            f"Invalid season. Must be one of: {sorted(_VALID_SEASONS)}",
+        )
+    stats = layer_svc.get_projected_ml_risk_stats(
+        lat_min,
+        lat_max,
+        lon_min,
+        lon_max,
+        scenario=scenario,
+        decade=decade,
+        season=season,
+    )
+    if stats is None:
+        raise HTTPException(
+            404,
+            "No projected risk data found in this bounding box",
+        )
+    return ProjectedMLRiskStatsResponse(**stats)
+
+
 # ── Risk breakdown ──────────────────────────────────────────
 
 
@@ -458,9 +642,9 @@ def compare_risk(
 def _row_to_ml_detail(row: dict) -> MLRiskZoneDetail:
     """Map an fct_collision_risk_ml row to the detail model."""
     scores = MLRiskScores(
-        whale_traffic_interaction=row.get("whale_traffic_interaction_score"),
+        whale_traffic_interaction=row.get("interaction_score"),
         traffic_score=row.get("traffic_score"),
-        whale_ml_exposure=row.get("whale_ml_exposure_score"),
+        whale_ml_exposure=row.get("whale_ml_score"),
         proximity_score=row.get("proximity_score"),
         strike_score=row.get("strike_score"),
         protection_gap=row.get("protection_gap"),
@@ -474,13 +658,27 @@ def _row_to_ml_detail(row: dict) -> MLRiskZoneDetail:
         risk_score=float(row["risk_score"]),
         risk_category=row["risk_category"],
         scores=scores,
+        # Ensembled species probabilities
+        blue_whale_prob=row.get("blue_whale_prob"),
+        fin_whale_prob=row.get("fin_whale_prob"),
+        humpback_whale_prob=row.get("humpback_whale_prob"),
+        sperm_whale_prob=row.get("sperm_whale_prob"),
+        right_whale_prob=row.get("right_whale_prob"),
+        minke_whale_prob=row.get("minke_whale_prob"),
         any_whale_prob=row.get("any_whale_prob"),
         max_whale_prob=row.get("max_whale_prob"),
         mean_whale_prob=row.get("mean_whale_prob"),
+        # Raw diagnostic predictions
         isdm_blue_whale=row.get("isdm_blue_whale"),
         isdm_fin_whale=row.get("isdm_fin_whale"),
         isdm_humpback_whale=row.get("isdm_humpback_whale"),
         isdm_sperm_whale=row.get("isdm_sperm_whale"),
+        sdm_blue_whale=row.get("sdm_blue_whale"),
+        sdm_fin_whale=row.get("sdm_fin_whale"),
+        sdm_humpback_whale=row.get("sdm_humpback_whale"),
+        sdm_sperm_whale=row.get("sdm_sperm_whale"),
+        sdm_right_whale=row.get("sdm_right_whale"),
+        sdm_minke_whale=row.get("sdm_minke_whale"),
     )
 
 

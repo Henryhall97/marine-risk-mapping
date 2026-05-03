@@ -24,6 +24,42 @@ def _get_classifier():
     return _classifier
 
 
+def classify_audio_only(
+    audio_bytes: bytes,
+    filename: str,
+) -> dict[str, Any]:
+    """Classify audio without GPS — species prediction only, no risk."""
+    import pandas as pd
+
+    clf = _get_classifier()
+
+    suffix = Path(filename).suffix or ".wav"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(audio_bytes)
+        tmp_path = Path(tmp.name)
+
+    try:
+        segments = clf.predict(tmp_path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    # Determine dominant species
+    non_unknown = [
+        s["predicted_species"]
+        for s in segments
+        if s["predicted_species"] != "unknown_whale"
+    ]
+    dominant = pd.Series(non_unknown).mode().iloc[0] if non_unknown else "unknown_whale"
+
+    return {
+        "filename": filename,
+        "dominant_species": dominant,
+        "n_segments": len(segments),
+        "segments": segments,
+        "risk_context": None,
+    }
+
+
 def classify_audio(
     audio_bytes: bytes,
     filename: str,

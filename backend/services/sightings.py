@@ -14,7 +14,7 @@ import h3
 
 from backend.services import audio as audio_svc
 from backend.services import photo as photo_svc
-from backend.services.database import fetch_one
+from backend.services.database import fetch_one, fetch_scalar
 
 log = logging.getLogger(__name__)
 
@@ -66,6 +66,100 @@ def get_cell_risk(h3_cell: int) -> dict[str, Any] | None:
     return fetch_one(query, (h3_cell,))
 
 
+# ── Location validation ─────────────────────────────────────
+
+# Study-area bounding box — matches US_BBOX in pipeline/config.py.
+_STUDY_LAT_MIN = -2.0
+_STUDY_LAT_MAX = 52.0
+_STUDY_LON_MIN = -180.0
+_STUDY_LON_MAX = -59.0
+
+
+def check_location(
+    lat: float,
+    lon: float,
+    h3_cell: int,
+) -> dict[str, Any]:
+    """Validate a sighting location and return advisory flags.
+
+    Uses the GEBCO bathymetry grid (``bathymetry_h3``) to detect
+    whether the reported coordinates are over ocean or land, and
+    checks whether the H3 cell falls within the collision-risk
+    model coverage.
+
+    Returns a dict with:
+      - ``is_ocean``: True (ocean), False (land), None (unknown)
+      - ``in_risk_coverage``: whether fct_collision_risk has data
+      - ``location_warnings``: list of human-readable warning strings
+    """
+    is_ocean: bool | None = None
+    in_risk_coverage = False
+    warnings: list[str] = []
+
+    # 1. Bathymetry land/ocean check
+    #    depth_m < 0 → ocean, depth_m >= 0 → land
+    try:
+        depth = fetch_scalar(
+            "SELECT depth_m FROM bathymetry_h3 WHERE h3_cell = %s",
+            (h3_cell,),
+        )
+        if depth is not None:
+            is_ocean = float(depth) < 0
+        # depth is None → cell not in bathymetry grid (outside study area)
+    except Exception:
+        log.debug(
+            "Bathymetry lookup failed for h3_cell=%s",
+            h3_cell,
+            exc_info=True,
+        )
+
+    # 2. Risk coverage check
+    try:
+        has_risk = fetch_scalar(
+            "SELECT 1 FROM fct_collision_risk WHERE h3_cell = %s LIMIT 1",
+            (h3_cell,),
+        )
+        in_risk_coverage = has_risk is not None
+    except Exception:
+        log.debug(
+            "Risk coverage check failed for h3_cell=%s",
+            h3_cell,
+            exc_info=True,
+        )
+
+    # 3. Build human-readable warnings
+    if is_ocean is False:
+        warnings.append(
+            "This location appears to be on land. "
+            "Please verify your coordinates are correct."
+        )
+    elif is_ocean is None:
+        # Outside bathymetry coverage — do a simple bbox check
+        in_bbox = (
+            _STUDY_LAT_MIN <= lat <= _STUDY_LAT_MAX
+            and _STUDY_LON_MIN <= lon <= _STUDY_LON_MAX
+        )
+        if not in_bbox:
+            warnings.append(
+                "This location is outside our study area. "
+                "We cannot verify whether it is over ocean, "
+                "but your sighting will still be recorded."
+            )
+
+    if not in_risk_coverage:
+        warnings.append(
+            "Risk assessment data is not available for this "
+            "location. Your sighting will still be recorded "
+            "and is valuable for research."
+        )
+
+    return {
+        "is_ocean": is_ocean,
+        "in_risk_coverage": in_risk_coverage,
+        "location_warnings": warnings,
+    }
+
+
 # ── Advisory generation ─────────────────────────────────────
 
 _PROTECTED_SPECIES = {
@@ -94,7 +188,7 @@ _SPECIES_DISPLAY = {
 # ── Regional authority lookup ───────────────────────────────
 
 # NOAA Fisheries regional offices + stranding coordinators
-# responsible for marine mammal incidents in US waters.
+# responsible for marine mammal incidents in the study area.
 # Regions are checked in order; first bbox match wins,
 # so put smaller / more specific regions before large ones.
 
@@ -210,7 +304,7 @@ def get_regional_authority(
     """Return the NOAA regional authority for a coordinate pair.
 
     Matches the most specific (first-matching) region.  Falls back
-    to the national NOAA hotline if outside US waters or if coords
+    to the national NOAA hotline if outside the study area or if coords
     are missing.
     """
     if lat is None or lon is None:
@@ -340,6 +434,23 @@ def process_sighting_report(
     image_filename: str | None = None,
     audio_bytes: bytes | None = None,
     audio_filename: str | None = None,
+    group_size: int | None = None,
+    sighting_datetime: str | None = None,
+    behavior: str | None = None,
+    life_stage: str | None = None,
+    calf_present: bool | None = None,
+    sea_state_beaufort: int | None = None,
+    observation_platform: str | None = None,
+    coordinate_uncertainty_m: float | None = None,
+    submitted_rank: str | None = None,
+    submitted_scientific_name: str | None = None,
+    confidence_level: str | None = None,
+    group_size_min: int | None = None,
+    group_size_max: int | None = None,
+    visibility_km: float | None = None,
+    sea_glare: str | None = None,
+    distance_to_animal_m: float | None = None,
+    direction_of_travel: str | None = None,
 ) -> dict[str, Any]:
     """Process a sighting report with optional photo + audio.
 
@@ -385,6 +496,7 @@ def process_sighting_report(
     # ── 3. Resolve H3 cell + risk ───────────────────────────
     h3_cell: int | None = None
     risk_data: dict[str, Any] | None = None
+    location_flags: dict[str, Any] | None = None
 
     if resolved_lat is not None and resolved_lon is not None:
         h3_cell = _coords_to_h3(resolved_lat, resolved_lon)
@@ -393,11 +505,22 @@ def process_sighting_report(
         except Exception:
             log.warning("Risk lookup failed for h3_cell=%s", h3_cell, exc_info=True)
 
+        # Location validation (land/ocean + risk coverage)
+        try:
+            location_flags = check_location(resolved_lat, resolved_lon, h3_cell)
+        except Exception:
+            log.warning(
+                "Location check failed for h3_cell=%s",
+                h3_cell,
+                exc_info=True,
+            )
+
     # ── 4. Species assessment ───────────────────────────────
     assessment = _build_species_assessment(
         species_guess=species_guess,
         photo_result=photo_result,
         audio_result=audio_result,
+        submitted_rank=submitted_rank,
     )
 
     # ── 5. Advisory ─────────────────────────────────────────
@@ -417,17 +540,39 @@ def process_sighting_report(
             "species_guess": species_guess,
             "description": description,
             "interaction_type": interaction_type,
+            "group_size": group_size,
+            "sighting_datetime": sighting_datetime,
+            "behavior": behavior,
+            "life_stage": life_stage,
+            "calf_present": calf_present,
+            "sea_state_beaufort": sea_state_beaufort,
+            "observation_platform": observation_platform,
+            "coordinate_uncertainty_m": coordinate_uncertainty_m,
+            "submitted_rank": submitted_rank,
+            "submitted_scientific_name": submitted_scientific_name,
+            "confidence_level": confidence_level,
+            "group_size_min": group_size_min,
+            "group_size_max": group_size_max,
+            "visibility_km": visibility_km,
+            "sea_glare": sea_glare,
+            "distance_to_animal_m": distance_to_animal_m,
+            "direction_of_travel": direction_of_travel,
         },
     }
 
     # Location
     if resolved_lat is not None and resolved_lon is not None:
-        response["location"] = {
+        loc: dict[str, Any] = {
             "lat": resolved_lat,
             "lon": resolved_lon,
             "h3_cell": h3_cell,
             "gps_source": gps_source,
         }
+        if location_flags:
+            loc["is_ocean"] = location_flags["is_ocean"]
+            loc["in_risk_coverage"] = location_flags["in_risk_coverage"]
+            loc["location_warnings"] = location_flags["location_warnings"]
+        response["location"] = loc
 
     # Photo
     if photo_result:
@@ -488,10 +633,14 @@ def _build_species_assessment(
     species_guess: str | None,
     photo_result: dict[str, Any] | None,
     audio_result: dict[str, Any] | None,
+    submitted_rank: str | None = None,
 ) -> dict[str, Any] | None:
     """Reconcile user guess with model predictions.
 
     Priority: photo+audio consensus > photo > audio > user guess.
+    Model classifications operate at species level. When the user
+    submits at a higher rank (genus, family), we note the rank
+    match level in the response.
     """
     photo_species: str | None = None
     photo_conf: float = 0.0
@@ -543,6 +692,8 @@ def _build_species_assessment(
             "model_confidence": 0.0,
             "source": "user_only",
             "user_agrees": None,
+            "model_rank": submitted_rank or "species",
+            "user_rank": submitted_rank,
         }
     else:
         return None
@@ -557,4 +708,6 @@ def _build_species_assessment(
         "model_confidence": round(model_conf, 4),
         "source": source,
         "user_agrees": user_agrees,
+        "model_rank": "species",
+        "user_rank": submitted_rank,
     }

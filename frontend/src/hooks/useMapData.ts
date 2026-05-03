@@ -8,7 +8,7 @@ import {
   PAGE_LIMIT,
 } from "@/lib/config";
 import { fetchHexLayer, bboxArea } from "@/lib/api";
-import type { BBox, LayerType, Season, IsdmSpecies } from "@/lib/types";
+import type { BBox, LayerType, Season, IsdmSpecies, ClimateScenario, SdmTimePeriod, ProjectionMode } from "@/lib/types";
 
 /* ── Types & constants ───────────────────────────────────── */
 
@@ -16,12 +16,13 @@ type EnrichedCell = Record<string, unknown> & { h3: string };
 
 /** Map layer → API endpoint. */
 const LAYER_ENDPOINTS: Record<LayerType, string> = {
+  none: "",
   risk: "/api/v1/risk/zones",
   risk_ml: "/api/v1/risk/ml",
   bathymetry: "/api/v1/layers/bathymetry",
   ocean: "/api/v1/layers/ocean",
   whale_predictions: "/api/v1/layers/whale-predictions",
-  sdm_predictions: "/api/v1/layers/sdm-predictions",
+  sdm: "/api/v1/layers/sdm-predictions",
   cetacean_density: "/api/v1/layers/cetacean-density",
   strike_density: "/api/v1/layers/strike-density",
   traffic_density: "/api/v1/layers/traffic-density",
@@ -33,7 +34,7 @@ const SEASON_LAYERS = new Set<LayerType>([
   "risk_ml",
   "ocean",
   "whale_predictions",
-  "sdm_predictions",
+  "sdm",
   "cetacean_density",
   "traffic_density",
 ]);
@@ -46,6 +47,9 @@ const MAX_PAGES_PER_TILE = 4;
 
 /** Max sub-tiles when viewport exceeds the API area limit. */
 const MAX_TILES = 16;
+
+/** Max concurrent tile+page requests to avoid exhausting the API pool. */
+const MAX_CONCURRENT_TILES = 4;
 
 /** Debounce (ms) after viewport movement stops. */
 const DEBOUNCE_MS = 150;
@@ -147,6 +151,32 @@ function snapBbox(bbox: BBox): string {
   ].join(",");
 }
 
+/**
+ * Fetch tiles with bounded concurrency.
+ *
+ * Processes at most `concurrency` tiles in parallel, then moves
+ * to the next batch.  This prevents the frontend from firing 16×4
+ * simultaneous API requests that exhaust the backend DB pool.
+ */
+async function fetchTilesWithConcurrency(
+  tiles: BBox[],
+  endpoint: string,
+  extra: Record<string, string | undefined>,
+  signal: AbortSignal,
+  concurrency: number = MAX_CONCURRENT_TILES,
+): Promise<PromiseSettledResult<EnrichedCell[]>[]> {
+  const results: PromiseSettledResult<EnrichedCell[]>[] = [];
+  for (let i = 0; i < tiles.length; i += concurrency) {
+    if (signal.aborted) break;
+    const batch = tiles.slice(i, i + concurrency);
+    const settled = await Promise.allSettled(
+      batch.map((t) => fetchTilePages(endpoint, t, extra, signal)),
+    );
+    results.push(...settled);
+  }
+  return results;
+}
+
 /* ── Hook ────────────────────────────────────────────────── */
 
 /**
@@ -165,6 +195,9 @@ export function useMapData(
   layer: LayerType,
   season: Season,
   species?: IsdmSpecies | null,
+  scenario?: ClimateScenario | null,
+  sdmTimePeriod?: SdmTimePeriod | null,
+  projectionMode?: ProjectionMode | null,
 ): MapDataResult {
   const cacheRef = useRef(new Map<string, EnrichedCell>());
   const [data, setData] = useState<EnrichedCell[]>([]);
@@ -180,8 +213,8 @@ export function useMapData(
   }, []);
 
   useEffect(() => {
-    /* ── Reset cache on layer / season / species switch ── */
-    const key = `${layer}:${season ?? "annual"}:${species ?? "all"}`;
+    /* ── Reset cache on layer / season / species / scenario / decade switch ── */
+    const key = `${layer}:${season ?? "annual"}:${species ?? "all"}:${scenario ?? "none"}:${sdmTimePeriod ?? "current"}:${projectionMode ?? "absolute"}`;
     if (key !== keyRef.current) {
       keyRef.current = key;
       cacheRef.current = new Map();
@@ -191,6 +224,7 @@ export function useMapData(
 
     /* ── Snap bbox to avoid re-fetching on sub-pixel pan ── */
     if (!bbox) return;
+    if (layer === "none") return; // overlays-only mode — no hex data
     const snap = snapBbox(bbox);
     if (snap === lastSnapRef.current) return; // same tile region — skip
 
@@ -206,7 +240,7 @@ export function useMapData(
       setLoading(true);
 
       try {
-        const endpoint = LAYER_ENDPOINTS[layer];
+        let endpoint = LAYER_ENDPOINTS[layer];
         const extra: Record<string, string | undefined> = {};
         if (season && SEASON_LAYERS.has(layer)) {
           extra.season = season;
@@ -214,11 +248,43 @@ export function useMapData(
         if (layer === "bathymetry") {
           extra.exclude_land = "true";
         }
-        if (species && layer === "whale_predictions") {
-          extra.species = species;
+        if (layer === "whale_predictions") {
+          if (species) extra.species = species;
+          const isProjection = sdmTimePeriod && sdmTimePeriod !== "current";
+          if (isProjection) {
+            endpoint = "/api/v1/layers/isdm-projections";
+            extra.scenario = scenario ?? "ssp245";
+            extra.decade = sdmTimePeriod;
+            if (projectionMode === "change") extra.mode = "change";
+          }
         }
-        if (species && layer === "sdm_predictions") {
-          extra.species = species;
+        if (layer === "sdm") {
+          if (species) extra.species = species;
+          const isProjection = sdmTimePeriod && sdmTimePeriod !== "current";
+          if (isProjection) {
+            endpoint = "/api/v1/layers/sdm-projections";
+            extra.scenario = scenario ?? "ssp245";
+            extra.decade = sdmTimePeriod;
+            if (projectionMode === "change") extra.mode = "change";
+          }
+        }
+        if (layer === "risk_ml") {
+          const isProjection = sdmTimePeriod && sdmTimePeriod !== "current";
+          if (isProjection) {
+            endpoint = "/api/v1/risk/ml/projected";
+            extra.scenario = scenario ?? "ssp245";
+            extra.decade = sdmTimePeriod;
+            if (projectionMode === "change") extra.mode = "change";
+          }
+        }
+        if (layer === "ocean") {
+          const isProjection = sdmTimePeriod && sdmTimePeriod !== "current";
+          if (isProjection) {
+            // Same endpoint — backend accepts scenario + decade params
+            extra.scenario = scenario ?? "ssp245";
+            extra.decade = sdmTimePeriod;
+            if (projectionMode === "change") extra.mode = "change";
+          }
         }
 
         /* ── Tile the viewport ── */
@@ -240,11 +306,9 @@ export function useMapData(
           ];
         }
 
-        /* ── Fetch all tiles in parallel ── */
-        const settled = await Promise.allSettled(
-          tiles.map((t) =>
-            fetchTilePages(endpoint, t, extra, ctrl.signal),
-          ),
+        /* ── Fetch tiles with bounded concurrency ── */
+        const settled = await fetchTilesWithConcurrency(
+          tiles, endpoint, extra, ctrl.signal,
         );
 
         /* ── Merge into persistent cache ── */
@@ -299,6 +363,9 @@ export function useMapData(
     layer,
     season,
     species,
+    scenario,
+    sdmTimePeriod,
+    projectionMode,
     flush,
   ]);
 

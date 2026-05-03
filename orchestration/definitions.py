@@ -17,6 +17,7 @@ from dagster import (
     Definitions,
     define_asset_job,
     load_assets_from_modules,
+    multiprocess_executor,
 )
 from dagster_dbt import DbtCliResource
 
@@ -110,6 +111,9 @@ refresh_all_ingestion_job = define_asset_job(
 defs = Definitions(
     assets=all_assets,
     resources={"dbt": dbt_resource},
+    executor=multiprocess_executor.configured(
+        {"max_concurrent": 4},
+    ),
     jobs=[
         full_pipeline_job,
         refresh_ais_job,

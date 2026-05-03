@@ -4,7 +4,7 @@
 --
 -- What this does:
 --   1. Selects key risk columns and species-level scores
---   2. Filters to cells overlapping US coastal waters
+--   2. Filters to cells overlapping the study bounding box
 --   3. Renames columns for consistency
 
 with source as (
@@ -56,7 +56,7 @@ cleaned as (
 
     from source
 
-    -- Filter to cells that intersect US waters
+    -- Filter to cells that intersect the study bbox
     -- Nisi grid is global — keep only relevant cells
     -- Matches US_BBOX in pipeline/config.py
     where x between -180 and -59

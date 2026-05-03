@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from backend.services.database import fetch_all, fetch_scalar
+from backend.services.database import fetch_all, fetch_one, fetch_scalar
 
 _BBOX_WHERE = (
     "cell_lat BETWEEN %(lat_min)s AND %(lat_max)s "
@@ -27,6 +27,72 @@ def list_species() -> list[dict[str, Any]]:
         "ORDER BY species_group"
     )
     return fetch_all(query)
+
+
+def list_crosswalk() -> list[dict[str, Any]]:
+    """Return the full species crosswalk (all rows, all columns).
+
+    Scientists can use this to understand how names map across
+    OBIS, Nisi ISDM, and NMFS ship-strike databases.
+    """
+    query = (
+        "SELECT scientific_name, common_name, species_group, "
+        "  nisi_species, strike_species, taxonomic_rank, "
+        "  family, is_baleen, conservation_priority, "
+        "  aphia_id, worms_lsid "
+        "FROM species_crosswalk "
+        "ORDER BY family, scientific_name"
+    )
+    return fetch_all(query)
+
+
+def resolve_species(
+    species_key: str,
+) -> dict[str, Any] | None:
+    """Look up a species by scientific_name OR species_group.
+
+    Returns ``{scientific_name, aphia_id, worms_lsid, taxonomic_rank}``
+    or None.  Prefers exact ``scientific_name`` match at species rank;
+    falls back to any rank match, then species_group lookup.
+    """
+    # Try exact scientific_name at species rank first
+    row = fetch_one(
+        "SELECT scientific_name, aphia_id, worms_lsid, taxonomic_rank "
+        "FROM species_crosswalk "
+        "WHERE lower(scientific_name) = lower(%s) "
+        "  AND taxonomic_rank = 'species' "
+        "LIMIT 1",
+        (species_key,),
+    )
+    if row:
+        return dict(row)
+    # Try exact scientific_name at any rank (genus, family, etc.)
+    row = fetch_one(
+        "SELECT scientific_name, aphia_id, worms_lsid, taxonomic_rank "
+        "FROM species_crosswalk "
+        "WHERE lower(scientific_name) = lower(%s) "
+        "ORDER BY CASE taxonomic_rank "
+        "  WHEN 'species' THEN 1 WHEN 'genus' THEN 2 "
+        "  WHEN 'family' THEN 3 WHEN 'suborder' THEN 4 "
+        "  WHEN 'order' THEN 5 ELSE 6 END "
+        "LIMIT 1",
+        (species_key,),
+    )
+    if row:
+        return dict(row)
+    # Fall back to species_group — prefer species rank
+    row = fetch_one(
+        "SELECT scientific_name, aphia_id, worms_lsid, taxonomic_rank "
+        "FROM species_crosswalk "
+        "WHERE lower(species_group) = lower(%s) "
+        "ORDER BY CASE taxonomic_rank "
+        "  WHEN 'species' THEN 1 WHEN 'genus' THEN 2 "
+        "  WHEN 'family' THEN 3 WHEN 'suborder' THEN 4 "
+        "  WHEN 'order' THEN 5 ELSE 6 END "
+        "LIMIT 1",
+        (species_key,),
+    )
+    return dict(row) if row else None
 
 
 def get_species_risk(

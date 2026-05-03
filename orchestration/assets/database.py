@@ -101,6 +101,10 @@ def postgis_schema(
         "raw_ocean_covariates",
         "raw_sma_data",
         "raw_speed_zones",
+        "raw_bia_data",
+        "raw_critical_habitat",
+        "raw_shipping_lanes",
+        "raw_slow_zones",
     ],
     description=(
         "Load all raw data files into PostGIS tables. "

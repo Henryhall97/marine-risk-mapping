@@ -19,16 +19,22 @@ from backend.models.layers import (
     BathymetryListResponse,
     CetaceanDensityCell,
     CetaceanDensityListResponse,
+    IsdmProjectionCell,
+    IsdmProjectionListResponse,
     MPACell,
     MPAListResponse,
     NisiRiskCell,
     NisiRiskListResponse,
     OceanCovariateCell,
     OceanCovariateListResponse,
+    ProjectionSummaryResponse,
+    ProjectionSummaryRow,
     ProximityCell,
     ProximityListResponse,
     SdmPredictionCell,
     SdmPredictionListResponse,
+    SdmProjectionCell,
+    SdmProjectionListResponse,
     SpeedZoneCell,
     SpeedZoneListResponse,
     StrikeDensityCell,
@@ -62,7 +68,11 @@ _VALID_SDM_SPECIES = {
     "fin_whale",
     "humpback_whale",
     "sperm_whale",
+    "right_whale",
+    "minke_whale",
 }
+_VALID_SCENARIOS = {"ssp245", "ssp585"}
+_VALID_DECADES = {"2030s", "2040s", "2060s", "2080s"}
 
 
 def _validate_bbox(
@@ -128,7 +138,7 @@ def list_bathymetry(
 ):
     """Bathymetry layer — depth, depth zone, shelf flags.
 
-    Bbox is optional — omit to get the full US coastal extent.
+    Bbox is optional — omit to get the full study-area extent.
     Land cells are excluded by default (set exclude_land=false
     to include them).
     Optional filter by depth_zone (shallow, continental_shelf,
@@ -217,15 +227,39 @@ def list_ocean_covariates(
             "or omit for the annual mean."
         ),
     ),
+    scenario: str | None = Query(
+        None,
+        description=(
+            "Climate scenario for projections: ssp245 or ssp585. "
+            "When provided with decade, returns projected covariates."
+        ),
+    ),
+    decade: str | None = Query(
+        None,
+        description=(
+            "Projection decade: 2030s, 2040s, 2060s, or 2080s. "
+            "Required when scenario is provided."
+        ),
+    ),
+    mode: str = Query(
+        "absolute",
+        description=(
+            "'absolute' returns projected values; 'change' returns "
+            "projected values plus delta columns vs current baseline."
+        ),
+    ),
     limit: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     offset: int = Query(0, ge=0),
 ):
     """Ocean covariates — SST, MLD, SLA, primary productivity.
 
-    Bbox is optional — omit to get the full US coastal extent.
+    Bbox is optional — omit to get the full study-area extent.
     Without season: returns annual mean from int_ocean_covariates.
     With season=<name>: returns values for that season.
     With season=all: returns all 4 seasons (4× rows per cell).
+    With scenario + decade: returns CMIP6 projected covariates.
+    Set **mode=change** to include delta columns comparing each
+    projected value against the current seasonal baseline.
     """
     using_defaults = (
         lat_min is None or lat_max is None or lon_min is None or lon_max is None
@@ -242,16 +276,42 @@ def list_ocean_covariates(
         skip_area_check=using_defaults,
     )
     _valid_season_opts = _VALID_SEASONS | {"all"}
-    _valid_season_opts = _VALID_SEASONS | {"all"}
     if season and season not in _valid_season_opts:
         raise HTTPException(
             400,
             f"Invalid season. Must be one of: {sorted(_VALID_SEASONS)} or 'all'.",
         )
+    # Validate projection params
+    if scenario and scenario not in _VALID_SCENARIOS:
+        raise HTTPException(
+            400,
+            f"Invalid scenario. Must be one of: {sorted(_VALID_SCENARIOS)}",
+        )
+    if decade and decade not in _VALID_DECADES:
+        raise HTTPException(
+            400,
+            f"Invalid decade. Must be one of: {sorted(_VALID_DECADES)}",
+        )
+    if (scenario and not decade) or (decade and not scenario):
+        raise HTTPException(
+            400,
+            "Both scenario and decade are required for projections.",
+        )
+    if mode not in ("absolute", "change"):
+        raise HTTPException(
+            400,
+            "Invalid mode. Must be 'absolute' or 'change'.",
+        )
     # Normalise: 'all' → uses seasonal table without season filter
     svc_season = season if season != "all" else "all"
     total = layer_svc.count_ocean_covariates(
-        lat_min, lat_max, lon_min, lon_max, season=svc_season
+        lat_min,
+        lat_max,
+        lon_min,
+        lon_max,
+        season=svc_season,
+        scenario=scenario,
+        decade=decade,
     )
     rows = layer_svc.get_ocean_covariates(
         lat_min,
@@ -259,6 +319,9 @@ def list_ocean_covariates(
         lon_min,
         lon_max,
         season=svc_season,
+        scenario=scenario,
+        decade=decade,
+        mode=mode,
         limit=limit,
         offset=offset,
     )
@@ -674,3 +737,294 @@ def list_traffic_density(
         limit=limit,
         data=data,
     )
+
+
+# ── SDM projections (CMIP6 climate) ─────────────────────────
+
+
+@router.get(
+    "/sdm-projections",
+    response_model=SdmProjectionListResponse,
+)
+def list_sdm_projections(
+    lat_min: float = Query(..., ge=-90, le=90),
+    lat_max: float = Query(..., ge=-90, le=90),
+    lon_min: float = Query(..., ge=-180, le=180),
+    lon_max: float = Query(..., ge=-180, le=180),
+    scenario: str = Query(
+        ...,
+        description="Climate scenario: ssp245 or ssp585",
+    ),
+    decade: str = Query(
+        ...,
+        description="Projection decade: 2030s, 2040s, 2060s, or 2080s",
+    ),
+    mode: str = Query(
+        "absolute",
+        description=(
+            "Display mode: absolute (raw probabilities) or "
+            "change (delta vs current baseline)"
+        ),
+    ),
+    season: str | None = Query(None),
+    species: str | None = Query(
+        None,
+        description=(
+            "Filter by species probability "
+            "(blue_whale, fin_whale, humpback_whale, "
+            "sperm_whale)"
+        ),
+    ),
+    min_probability: float | None = Query(
+        None,
+        ge=0,
+        le=1,
+        description="Minimum probability threshold",
+    ),
+    limit: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+    offset: int = Query(0, ge=0),
+):
+    """Projected whale habitat under CMIP6 climate scenarios.
+
+    Returns SDM-predicted whale habitat probabilities for future
+    decades under SSP2-4.5 (moderate) or SSP5-8.5 (high emissions).
+
+    Set **mode=change** to include delta columns comparing each
+    projected probability against the current-climate baseline.
+    """
+    _validate_bbox(lat_min, lat_max, lon_min, lon_max)
+    if scenario not in _VALID_SCENARIOS:
+        raise HTTPException(
+            400,
+            f"Invalid scenario. Must be one of: {sorted(_VALID_SCENARIOS)}",
+        )
+    if decade not in _VALID_DECADES:
+        raise HTTPException(
+            400,
+            f"Invalid decade. Must be one of: {sorted(_VALID_DECADES)}",
+        )
+    if mode not in ("absolute", "change"):
+        raise HTTPException(
+            400,
+            "Invalid mode. Must be 'absolute' or 'change'.",
+        )
+    if season and season not in _VALID_SEASONS:
+        raise HTTPException(
+            400,
+            f"Invalid season. Must be one of: {sorted(_VALID_SEASONS)}",
+        )
+    if species and species not in _VALID_SDM_SPECIES:
+        raise HTTPException(
+            400,
+            f"Invalid species. Must be one of: {sorted(_VALID_SDM_SPECIES)}",
+        )
+
+    total = layer_svc.count_sdm_projections(
+        lat_min,
+        lat_max,
+        lon_min,
+        lon_max,
+        scenario=scenario,
+        decade=decade,
+        season=season,
+        species=species,
+        min_probability=min_probability,
+    )
+    rows = layer_svc.get_sdm_projections(
+        lat_min,
+        lat_max,
+        lon_min,
+        lon_max,
+        scenario=scenario,
+        decade=decade,
+        season=season,
+        species=species,
+        min_probability=min_probability,
+        limit=limit,
+        offset=offset,
+        mode=mode,
+    )
+    data = [SdmProjectionCell(**r) for r in rows]
+    return SdmProjectionListResponse(
+        total=total,
+        offset=offset,
+        limit=limit,
+        data=data,
+    )
+
+
+@router.get(
+    "/sdm-projections/summary",
+    response_model=ProjectionSummaryResponse,
+)
+def projection_summary(
+    lat_min: float | None = Query(None, ge=-90, le=90),
+    lat_max: float | None = Query(None, ge=-90, le=90),
+    lon_min: float | None = Query(None, ge=-180, le=180),
+    lon_max: float | None = Query(None, ge=-180, le=180),
+    species: str | None = Query(
+        None,
+        description="Species to summarise (default: any_whale)",
+    ),
+):
+    """Habitat change summary across all scenarios and decades.
+
+    Returns mean probability, median, and high-probability cell
+    counts for each (scenario, decade, season) combination.
+    Useful for time-series charts showing projected habitat shifts.
+    Bbox is optional — omit for coast-wide summary.
+    """
+    has_bbox = all(v is not None for v in (lat_min, lat_max, lon_min, lon_max))
+    if has_bbox:
+        _validate_bbox(lat_min, lat_max, lon_min, lon_max)
+    if species and species not in _VALID_SDM_SPECIES:
+        raise HTTPException(
+            400,
+            f"Invalid species. Must be one of: {sorted(_VALID_SDM_SPECIES)}",
+        )
+    rows = layer_svc.get_projection_summary(
+        lat_min if has_bbox else None,
+        lat_max if has_bbox else None,
+        lon_min if has_bbox else None,
+        lon_max if has_bbox else None,
+        species=species,
+    )
+    data = [ProjectionSummaryRow(**r) for r in rows]
+    return ProjectionSummaryResponse(data=data)
+
+
+# ── ISDM projections (CMIP6 climate) ───────────────────────
+
+
+@router.get(
+    "/isdm-projections",
+    response_model=IsdmProjectionListResponse,
+)
+def list_isdm_projections(
+    lat_min: float = Query(..., ge=-90, le=90),
+    lat_max: float = Query(..., ge=-90, le=90),
+    lon_min: float = Query(..., ge=-180, le=180),
+    lon_max: float = Query(..., ge=-180, le=180),
+    scenario: str = Query(
+        ...,
+        description="Climate scenario: ssp245 or ssp585",
+    ),
+    decade: str = Query(
+        ...,
+        description=("Projection decade: 2030s, 2040s, 2060s, or 2080s"),
+    ),
+    mode: str = Query(
+        "absolute",
+        description=(
+            "Display mode: absolute (raw probabilities) or "
+            "change (delta vs current baseline)"
+        ),
+    ),
+    season: str | None = Query(None),
+    species: str | None = Query(
+        None,
+        description=(
+            "Filter by species probability "
+            "(blue_whale, fin_whale, humpback_whale, "
+            "sperm_whale)"
+        ),
+    ),
+    min_probability: float | None = Query(
+        None,
+        ge=0,
+        le=1,
+        description="Minimum probability threshold",
+    ),
+    limit: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+    offset: int = Query(0, ge=0),
+):
+    """Projected ISDM whale habitat under CMIP6 scenarios.
+
+    ISDM models (Nisi et al. 2024) trained on expert-curated
+    presence/absence data.  Available for 4 species: blue, fin,
+    humpback, and sperm whale.
+
+    Set **mode=change** to include delta columns comparing each
+    projected probability against the current-climate baseline.
+    """
+    _validate_bbox(lat_min, lat_max, lon_min, lon_max)
+    if scenario not in _VALID_SCENARIOS:
+        raise HTTPException(
+            400,
+            f"Invalid scenario. Must be one of: {sorted(_VALID_SCENARIOS)}",
+        )
+    if decade not in _VALID_DECADES:
+        raise HTTPException(
+            400,
+            f"Invalid decade. Must be one of: {sorted(_VALID_DECADES)}",
+        )
+    if mode not in ("absolute", "change"):
+        raise HTTPException(
+            400,
+            "Invalid mode. Must be 'absolute' or 'change'.",
+        )
+    if season and season not in _VALID_SEASONS:
+        raise HTTPException(
+            400,
+            f"Invalid season. Must be one of: {sorted(_VALID_SEASONS)}",
+        )
+    if species and species not in _VALID_ISDM_SPECIES:
+        raise HTTPException(
+            400,
+            f"Invalid species. Must be one of: {sorted(_VALID_ISDM_SPECIES)}",
+        )
+
+    total = layer_svc.count_isdm_projections(
+        lat_min,
+        lat_max,
+        lon_min,
+        lon_max,
+        scenario=scenario,
+        decade=decade,
+        season=season,
+        species=species,
+        min_probability=min_probability,
+    )
+    rows = layer_svc.get_isdm_projections(
+        lat_min,
+        lat_max,
+        lon_min,
+        lon_max,
+        scenario=scenario,
+        decade=decade,
+        season=season,
+        species=species,
+        min_probability=min_probability,
+        limit=limit,
+        offset=offset,
+        mode=mode,
+    )
+    data = [IsdmProjectionCell(**r) for r in rows]
+    return IsdmProjectionListResponse(
+        total=total,
+        offset=offset,
+        limit=limit,
+        data=data,
+    )
+
+
+# ── Cell context (species + habitat for any cell) ──────────
+
+
+@router.get("/context/{h3_cell}")
+def cell_context(
+    h3_cell: int,
+    season: str | None = Query(None),
+):
+    """Species predictions and habitat designations for a cell.
+
+    Returns ISDM whale predictions, observed cetacean species,
+    Biologically Important Areas (BIAs), and ESA Critical Habitat
+    designations that overlap this cell.
+    """
+    if season and season not in _VALID_SEASONS:
+        raise HTTPException(
+            400,
+            f"Invalid season: {season}. Valid: {sorted(_VALID_SEASONS)}",
+        )
+    return layer_svc.get_cell_context(h3_cell, season=season)

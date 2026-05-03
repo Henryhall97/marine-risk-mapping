@@ -2,12 +2,30 @@ services:
   postgis:
     image: postgis/postgis:16-3.4
     container_name: marine_risk_postgis
+    restart: unless-stopped
+    shm_size: "2g"
     ports:
       - "5433:5432"
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-marine_risk}
       POSTGRES_USER: ${POSTGRES_USER:-marine}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-marine_dev}
+    # Persist PG tuning in the container command so settings
+    # survive container recreation without needing ALTER SYSTEM.
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=2GB"
+      - "-c"
+      - "effective_cache_size=6GB"
+      - "-c"
+      - "maintenance_work_mem=512MB"
+      - "-c"
+      - "work_mem=128MB"
+      - "-c"
+      - "max_parallel_workers_per_gather=0"
+      - "-c"
+      - "random_page_cost=1.1"
     volumes:
       - postgis_data:/var/lib/postgresql/data
     healthcheck:

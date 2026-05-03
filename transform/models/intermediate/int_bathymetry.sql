@@ -3,6 +3,14 @@
 -- (produced by pipeline/aggregation/sample_bathymetry.py).
 --
 -- Each cell has depth averaged across 7 points (centroid + 6
+
+{{ config(
+    indexes=[
+        {'columns': ['h3_cell']},
+    ]
+) }}
+
+-- Each cell has depth averaged across 7 points (centroid + 6
 -- hexagon vertices) to capture shelf-edge gradients.
 --
 -- Adds derived features for the risk model:

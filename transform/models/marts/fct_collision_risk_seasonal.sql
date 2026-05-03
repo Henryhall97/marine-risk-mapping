@@ -21,6 +21,7 @@
 {{ config(
     indexes=[
         {'columns': ['h3_cell', 'season']},
+        {'columns': ['cell_lat', 'cell_lon']},
         {'columns': ['risk_score']},
         {'columns': ['geom'], 'type': 'gist'},
     ]

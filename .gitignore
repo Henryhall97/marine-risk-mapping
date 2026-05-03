@@ -18,6 +18,8 @@ ENV/
 # frontend
 node_modules/
 .next/
+*.tsbuildinfo
+frontend/tsconfig.tsbuildinfo
 
 # data
 data/
@@ -26,12 +28,17 @@ data/
 *.geojson
 !data/.gitkeep
 *.db
-.png
+*.png
+*.jpg
+*.pdf
+•.glb
 
 # dbt
 target/
 dbt_packages/
 transform/logs/
+transform/target/
+transform/dbt_packages/
 
 # MLflow
 mlruns/
@@ -85,3 +92,8 @@ dmypy.json
 # linting
 .ruff_cache/
 AWSCLIV2.pkg
+
+# Wizard raw DALL-E images (large, regeneratable)
+frontend/public/wizard/*/raw/
+# NOAA original downloads (re-downloadable via scraper)
+frontend/public/wizard/species/noaa/

@@ -2,19 +2,21 @@
 --
 -- Same architecture as fct_collision_risk_seasonal but replaces the
 -- raw-sighting-based cetacean sub-score with ML-predicted P(whale)
--- from ISDM (Integrated Species Distribution Models).
+-- from an ISDM + SDM ensemble.
 --
--- Why this is better:
---   1. ISDM models generalize whale presence across the full grid,
---      not just cells with OBIS observation effort.
---   2. P(whale) × traffic interaction directly measures co-occurrence
---      risk rather than independently scoring whale presence and traffic.
---   3. Per-species probabilities allow species-weighted risk (endangered
---      species like right whale can get higher weight in future).
+-- Whale prediction ensemble:
+--   For 4 shared species (blue, fin, humpback, sperm): avg(ISDM, SDM)
+--   reduces model-specific bias.  For 2 SDM-only species (right whale,
+--   minke): SDM prediction directly.  Composites (any_whale_prob, max,
+--   mean) computed across all 6 ensembled species.
 --
--- TODO: species-vulnerability-weighted composite — replace equal-weight
--- any_whale_prob with Σ wᵢ·Pᵢ where wᵢ reflects IUCN status or
--- population size.  See TODO.md for details.
+--   Why ensemble rather than ISDM-only:
+--   1. Right whale — the most endangered large whale and primary driver
+--      of US speed regulations — is absent from ISDM.  SDM covers it.
+--   2. Averaging two independent models (expert data vs OBIS data)
+--      reduces overfitting to either data source's biases.
+--   3. Keeps the current risk methodology consistent with the projected
+--      risk mart, enabling clean delta comparisons.
 --
 -- Sub-score architecture (7 sub-scores, interaction-first):
 --   - Whale×traffic interaction 30%  (P(whale) × traffic_threat — PRIMARY)
@@ -26,13 +28,9 @@
 --   - Reference risk       5%  (unchanged)
 --
 -- Habitat suitability is deliberately OMITTED from the ML mart.
--- The ISDM models were trained on all 7 environmental covariates
+-- Both ISDM and SDM models were trained on environmental covariates
 -- (SST, MLD, SLA, PP, depth, depth_range), so habitat information
--- is already encoded in the whale probability predictions.  Including
--- a separate hand-tuned habitat sub-score would double-count that
--- signal.  This provides clean separation: the standard mart uses
--- expert-elicited habitat weights, the ML mart delegates habitat
--- entirely to the learned species distribution models.
+-- is already encoded in the whale probability predictions.
 --
 -- The interaction score captures Rockwood et al. (2021) co-occurrence:
 --   risk = P(whale present) × P(lethal encounter | traffic).
@@ -44,6 +42,7 @@
 {{ config(
     indexes=[
         {'columns': ['h3_cell', 'season']},
+        {'columns': ['cell_lat', 'cell_lon']},
         {'columns': ['risk_score']},
         {'columns': ['geom'], 'type': 'gist'},
     ]
@@ -78,14 +77,77 @@ features as (
         gs.geom,
         gs.season,
 
-        -- ── ML whale predictions (REPLACES raw sightings) ──
+        -- ── ML whale predictions (ISDM + SDM ensemble) ──
+        -- Raw model predictions (retained for diagnostics)
         ml.isdm_blue_whale,
         ml.isdm_fin_whale,
         ml.isdm_humpback_whale,
         ml.isdm_sperm_whale,
-        ml.max_whale_prob,
-        ml.mean_whale_prob,
-        ml.any_whale_prob,
+        sdm.sdm_blue_whale,
+        sdm.sdm_fin_whale,
+        sdm.sdm_humpback_whale,
+        sdm.sdm_sperm_whale,
+        sdm.sdm_right_whale,
+        sdm.sdm_minke_whale,
+
+        -- Ensembled per-species: avg(ISDM, SDM) for 4 shared species
+        (coalesce(ml.isdm_blue_whale, 0)
+            + coalesce(sdm.sdm_blue_whale, 0)) / 2.0
+            as blue_whale_prob,
+        (coalesce(ml.isdm_fin_whale, 0)
+            + coalesce(sdm.sdm_fin_whale, 0)) / 2.0
+            as fin_whale_prob,
+        (coalesce(ml.isdm_humpback_whale, 0)
+            + coalesce(sdm.sdm_humpback_whale, 0)) / 2.0
+            as humpback_whale_prob,
+        (coalesce(ml.isdm_sperm_whale, 0)
+            + coalesce(sdm.sdm_sperm_whale, 0)) / 2.0
+            as sperm_whale_prob,
+        -- SDM-only species (no ISDM counterpart)
+        coalesce(sdm.sdm_right_whale, 0) as right_whale_prob,
+        coalesce(sdm.sdm_minke_whale, 0) as minke_whale_prob,
+
+        -- Composite: max across all 6 ensembled species
+        greatest(
+            (coalesce(ml.isdm_blue_whale, 0)
+                + coalesce(sdm.sdm_blue_whale, 0)) / 2.0,
+            (coalesce(ml.isdm_fin_whale, 0)
+                + coalesce(sdm.sdm_fin_whale, 0)) / 2.0,
+            (coalesce(ml.isdm_humpback_whale, 0)
+                + coalesce(sdm.sdm_humpback_whale, 0)) / 2.0,
+            (coalesce(ml.isdm_sperm_whale, 0)
+                + coalesce(sdm.sdm_sperm_whale, 0)) / 2.0,
+            coalesce(sdm.sdm_right_whale, 0),
+            coalesce(sdm.sdm_minke_whale, 0)
+        ) as max_whale_prob,
+
+        -- Composite: mean across all 6 ensembled species
+        (
+            (coalesce(ml.isdm_blue_whale, 0)
+                + coalesce(sdm.sdm_blue_whale, 0)) / 2.0
+          + (coalesce(ml.isdm_fin_whale, 0)
+                + coalesce(sdm.sdm_fin_whale, 0)) / 2.0
+          + (coalesce(ml.isdm_humpback_whale, 0)
+                + coalesce(sdm.sdm_humpback_whale, 0)) / 2.0
+          + (coalesce(ml.isdm_sperm_whale, 0)
+                + coalesce(sdm.sdm_sperm_whale, 0)) / 2.0
+          + coalesce(sdm.sdm_right_whale, 0)
+          + coalesce(sdm.sdm_minke_whale, 0)
+        ) / 6.0 as mean_whale_prob,
+
+        -- Composite: P(any whale) = 1 - ∏(1 - P_i) across 6 species
+        1.0 - (
+            (1.0 - (coalesce(ml.isdm_blue_whale, 0)
+                + coalesce(sdm.sdm_blue_whale, 0)) / 2.0)
+          * (1.0 - (coalesce(ml.isdm_fin_whale, 0)
+                + coalesce(sdm.sdm_fin_whale, 0)) / 2.0)
+          * (1.0 - (coalesce(ml.isdm_humpback_whale, 0)
+                + coalesce(sdm.sdm_humpback_whale, 0)) / 2.0)
+          * (1.0 - (coalesce(ml.isdm_sperm_whale, 0)
+                + coalesce(sdm.sdm_sperm_whale, 0)) / 2.0)
+          * (1.0 - coalesce(sdm.sdm_right_whale, 0))
+          * (1.0 - coalesce(sdm.sdm_minke_whale, 0))
+        ) as any_whale_prob,
 
         -- ── Seasonal traffic ───────────────────────────
         t.months_active,
@@ -162,7 +224,9 @@ features as (
 
         -- Convenience booleans
         t.h3_cell is not null      as has_traffic,
-        ml.h3_cell is not null     as has_ml_predictions,
+        (ml.h3_cell is not null
+            or sdm.h3_cell is not null)
+                                   as has_ml_predictions,
         m.h3_cell is not null      as in_mpa,
         ss.h3_cell is not null     as has_strike_history,
         nr.h3_cell is not null     as has_nisi_reference
@@ -170,6 +234,8 @@ features as (
     from grid_seasons gs
     left join {{ ref('int_ml_whale_predictions') }} ml
         on gs.h3_cell = ml.h3_cell and gs.season = ml.season
+    left join {{ ref('int_sdm_whale_predictions') }} sdm
+        on gs.h3_cell = sdm.h3_cell and gs.season = sdm.season
     left join {{ ref('int_vessel_traffic_seasonal') }} t
         on gs.h3_cell = t.h3_cell and gs.season = t.season
     left join {{ ref('int_bathymetry') }} b
@@ -330,14 +396,28 @@ select
     round(protection_gap::numeric, 4)          as protection_gap,
     round(reference_risk_score::numeric, 4)    as reference_risk_score,
 
-    -- ── ML whale predictions (per-species) ──────────
+    -- ── ML whale predictions (per-species, ensembled) ─
+    round(blue_whale_prob::numeric, 4)         as blue_whale_prob,
+    round(fin_whale_prob::numeric, 4)          as fin_whale_prob,
+    round(humpback_whale_prob::numeric, 4)     as humpback_whale_prob,
+    round(sperm_whale_prob::numeric, 4)        as sperm_whale_prob,
+    round(right_whale_prob::numeric, 4)        as right_whale_prob,
+    round(minke_whale_prob::numeric, 4)        as minke_whale_prob,
+    round(any_whale_prob::numeric, 4)          as any_whale_prob,
+    round(max_whale_prob::numeric, 4)          as max_whale_prob,
+    round(mean_whale_prob::numeric, 4)         as mean_whale_prob,
+
+    -- ── Raw model predictions (diagnostics) ─────────
     round(isdm_blue_whale::numeric, 4)         as isdm_blue_whale,
     round(isdm_fin_whale::numeric, 4)          as isdm_fin_whale,
     round(isdm_humpback_whale::numeric, 4)     as isdm_humpback_whale,
     round(isdm_sperm_whale::numeric, 4)        as isdm_sperm_whale,
-    round(any_whale_prob::numeric, 4)          as any_whale_prob,
-    round(max_whale_prob::numeric, 4)          as max_whale_prob,
-    round(mean_whale_prob::numeric, 4)         as mean_whale_prob,
+    round(sdm_blue_whale::numeric, 4)          as sdm_blue_whale,
+    round(sdm_fin_whale::numeric, 4)           as sdm_fin_whale,
+    round(sdm_humpback_whale::numeric, 4)      as sdm_humpback_whale,
+    round(sdm_sperm_whale::numeric, 4)         as sdm_sperm_whale,
+    round(sdm_right_whale::numeric, 4)         as sdm_right_whale,
+    round(sdm_minke_whale::numeric, 4)         as sdm_minke_whale,
 
     -- ── Whale × traffic interaction (raw + scored) ──
     round(whale_traffic_interaction::numeric, 4) as whale_traffic_interaction,

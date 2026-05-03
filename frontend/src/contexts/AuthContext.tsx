@@ -19,17 +19,20 @@ export interface Credential {
   description: string;
   is_verified: boolean;
   verified_at: string | null;
+  evidence_url: string | null;
 }
 
 export interface UserProfile {
   id: number;
   email: string;
   display_name: string;
+  bio: string | null;
   avatar_url: string | null;
   created_at: string;
   submission_count: number;
   reputation_score: number;
   reputation_tier: string;
+  is_moderator: boolean;
   credentials: Credential[];
 }
 

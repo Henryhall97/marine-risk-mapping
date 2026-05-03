@@ -1,5 +1,12 @@
 -- Intermediate model: speed zone coverage per hex cell per season
 -- Determines whether each speed zone is ACTIVE during each season.
+
+{{ config(
+    indexes=[
+        {'columns': ['h3_cell', 'season']},
+    ]
+) }}
+
 --
 -- A zone is considered active in a season if any month in that
 -- season falls within the zone's [start_month, end_month] range.

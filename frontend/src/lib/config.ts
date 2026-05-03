@@ -23,3 +23,33 @@ export const PAGE_LIMIT = 5_000;
 
 /** API max bbox area — must match backend MAX_BBOX_AREA_DEG2. */
 export const MAX_BBOX_AREA_DEG2 = 100;
+
+/**
+ * Build a `/map` URL with query params that position the map
+ * on a specific location, layer, and season.
+ */
+export function mapLink(opts: {
+  lat: number;
+  lon: number;
+  zoom?: number;
+  layer?: string;
+  season?: string | null;
+  scenario?: string | null;
+  decade?: string | null;
+  /** Overlay names to enable on the map (e.g. "activeSMAs", "mpas"). */
+  overlays?: string[];
+  /** Traffic sub-metric to select (e.g. "speed_lethality", "night_traffic"). */
+  metric?: string;
+}): string {
+  const p = new URLSearchParams();
+  p.set("lat", opts.lat.toFixed(4));
+  p.set("lon", opts.lon.toFixed(4));
+  if (opts.zoom) p.set("zoom", String(opts.zoom));
+  if (opts.layer) p.set("layer", opts.layer);
+  if (opts.season && opts.season !== "annual") p.set("season", opts.season);
+  if (opts.scenario) p.set("scenario", opts.scenario);
+  if (opts.decade) p.set("decade", opts.decade);
+  if (opts.overlays?.length) p.set("overlays", opts.overlays.join(","));
+  if (opts.metric) p.set("metric", opts.metric);
+  return `/map?${p.toString()}`;
+}

@@ -1,14 +1,17 @@
 "use client";
 
+import { Suspense } from "react";
 import { useAuth } from "@/contexts/AuthContext";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
 type Tab = "login" | "register";
 
-export default function AuthPage() {
+function AuthPageInner() {
   const { user, loading, login, register } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const next = searchParams.get("next") ?? "/profile";
   const [tab, setTab] = useState<Tab>("login");
   const [email, setEmail] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -19,8 +22,8 @@ export default function AuthPage() {
 
   // Redirect if already logged in
   useEffect(() => {
-    if (!loading && user) router.push("/profile");
-  }, [loading, user, router]);
+    if (!loading && user) router.push(next);
+  }, [loading, user, router, next]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -42,7 +45,7 @@ export default function AuthPage() {
       } else {
         await register(email, displayName || email.split("@")[0], password);
       }
-      router.push("/profile");
+      router.push(next);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
@@ -160,5 +163,13 @@ export default function AuthPage() {
         </form>
       </div>
     </div>
+  );
+}
+
+export default function AuthPage() {
+  return (
+    <Suspense>
+      <AuthPageInner />
+    </Suspense>
   );
 }

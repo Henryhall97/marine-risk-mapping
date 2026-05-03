@@ -2,7 +2,7 @@
 
 Downloads the NOAA MPA Inventory GIS geodatabase (2023 edition),
 extracts it, and converts to GeoParquet for consistent storage
-with other datasets. Filters to US coastal waters.
+with other datasets. Filters to the study bounding box.
 """
 
 import logging

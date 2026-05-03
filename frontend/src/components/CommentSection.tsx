@@ -5,6 +5,8 @@ import { API_BASE } from "@/lib/config";
 import UserAvatar from "@/components/UserAvatar";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ComponentType } from "react";
+import { IconEye, IconStar, IconMicroscope, IconComment } from "@/components/icons/MarineIcons";
 
 /* ── Types ────────────────────────────────────────────────── */
 
@@ -20,12 +22,12 @@ interface Comment {
   updated_at: string | null;
 }
 
-const TIER_STYLE: Record<string, { color: string; icon: string }> = {
-  newcomer: { color: "text-slate-400", icon: "🌱" },
-  observer: { color: "text-ocean-400", icon: "👁️" },
-  contributor: { color: "text-green-400", icon: "⭐" },
-  expert: { color: "text-purple-400", icon: "🔬" },
-  authority: { color: "text-yellow-400", icon: "👑" },
+const TIER_STYLE: Record<string, { color: string; Icon: ComponentType<{ className?: string }> }> = {
+  newcomer: { color: "text-slate-400", Icon: ({ className }) => <span className={className}>●</span> },
+  observer: { color: "text-ocean-400", Icon: IconEye },
+  contributor: { color: "text-green-400", Icon: IconStar },
+  expert: { color: "text-purple-400", Icon: IconMicroscope },
+  authority: { color: "text-yellow-400", Icon: IconStar },
 };
 
 /* ── Component ────────────────────────────────────────────── */
@@ -167,8 +169,8 @@ export default function CommentSection({
 
   return (
     <div className="rounded-xl border border-ocean-800 bg-abyss-900/60 p-5">
-      <h3 className="mb-4 text-sm font-semibold text-white">
-        💬 Comments{total > 0 && ` (${total})`}
+      <h3 className="mb-4 flex items-center gap-1.5 text-sm font-semibold text-white">
+        <IconComment className="h-4 w-4" /> Comments{total > 0 && ` (${total})`}
       </h3>
 
       {/* Comment list */}
@@ -203,7 +205,7 @@ export default function CommentSection({
                         displayName={c.display_name}
                         size={22}
                       />
-                      <span className={tier.color}>{tier.icon}</span>
+                      <tier.Icon className={`h-3.5 w-3.5 ${tier.color}`} />
                       <span className="font-medium text-slate-300">
                         {c.display_name ?? "Anonymous"}
                       </span>

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { API_BASE } from "@/lib/config";
-import type { Season } from "@/lib/types";
+import type { Season, ClimateScenario, SdmTimePeriod } from "@/lib/types";
 
 /** Row returned by GET /api/v1/macro/overview. */
 export interface MacroCell {
@@ -10,6 +10,8 @@ export interface MacroCell {
   cell_lat: number;
   cell_lon: number;
   season: string;
+  scenario: string | null;
+  decade: string | null;
   risk_score: number | null;
   ml_risk_score: number | null;
   traffic_score: number | null;
@@ -38,7 +40,12 @@ export interface MacroCell {
   sdm_fin_whale: number | null;
   sdm_humpback_whale: number | null;
   sdm_sperm_whale: number | null;
+  sdm_right_whale: number | null;
+  sdm_minke_whale: number | null;
   sst: number | null;
+  sst_sd: number | null;
+  mld: number | null;
+  sla: number | null;
   pp_upper_200m: number | null;
   depth_m_mean: number | null;
   shelf_fraction: number | null;
@@ -50,14 +57,25 @@ const cache = new Map<string, MacroCell[]>();
 
 /**
  * Fetch the pre-aggregated macro overview grid (H3 res-4, ~5 500 cells).
- * Returns the full US coast in one call — no bbox or pagination needed.
+ * Returns all coarse cells for the requested season in a single
+ * response — no bbox or pagination needed.
  *
- * Pass `null` for season to disable fetching (e.g. when in detail mode).
+ * Pass `undefined` for season to disable fetching (e.g. when in detail mode).
+ * For climate projections, pass scenario + timePeriod (non-"current").
  */
-export function useMacroData(season: Season | undefined) {
+export function useMacroData(
+  season: Season | undefined,
+  scenario?: ClimateScenario,
+  timePeriod?: SdmTimePeriod,
+) {
   const [data, setData] = useState<MacroCell[]>([]);
   const [loading, setLoading] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+
+  // Derive projection params — only active for future decades
+  const isProjection = timePeriod !== undefined && timePeriod !== "current";
+  const apiScenario = isProjection ? scenario : undefined;
+  const apiDecade = isProjection ? timePeriod : undefined;
 
   useEffect(() => {
     // If season is undefined, we're not in overview mode — skip
@@ -66,13 +84,21 @@ export function useMacroData(season: Season | undefined) {
       return;
     }
 
-    // Map Season type to API param
-    const apiSeason =
+    // Map Season type to API param.
+    // Projected data has no "annual" season — fall back to "winter".
+    const rawSeason =
       season === null || season === "all" ? "annual" : season;
+    const apiSeason =
+      isProjection && rawSeason === "annual" ? "winter" : rawSeason;
+
+    // Build cache key including projection dimensions
+    const cacheKey = apiScenario && apiDecade
+      ? `${apiSeason}:${apiScenario}:${apiDecade}`
+      : apiSeason;
 
     // Serve from cache
-    if (cache.has(apiSeason)) {
-      setData(cache.get(apiSeason)!);
+    if (cache.has(cacheKey)) {
+      setData(cache.get(cacheKey)!);
       return;
     }
 
@@ -80,17 +106,20 @@ export function useMacroData(season: Season | undefined) {
     const ac = new AbortController();
     abortRef.current = ac;
 
+    // Build URL with optional projection params
+    let url = `${API_BASE}/api/v1/macro/overview?season=${apiSeason}`;
+    if (apiScenario && apiDecade) {
+      url += `&scenario=${apiScenario}&decade=${apiDecade}`;
+    }
+
     setLoading(true);
-    fetch(
-      `${API_BASE}/api/v1/macro/overview?season=${apiSeason}`,
-      { signal: ac.signal },
-    )
+    fetch(url, { signal: ac.signal })
       .then((r) => {
         if (!r.ok) throw new Error(`${r.status}`);
         return r.json();
       })
       .then((body: { data: MacroCell[] }) => {
-        cache.set(apiSeason, body.data);
+        cache.set(cacheKey, body.data);
         setData(body.data);
       })
       .catch(() => {
@@ -99,7 +128,7 @@ export function useMacroData(season: Season | undefined) {
       .finally(() => setLoading(false));
 
     return () => ac.abort();
-  }, [season]);
+  }, [season, apiScenario, apiDecade]);
 
   return { data, loading, total: data.length };
 }
