@@ -1,0 +1,34 @@
+# Marine Risk Mapping — reverse proxy with automatic HTTPS via Let's Encrypt.
+#
+# DOMAIN env var must point at the VM's public IP via DNS A record.
+# Caddy will provision certs on first start and renew automatically.
+
+{$DOMAIN} {
+    encode zstd gzip
+
+    # Pass through to the FastAPI backend.
+    reverse_proxy backend:8000 {
+        # Long-running classifier endpoints can take 10s+; default 30s is fine.
+        transport http {
+            response_header_timeout 60s
+        }
+    }
+
+    # File-upload endpoints accept up to 100 MB (audio).
+    request_body {
+        max_size 100MB
+    }
+
+    # Sensible defaults; tighten later if you serve from this origin.
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options    "nosniff"
+        Referrer-Policy           "strict-origin-when-cross-origin"
+        # CORS is handled by FastAPI; don't double-set Access-Control headers here.
+    }
+
+    log {
+        output stdout
+        format console
+    }
+}

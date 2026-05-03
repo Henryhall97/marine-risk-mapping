@@ -1,0 +1,74 @@
+# Keep the backend Docker image lean.
+
+# Data (mostly raw — never goes in the image)
+data/raw/
+data/processed/ais/
+data/processed/cetaceans/
+data/processed/strikes/
+data/processed/ml/artifacts/
+data/processed/ml/isdm_predictions/
+data/processed/ml/isdm_projections/
+data/processed/ml/sdm_predictions/
+data/processed/ml/sdm_projections/
+data/processed/ml/*.parquet
+data/processed/ml/audio_features.parquet
+data/uploads/
+
+# DB dumps
+*.sql
+*.dump
+*.tar
+*.gz
+
+# dbt
+transform/target/
+transform/dbt_packages/
+transform/logs/
+
+# Frontend
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.turbo/
+
+# Notebooks + docs
+notebooks/
+docs/
+*.ipynb
+
+# Python build/cache
+**/__pycache__
+**/*.pyc
+**/*.pyo
+.venv/
+.uv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+htmlcov/
+.coverage*
+
+# MLflow tracking store
+mlruns/
+
+# Git / IDE
+.git/
+.github/
+.vscode/
+.idea/
+*.log
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Tests (not needed in production image)
+tests/
+
+# Orchestration (Dagster) — runs separately, not in API image
+orchestration/
+
+# Secrets
+.env
+.env.local
+.env.*.local

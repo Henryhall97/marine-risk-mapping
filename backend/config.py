@@ -6,6 +6,7 @@ settings (pagination limits, CORS origins, rate limits).
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from pipeline.config import DB_CONFIG, US_BBOX  # noqa: F401 — re-exported
@@ -16,7 +17,9 @@ from pipeline.config import DB_CONFIG, US_BBOX  # noqa: F401 — re-exported
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # ── Database ────────────────────────────────────────────────
-DATABASE_URL = (
+# Allow direct DATABASE_URL override (e.g. managed Postgres / Fly.io).
+# Falls back to MR_DB_* vars from pipeline.config.
+DATABASE_URL = os.environ.get("DATABASE_URL") or (
     f"postgresql://{DB_CONFIG['user']}:{DB_CONFIG['password']}"
     f"@{DB_CONFIG['host']}:{DB_CONFIG['port']}"
     f"/{DB_CONFIG['dbname']}"
@@ -27,11 +30,16 @@ DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 5_000
 
 # ── CORS ────────────────────────────────────────────────────
+# Comma-separated list of allowed origins. Defaults to local dev
+# servers; in production set MR_CORS_ORIGINS to your Vercel URL.
+_default_cors = (
+    "http://localhost:3000,http://localhost:5173,"
+    "http://127.0.0.1:3000,http://127.0.0.1:5173"
+)
 CORS_ORIGINS: list[str] = [
-    "http://localhost:3000",  # Next.js dev
-    "http://localhost:5173",  # Vite dev
-    "http://127.0.0.1:3000",
-    "http://127.0.0.1:5173",
+    o.strip()
+    for o in os.environ.get("MR_CORS_ORIGINS", _default_cors).split(",")
+    if o.strip()
 ]
 
 # ── Bounding box limits ─────────────────────────────────────
