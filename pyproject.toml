@@ -61,6 +61,7 @@ dependencies = [
     "openai>=2.26.0",
     "timm>=1.0.25",
     "albumentations>=2.0.8",
+    "cdsapi>=0.7.7",
 ]
 
 [dependency-groups]
