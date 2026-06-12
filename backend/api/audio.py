@@ -16,6 +16,7 @@ from backend.models.audio import (
     AudioRiskContext,
     AudioSegmentResult,
 )
+from backend.security import validate_upload_bytes
 from backend.services import audio as audio_svc
 
 router = APIRouter(prefix="/audio", tags=["audio"])
@@ -82,6 +83,19 @@ def classify_audio(
         )
     if len(audio_bytes) == 0:
         raise HTTPException(400, "Empty file uploaded")
+
+    # Magic-byte check: many clients send application/octet-stream
+    # for audio uploads, so we always verify content irrespective
+    # of the declared Content-Type.
+    validate_upload_bytes(
+        audio_bytes,
+        kind="audio",
+        declared_content_type=(
+            file.content_type
+            if file.content_type and file.content_type != "application/octet-stream"
+            else None
+        ),
+    )
 
     # Classify
     try:

@@ -22,6 +22,11 @@ from backend.models.events import (
     EventSummary,
     EventUpdate,
 )
+from backend.security import (
+    safe_subpath,
+    validate_upload_bytes,
+    validate_uuid_or_404,
+)
 from backend.services import auth as auth_svc
 from backend.services import events as event_svc
 
@@ -525,6 +530,7 @@ async def upload_cover(
 ) -> dict[str, str]:
     """Upload a cover photo for the event. Creator/organizer only."""
     user_id = _require_auth(authorization)
+    event_id = validate_uuid_or_404(event_id, name="event")
 
     ext = Path(image.filename or "").suffix.lower()
     if ext not in _ALLOWED_EXTENSIONS:
@@ -540,6 +546,9 @@ async def upload_cover(
             status_code=400,
             detail=f"Cover exceeds {_MAX_COVER_MB} MB limit",
         )
+    # Magic-byte check: refuse files whose contents don't match an
+    # accepted image format, regardless of filename or Content-Type.
+    validate_upload_bytes(data, kind="image", declared_content_type=image.content_type)
 
     stored = event_svc.upload_event_cover(
         event_id, user_id, data, image.filename or "cover.jpg"
@@ -555,7 +564,8 @@ async def upload_cover(
 @router.get("/{event_id}/cover")
 def get_cover(event_id: str) -> FileResponse:
     """Serve the event cover photo."""
-    cover_dir = _COVER_ROOT / event_id
+    event_id = validate_uuid_or_404(event_id, name="event")
+    cover_dir = safe_subpath(_COVER_ROOT, event_id)
     if cover_dir.exists():
         for f in cover_dir.glob("cover.*"):
             media_map = {
@@ -599,6 +609,7 @@ async def upload_gallery_photo(
 ) -> dict:
     """Upload a photo to the event gallery. Members only."""
     user_id = _require_auth(authorization)
+    event_id = validate_uuid_or_404(event_id, name="event")
 
     ext = Path(image.filename or "").suffix.lower()
     if ext not in _ALLOWED_EXTENSIONS:
@@ -614,6 +625,7 @@ async def upload_gallery_photo(
             status_code=400,
             detail=f"Image exceeds {_MAX_COVER_MB} MB limit",
         )
+    validate_upload_bytes(data, kind="image", declared_content_type=image.content_type)
 
     result = event_svc.upload_gallery_photo(
         event_id,
@@ -638,6 +650,7 @@ async def upload_gallery_photo(
 @router.get("/{event_id}/gallery/{photo_id}")
 def get_gallery_photo(event_id: str, photo_id: int) -> FileResponse:
     """Serve a gallery photo."""
+    event_id = validate_uuid_or_404(event_id, name="event")
     path = event_svc.get_gallery_photo_path(event_id, photo_id)
     if not path:
         raise HTTPException(status_code=404, detail="Photo not found")

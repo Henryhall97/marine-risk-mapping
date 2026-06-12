@@ -11,6 +11,13 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
+# Minimal but signature-valid payloads for upload endpoints. The
+# backend validates magic bytes (see backend/security.py) so test
+# fixtures must use real headers rather than arbitrary placeholders.
+JPEG_BYTES = b"\xff\xd8\xff\xe0" + b"\x00" * 100
+PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+WAV_BYTES = b"RIFF\x00\x00\x00\x00WAVE" + b"\x00" * 100
+
 # ── Fixtures ────────────────────────────────────────────────
 
 
@@ -489,7 +496,7 @@ class TestPhotoClassify:
                 files={
                     "file": (
                         "whale.png",
-                        b"\x89PNG" + b"\x00" * 100,
+                        PNG_BYTES,
                         "image/png",
                     )
                 },
@@ -597,7 +604,7 @@ class TestAudioClassify:
                 files={
                     "file": (
                         "recording.wav",
-                        b"RIFF" + b"\x00" * 100,
+                        WAV_BYTES,
                         "audio/wav",
                     )
                 },
@@ -641,7 +648,7 @@ class TestAudioClassify:
                 files={
                     "file": (
                         "short.wav",
-                        b"RIFF" + b"\x00" * 50,
+                        WAV_BYTES,
                         "audio/wav",
                     )
                 },
@@ -687,7 +694,7 @@ class TestAudioClassify:
                 files={
                     "file": (
                         "recording.wav",
-                        b"RIFF" + b"\x00" * 100,
+                        WAV_BYTES,
                         "audio/wav",
                     )
                 },
@@ -708,7 +715,7 @@ class TestAudioClassify:
                 files={
                     "file": (
                         "recording.wav",
-                        b"RIFF" + b"\x00" * 100,
+                        WAV_BYTES,
                         "audio/wav",
                     )
                 },
@@ -1787,7 +1794,7 @@ class TestSightingReport:
                     "lon": "-73.2",
                 },
                 files={
-                    "image": ("whale.jpg", b"fake-image", "image/jpeg"),
+                    "image": ("whale.jpg", JPEG_BYTES, "image/jpeg"),
                 },
             )
         assert r.status_code == 200
@@ -1837,7 +1844,7 @@ class TestSightingReport:
                     "interaction_type": "acoustic_detection",
                 },
                 files={
-                    "audio": ("rec.wav", b"fake-audio", "audio/wav"),
+                    "audio": ("rec.wav", WAV_BYTES, "audio/wav"),
                 },
             )
         assert r.status_code == 200
@@ -1877,8 +1884,8 @@ class TestSightingReport:
                     "lon": "-73.2",
                 },
                 files={
-                    "image": ("whale.jpg", b"fake-image", "image/jpeg"),
-                    "audio": ("rec.wav", b"fake-audio", "audio/wav"),
+                    "image": ("whale.jpg", JPEG_BYTES, "image/jpeg"),
+                    "audio": ("rec.wav", WAV_BYTES, "audio/wav"),
                 },
             )
         assert r.status_code == 200
@@ -1946,7 +1953,7 @@ class TestSightingReport:
                     "lon": "-73.2",
                 },
                 files={
-                    "image": ("whale.jpg", b"fake-image", "image/jpeg"),
+                    "image": ("whale.jpg", JPEG_BYTES, "image/jpeg"),
                 },
             )
         assert r.status_code == 200
@@ -1967,7 +1974,7 @@ class TestSightingReport:
             "/api/v1/sightings/report",
             data={},
             files={
-                "audio": ("rec.wav", b"fake-audio", "audio/wav"),
+                "audio": ("rec.wav", WAV_BYTES, "audio/wav"),
             },
         )
         assert r.status_code == 400
@@ -2009,7 +2016,7 @@ class TestSightingReport:
                 "/api/v1/sightings/report",
                 data={},
                 files={
-                    "image": ("whale.jpg", b"fake-image", "image/jpeg"),
+                    "image": ("whale.jpg", JPEG_BYTES, "image/jpeg"),
                 },
             )
         assert r.status_code == 200

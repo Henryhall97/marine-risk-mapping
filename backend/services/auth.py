@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -15,8 +16,35 @@ from backend.services.database import fetch_all, fetch_one, fetch_scalar, get_co
 
 log = logging.getLogger(__name__)
 
-# JWT config — override via environment variables in production
-JWT_SECRET = os.environ.get("MR_JWT_SECRET", "marine-risk-dev-secret-change-me")
+
+def _resolve_jwt_secret() -> str:
+    """Resolve the JWT signing key.
+
+    Production must supply ``MR_JWT_SECRET`` via the environment —
+    docker-compose.prod.yml enforces this with ``${MR_JWT_SECRET:?...}``.
+    For local development / pytest we generate a fresh random secret
+    per process and log a loud warning. The previous behaviour was to
+    fall back to a hard-coded constant (``marine-risk-dev-secret-
+    change-me``), which meant any uvicorn instance launched outside
+    Docker without the env var would silently accept JWTs forged by
+    anyone reading the repo.
+    """
+    env_secret = os.environ.get("MR_JWT_SECRET")
+    if env_secret:
+        return env_secret
+
+    # No env var — generate a per-process random key. Warn so the
+    # operator knows tokens won't survive a restart.
+    generated = secrets.token_urlsafe(64)
+    log.warning(
+        "MR_JWT_SECRET is not set — generating an ephemeral random key. "
+        "Tokens will be invalidated when the process restarts. "
+        "Set MR_JWT_SECRET in the environment for production use."
+    )
+    return generated
+
+
+JWT_SECRET = _resolve_jwt_secret()
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_HOURS = int(os.environ.get("MR_JWT_EXPIRY_HOURS", "24"))
 

@@ -16,6 +16,7 @@ from backend.models.photo import (
     PhotoClassificationResult,
     RiskContext,
 )
+from backend.security import validate_upload_bytes
 from backend.services import photo as photo_svc
 
 router = APIRouter(prefix="/photo", tags=["photo"])
@@ -74,6 +75,13 @@ def classify_photo(
             413,
             f"Image too large ({size_mb:.1f} MB). Maximum: {_MAX_FILE_SIZE_MB} MB.",
         )
+    # Magic-byte check: refuse files whose content does not match
+    # an accepted image format, regardless of filename or header.
+    validate_upload_bytes(
+        image_bytes,
+        kind="image",
+        declared_content_type=file.content_type,
+    )
 
     try:
         result = photo_svc.classify_photo(

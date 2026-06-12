@@ -38,6 +38,7 @@ from backend.models.sightings import (
     SpeciesAssessment,
     UserInput,
 )
+from backend.security import validate_upload_bytes
 from backend.services import auth as auth_svc
 from backend.services import sightings as sighting_svc
 from backend.services import submissions as sub_svc
@@ -389,6 +390,11 @@ def submit_sighting_report(
                 413,
                 f"Image too large ({size_mb:.1f} MB). Max: {_MAX_IMAGE_MB} MB.",
             )
+        validate_upload_bytes(
+            image_bytes,
+            kind="image",
+            declared_content_type=image.content_type,
+        )
         image_filename = image.filename
 
     # ── Read + validate audio ───────────────────────────────
@@ -411,6 +417,13 @@ def submit_sighting_report(
             )
         if len(audio_bytes) == 0:
             raise HTTPException(400, "Empty audio file uploaded.")
+        validate_upload_bytes(
+            audio_bytes,
+            kind="audio",
+            declared_content_type=(
+                ct if ct and ct != "application/octet-stream" else None
+            ),
+        )
         audio_filename = audio.filename
 
     # ── Process ─────────────────────────────────────────────

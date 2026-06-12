@@ -37,6 +37,7 @@ from backend.models.vessels import (
     VesselResponse,
     VesselStats,
 )
+from backend.security import validate_upload_bytes
 from backend.services import auth as auth_svc
 from backend.services import vessels as vessel_svc
 
@@ -294,6 +295,7 @@ async def upload_vessel_profile_photo(
     data = await image.read()
     if len(data) > _MAX_PHOTO_MB * 1024 * 1024:
         raise HTTPException(400, f"Photo exceeds {_MAX_PHOTO_MB} MB limit")
+    validate_upload_bytes(data, kind="image", declared_content_type=image.content_type)
     stored = vessel_svc.upload_vessel_photo(
         vessel_id, "profile", data, image.filename or "profile.jpg"
     )
@@ -325,6 +327,7 @@ async def upload_vessel_cover_photo(
     data = await image.read()
     if len(data) > _MAX_PHOTO_MB * 1024 * 1024:
         raise HTTPException(400, f"Cover exceeds {_MAX_PHOTO_MB} MB limit")
+    validate_upload_bytes(data, kind="image", declared_content_type=image.content_type)
     stored = vessel_svc.upload_vessel_photo(
         vessel_id, "cover", data, image.filename or "cover.jpg"
     )

@@ -31,6 +31,7 @@ from backend.models.auth import (
     UserRegister,
     UserSearchResult,
 )
+from backend.security import validate_upload_bytes
 from backend.services import auth as auth_svc
 from backend.services import reputation as rep_svc
 
@@ -252,6 +253,14 @@ def add_credential(
                 status_code=400,
                 detail="Evidence file must be under 10 MB",
             )
+        # Magic-byte check: credential evidence may be an image or
+        # a document (PDF / DOC / DOCX). Both are accepted under
+        # the ``document`` kind.
+        validate_upload_bytes(
+            data,
+            kind="document",
+            declared_content_type=evidence.content_type,
+        )
         # Save file temporarily — will rename after we get the cred ID
         evidence_filename = f"evidence{ext}"
         # We'll store after insert so we have the credential ID
@@ -321,6 +330,9 @@ def upload_avatar(
             status_code=400,
             detail="Avatar must be under 5 MB",
         )
+    # Magic-byte check: the file extension and Content-Type header
+    # are both client-controlled. Verify against the actual bytes.
+    validate_upload_bytes(data, kind="image", declared_content_type=image.content_type)
 
     # Store file
     folder = _AVATAR_ROOT / str(user_id)

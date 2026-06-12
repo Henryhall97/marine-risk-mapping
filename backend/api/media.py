@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
 from backend.config import PROJECT_ROOT
+from backend.security import safe_subpath, validate_uuid_or_404
 
 router = APIRouter(prefix="/media", tags=["media"])
 
@@ -42,7 +43,11 @@ def _find_media(
     allowed: dict[str, str],
 ) -> tuple[Path, str]:
     """Locate a media file on disk and return (path, media_type)."""
-    folder = _UPLOAD_ROOT / submission_id
+    # Path-traversal defence: submission IDs are Postgres UUIDs.
+    # Reject anything else before touching the filesystem and
+    # confirm the resolved folder stays inside the upload root.
+    submission_id = validate_uuid_or_404(submission_id, name="submission")
+    folder = safe_subpath(_UPLOAD_ROOT, submission_id)
     if not folder.is_dir():
         raise HTTPException(404, "Media not found")
 
@@ -93,7 +98,10 @@ _EVIDENCE_MEDIA_TYPES: dict[str, str] = {
 @router.get("/credential-evidence/{credential_id}")
 def get_credential_evidence(credential_id: int) -> FileResponse:
     """Serve the evidence file for a credential."""
-    folder = _EVIDENCE_ROOT / str(credential_id)
+    # credential_id is typed as int — FastAPI rejects non-integers,
+    # so there is no path-traversal surface here. Still constrain
+    # to the evidence root for defence-in-depth.
+    folder = safe_subpath(_EVIDENCE_ROOT, str(credential_id))
     if not folder.is_dir():
         raise HTTPException(404, "No evidence file")
 
@@ -113,7 +121,7 @@ def get_credential_evidence(credential_id: int) -> FileResponse:
 @router.get("/avatar/{user_id}")
 def get_avatar(user_id: int) -> FileResponse:
     """Serve a user's avatar image."""
-    folder = _AVATAR_ROOT / str(user_id)
+    folder = safe_subpath(_AVATAR_ROOT, str(user_id))
     if not folder.is_dir():
         raise HTTPException(404, "No avatar")
 
