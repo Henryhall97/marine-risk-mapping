@@ -1,6 +1,6 @@
 # Copilot Project Instructions — Marine Risk Mapping
 
-> **Last updated:** 2026-05 (v1 production deploy: Hetzner + Vercel)
+> **Last updated:** 2026-06 (Pangeo CMIP6 fetcher for MLD + intpp)
 > **Update trigger:** See [§ Keeping This File Current](#keeping-this-file-current) at the bottom.
 
 ---
@@ -433,6 +433,8 @@ MLD 21m (winter) → 11m (summer).
 
 26. **Rate-limited endpoints require a `request: Request` parameter.** slowapi's `@limiter.limit()` decorator needs access to the `Request` object to extract the client IP. When adding rate limiting to a FastAPI endpoint, add `request: Request` as the first parameter after `self` (if any). Auth endpoints: 5/min (register), 10/min (login). Classification endpoints: 10/min. Sighting reports: 20/min.
 
+27. **Copernicus CDS `projections-cmip6` does NOT expose ocean mixed-layer thickness or primary production.** Probing every (model, scenario) returns `400 Bad Request: RoocsValueError` for `ocean_mixed_layer_thickness_defined_by_sigma_t` (`mlotst`) and `total_primary_organic_carbon_production_by_phytoplankton` (`intpp`). The CDS catalogue only mirrors a curated subset of CMIP6. `download_cmip6_projections.py` silently writes NaN columns for these variables — by design, it does not synthesise fallbacks. For real climate signal on MLD and PP, use `download_cmip6_pangeo.py`, which pulls those two variables from the Pangeo CMIP6 zarr archive on Google Cloud Storage (`gs://cmip6/`) via `intake-esm` and merges them into the main `cmip6_projections.parquet`. Pangeo coverage: 8 of our 10 models for MLD, 6 of 10 for intpp (EC-Earth3 + MIROC6 missing both). Unit conversion in the Pangeo module: `intpp` (mol C m⁻² s⁻¹) → mg C m⁻² day⁻¹ via `12.011 × 1000 × 86400`.
+
 ### ALWAYS do these:
 
 1. **After any model change:** Run `uv run dbt build --profiles-dir .` from `transform/` to verify no breakage.
@@ -531,7 +533,8 @@ Ocean covariates use `US_BBOX_WIDE` (wider margin for interpolation); all other 
 | `pipeline/ingestion/download_critical_habitat.py` | Download NMFS whale Critical Habitat from MapServer (31 polygons) | seconds |
 | `pipeline/ingestion/download_shipping_lanes.py` | Download NOAA Coast Survey shipping lanes/TSS (300 features) | seconds |
 | `pipeline/ingestion/download_slow_zones.py` | Scrape NOAA Fisheries active right whale DMAs (~6 zones) | seconds |
-| `pipeline/ingestion/download_cmip6_projections.py` | Generate CMIP6 climate-projected ocean covariates (SSP2-4.5/SSP5-8.5, 2030s–2080s) | seconds |
+| `pipeline/ingestion/download_cmip6_projections.py` | Download CMIP6 ocean covariates from Copernicus CDS (SST + SLA only — see Pitfall #27) | ~30 min |
+| `pipeline/ingestion/download_cmip6_pangeo.py` | Fetch MLD (`mlotst`) + primary production (`intpp`) from Pangeo GCS zarr stores; merges into `cmip6_projections.parquet` | ~7 min |
 | `pipeline/aggregation/aggregate_ais.py` | Aggregate 3.1B AIS pings → 9.7M H3 rows | ~hours |
 | `pipeline/aggregation/assign_cetacean_h3.py` | Assign sightings to H3 cells | ~minutes |
 | `pipeline/aggregation/assign_ship_strike_h3.py` | Assign strikes to H3 cells | seconds |
