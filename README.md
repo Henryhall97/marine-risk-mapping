@@ -9,6 +9,9 @@ Tracking areas of high risk for whale-vessel collisions on the US Coast
 
 Combining multiple data sources including: Ship AIS data, Whale sightings, marine protection zones and bathymetry data to identify at-risk areas.
 
+🌐 **Live:** [whalewatch.uk](https://whalewatch.uk) · API: [api.whalewatch.uk](https://api.whalewatch.uk/docs)
+📘 **Deploy your own:** [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — full Hetzner + Vercel runbook
+
 
 ## Architecture
 
@@ -82,9 +85,9 @@ Next.js (React) frontend with Deck.gl for map rendering. Users see an interactiv
 | **Frontend** | Next.js (React), TypeScript | Modern web application framework |
 | **Mapping** | Deck.gl (react-map-gl) | High-performance geospatial map rendering |
 | **Charts** | Recharts | Dashboard chart components |
-| **Containerisation** | Docker, Docker Compose | Multi-service packaging and local orchestration |
-| **CI/CD** | GitHub Actions | Automated testing and deployment |
-| **Cloud** | AWS (S3, RDS, ECS) | Production hosting and storage |
+| **Containerisation** | Docker, Docker Compose | Multi-service packaging (Postgres + FastAPI + Caddy) |
+| **Reverse proxy / TLS** | Caddy 2 | Auto Let's Encrypt + static asset serving on the VM |
+| **Production hosting** | Hetzner Cloud (VM) + Vercel (frontend) | See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the full runbook |
 | **Linting** | Ruff, ESLint | Code quality enforcement (Python and JavaScript) |
 | **Testing** | pytest, Vitest | Unit and integration testing (Python and JavaScript) |
 
@@ -215,26 +218,15 @@ uv run python pipeline/analysis/train_photo_classifier.py --tune
 
 # Evaluate an existing model
 uv run python pipeline/analysis/train_photo_classifier.py --evaluate-only
-
-# Train the ArcFace alternative locally (Kaggle 1st-place style)
-uv run python pipeline/analysis/train_arcface_classifier.py
-
-# Launch ArcFace training on an AWS / EC2 VM over SSH
-uv run python pipeline/analysis/train_arcface_remote.py \
-      --host ec2-xx-xx-xx-xx.compute.amazonaws.com \
-      --user ubuntu \
-      --identity-file ~/.ssh/marine-risk.pem \
-      --sync-photos \
-      --download-artifacts
 ```
 
-The remote launcher syncs `pipeline/`, `pyproject.toml`, `uv.lock`, and
-optionally `data/raw/whale_photos/` to the VM via `rsync`, installs `uv`
-remotely if needed, runs `uv sync`, executes the ArcFace trainer, and can
-pull the trained model directory back into `data/processed/ml/`.
+An experimental ArcFace metric-learning variant (`pipeline/photo/arcface_classify.py`
++ `train_arcface_classifier.py` / `train_arcface_remote.py`) is kept in the repo
+for future individual re-identification work but is **not part of the production
+pipeline** — the deployed `/photo/classify` endpoint uses EfficientNet-B4 only.
 
 Note: audio downloads are only required for the audio classifier pipeline.
-If you are iterating on photo models (EfficientNet / ArcFace), you can skip
+If you are iterating on the photo model, you can skip
 `download_whale_audio.py` entirely.
 
 ## 📊 Data Sources
@@ -581,15 +573,21 @@ verification queue (`/verify`), attribution, privacy.
 
 | Step | Task | Status |
 |------|------|--------|
-| 11.1 | Write Dockerfiles | ⬜ |
-| 11.2 | Create Docker Compose config | ⬜ |
-| 11.3 | Set up GitHub Actions workflows | ⬜ |
+| 11.1 | Backend Dockerfile (Python 3.12-slim, FastAPI + ML deps) | ✅ |
+| 11.2 | Production docker-compose (PostGIS + backend + Caddy reverse proxy) | ✅ |
+| 11.3 | Bind-mount strategy for ML artefacts and frontend static assets | ✅ |
+| 11.4 | Helper scripts: `bootstrap_vm.sh`, `dump_prod_db.sh`, `dump_projections.sh`, `restore_prod_db.sh`, `upload_assets.sh` | ✅ |
+| 11.5 | GitHub Actions: build → push to GHCR → ssh deploy | ⬜ |
 
 ### Phase 12: Cloud Deployment
 
+Deployed to a single Hetzner VM (Postgres + Backend + Caddy via Compose) plus Vercel for the Next.js frontend. Full runbook in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+
 | Step | Task | Status |
 |------|------|--------|
-| 12.1 | Provision AWS resources | ⬜ |
-| 12.2 | Deploy pipeline to ECS | ⬜ |
-| 12.3 | Deploy API and frontend | ⬜ |
-| 12.4 | Set up monitoring | ⬜ |
+| 12.1 | Provision Hetzner VM (CCX23, Ubuntu 24.04) + DNS (A record for `api.<domain>`, Vercel apex/www) | ✅ |
+| 12.2 | Deploy PostGIS + restore production dump (~30 GB main + ~50 GB climate projections) | ✅ |
+| 12.3 | Deploy FastAPI backend + Caddy reverse proxy with auto Let's Encrypt TLS | ✅ |
+| 12.4 | Deploy frontend to Vercel with `/static/*` rewrites to the VM (avoids bundling copyrighted GLBs / large photos) | ✅ |
+| 12.5 | Sentry / uptime monitoring + automated DB backups | ⬜ |
+| 12.6 | Object storage (S3 / R2) for user uploads + CDN in front of macro endpoints | ⬜ |

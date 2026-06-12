@@ -78,7 +78,8 @@ dev = [
 [tool.ruff]
 target-version = "py312"
 line-length = 88
-exclude = ["**/*.sh"]
+# docs/generate/ holds one-off PDF/report generators — not shipped code.
+exclude = ["**/*.sh", "docs/generate/**"]
 
 [tool.ruff.lint]
 select = [

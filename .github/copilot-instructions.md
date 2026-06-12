@@ -1,6 +1,6 @@
 # Copilot Project Instructions — Marine Risk Mapping
 
-> **Last updated:** 2026-03-15  (ArcFace photo classifier + EC2 remote launcher)
+> **Last updated:** 2026-05 (v1 production deploy: Hetzner + Vercel)
 > **Update trigger:** See [§ Keeping This File Current](#keeping-this-file-current) at the bottom.
 
 ---
@@ -1343,7 +1343,53 @@ npx tsc --noEmit     # type-check without emitting
 
 ---
 
-## 19. Keeping This File Current
+## 19. Production Deployment (v1: Hetzner + Vercel)
+
+Live at [whalewatch.uk](https://whalewatch.uk), API at [api.whalewatch.uk](https://api.whalewatch.uk).
+Full step-by-step runbook in [docs/DEPLOYMENT.md](../docs/DEPLOYMENT.md). Key facts the agent should remember:
+
+### Topology
+- **Single Hetzner VM** (CCX23, Ubuntu 24.04, `/opt/marine-risk-mapping`) runs PostGIS + FastAPI + Caddy via `docker/docker-compose.prod.yml`.
+- **Vercel** hosts the Next.js frontend; large/copyrighted assets (`/models`, `/species`, `/wizard`) are rewritten to `${NEXT_PUBLIC_API_URL}/static/*` so they live on the VM disk via `frontend/public` bind-mount, not in git/Vercel.
+- **Caddy 2-alpine** terminates TLS (auto Let's Encrypt) on `api.<domain>`, reverse-proxies `/api/*` and `/health` to backend, serves `/static/*` from `/srv/static`.
+
+### Bind-mounts (critical — these are NOT named volumes)
+| Host path (relative to `docker/`) | Container path | Purpose |
+|---|---|---|
+| `../db_dumps` | `/dumps` (postgis, RO) | pg_restore source |
+| `../data/processed/ml/photo_classifier` | `/app/data/processed/ml/photo_classifier` (backend, RO) | EfficientNet-B4 weights |
+| `../data/processed/ml/audio_classifier` | `/app/data/processed/ml/audio_classifier` (backend, RO) | XGBoost + CNN audio model |
+| `../data/uploads` | `/app/data/uploads` (backend, RW) | User-submitted photos / audio |
+| `../frontend/public` | `/srv/static` (caddy, RO) | GLBs / species photos / wizard images |
+
+### Helper scripts
+| Script | Run from | Purpose |
+|---|---|---|
+| `scripts/bootstrap_vm.sh` | Fresh VM (curl-piped) | Install Docker + ufw + clone repo |
+| `scripts/dump_prod_db.sh` | Laptop | Dump 50 main tables (~3 GB compressed) |
+| `scripts/dump_projections.sh` | Laptop | Dump 4 climate-projection tables (~8 GB compressed) |
+| `scripts/upload_assets.sh root@<VM_IP>` | Laptop | rsync 6 dirs (3 frontend public + 2 ML + uploads); macOS-rsync-2.6.9 compatible (`--progress` not `--info=progress2`) |
+| `scripts/restore_prod_db.sh` | VM | pg_restore inside `marine_risk_postgis_prod` |
+
+### Deployment-specific gotchas (add to § Known Pitfalls intuition)
+1. **Compose `--env-file .env` flag is required** when running from project root because the compose file sits in `docker/` and looks for `.env` next to itself. Either pass `--env-file .env` every time, or `ln -s ../.env docker/.env`.
+2. **`db_dumps` mount path is `../db_dumps`** (relative to `docker/`), not `./db_dumps` — must live at repo root.
+3. **macOS system rsync 2.6.9** lacks `--info=progress2`. Scripts use `--progress`.
+4. **GoDaddy apex parking page** silently overrides A records when "Domain Forwarding" is enabled. Disable forwarding before setting `@` A → `76.76.21.21` for Vercel apex.
+5. **`ANALYZE` after restoring projection tables** — without statistics the 58M-row aggregate queries plan terribly and `/api/v1/layers/sdm-projections/summary` will hang.
+6. **ML classifier weights are bind-mounted, NOT baked into the image** (Dockerfile no longer COPYs `data/processed/ml/`). After retraining locally, `scripts/upload_assets.sh root@<VM_IP>` is the deploy step.
+7. **Pre-commit hook blocks files >500 KB.** `frontend/public/whale_watch_logo.png` (2.5 MB) was committed with `git commit --no-verify`. `.gitignore` has explicit `!` exceptions for the small set of approved binary assets (logo, southern right whale photo, whale_detailed_smooth_icons/).
+8. **Cluster password is set on first init only.** Changing `POSTGRES_PASSWORD` in `.env` later does NOT change the actual DB user password — must `ALTER USER` or wipe the volume.
+
+### Cost
+~€30/mo (Hetzner CCX23) + €0 (Vercel Hobby) + ~$1/mo (`.uk` domain) ≈ **$34/mo total** for v1.
+
+### Backlog (post-v1)
+S3/R2 for uploads, CDN for macro endpoints, GitHub Actions CI/CD, Sentry, Cloudflare front, materialised projection-summary table.
+
+---
+
+## 20. Keeping This File Current
 
 **This file must be updated whenever the project changes materially.**
 
