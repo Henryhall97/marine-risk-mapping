@@ -613,6 +613,84 @@ MIGRATIONS = [
     ALTER TABLE sighting_submissions
         ADD COLUMN IF NOT EXISTS direction_of_travel VARCHAR(20);
     """,
+    # ── 70: Precomputed projection summary (coast-wide) ──
+    # The /layers/sdm-projections/summary endpoint aggregated the full
+    # 58M-row whale_sdm_projections table with a per-group percentile_cont
+    # median — ~58s single-threaded on prod (parallel workers disabled).
+    # This materialised view precomputes the coast-wide summary for every
+    # (species, scenario, decade, season) in a single table scan, reducing
+    # the endpoint query to a 224-row indexed lookup. Refresh after each
+    # projection-data redeploy: REFRESH MATERIALIZED VIEW mv_projection_summary;
+    """
+    CREATE MATERIALIZED VIEW IF NOT EXISTS mv_projection_summary AS
+    WITH agg AS (
+        SELECT
+            scenario, decade, season,
+            count(*) AS cell_count,
+            avg(sdm_any_whale) AS mean_any,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY sdm_any_whale)
+                AS med_any,
+            count(*) FILTER (WHERE sdm_any_whale > 0.5) AS high_any,
+            max(sdm_any_whale) AS max_any,
+            avg(sdm_blue_whale) AS mean_blue,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY sdm_blue_whale)
+                AS med_blue,
+            count(*) FILTER (WHERE sdm_blue_whale > 0.5) AS high_blue,
+            max(sdm_blue_whale) AS max_blue,
+            avg(sdm_fin_whale) AS mean_fin,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY sdm_fin_whale)
+                AS med_fin,
+            count(*) FILTER (WHERE sdm_fin_whale > 0.5) AS high_fin,
+            max(sdm_fin_whale) AS max_fin,
+            avg(sdm_humpback_whale) AS mean_hump,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY sdm_humpback_whale)
+                AS med_hump,
+            count(*) FILTER (WHERE sdm_humpback_whale > 0.5) AS high_hump,
+            max(sdm_humpback_whale) AS max_hump,
+            avg(sdm_sperm_whale) AS mean_sperm,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY sdm_sperm_whale)
+                AS med_sperm,
+            count(*) FILTER (WHERE sdm_sperm_whale > 0.5) AS high_sperm,
+            max(sdm_sperm_whale) AS max_sperm,
+            avg(sdm_right_whale) AS mean_right,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY sdm_right_whale)
+                AS med_right,
+            count(*) FILTER (WHERE sdm_right_whale > 0.5) AS high_right,
+            max(sdm_right_whale) AS max_right,
+            avg(sdm_minke_whale) AS mean_minke,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY sdm_minke_whale)
+                AS med_minke,
+            count(*) FILTER (WHERE sdm_minke_whale > 0.5) AS high_minke,
+            max(sdm_minke_whale) AS max_minke
+        FROM whale_sdm_projections
+        GROUP BY scenario, decade, season
+    )
+    SELECT
+        u.species,
+        agg.scenario,
+        agg.decade,
+        agg.season,
+        agg.cell_count,
+        u.mean_prob,
+        u.median_prob,
+        u.high_prob_cells,
+        u.max_prob
+    FROM agg
+    CROSS JOIN LATERAL (
+        VALUES
+            ('any_whale', mean_any, med_any, high_any, max_any),
+            ('blue_whale', mean_blue, med_blue, high_blue, max_blue),
+            ('fin_whale', mean_fin, med_fin, high_fin, max_fin),
+            ('humpback_whale', mean_hump, med_hump, high_hump, max_hump),
+            ('sperm_whale', mean_sperm, med_sperm, high_sperm, max_sperm),
+            ('right_whale', mean_right, med_right, high_right, max_right),
+            ('minke_whale', mean_minke, med_minke, high_minke, max_minke)
+    ) AS u(species, mean_prob, median_prob, high_prob_cells, max_prob);
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_proj_summary
+        ON mv_projection_summary (species, scenario, decade, season);
+    """,
 ]
 
 

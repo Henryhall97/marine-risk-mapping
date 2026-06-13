@@ -1521,18 +1521,16 @@ def get_projection_summary(
             "ORDER BY p.scenario, p.decade, p.season"
         )
     else:
-        params: dict[str, Any] = {}
+        # Coast-wide: read from the precomputed materialised view
+        # (mv_projection_summary) — a 224-row indexed lookup instead of
+        # aggregating the full 58M-row table with per-group medians.
+        species_key = species if species else "any_whale"
+        params = {"species": species_key}
         query = (
-            "SELECT scenario, decade, season, "
-            f"  count(*) as cell_count, "
-            f"  avg({col}) as mean_prob, "
-            f"  percentile_cont(0.5) "
-            f"    WITHIN GROUP (ORDER BY {col}) as median_prob, "
-            f"  count(*) FILTER "
-            f"    (WHERE {col} > 0.5) as high_prob_cells, "
-            f"  max({col}) as max_prob "
-            "FROM whale_sdm_projections "
-            "GROUP BY scenario, decade, season "
+            "SELECT scenario, decade, season, cell_count, "
+            "mean_prob, median_prob, high_prob_cells, max_prob "
+            "FROM mv_projection_summary "
+            "WHERE species = %(species)s "
             "ORDER BY scenario, decade, season"
         )
     return fetch_all(query, params)
