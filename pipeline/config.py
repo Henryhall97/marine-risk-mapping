@@ -169,6 +169,15 @@ CMIP6_PROJECTIONS_FILE = CMIP6_DIR / "cmip6_projections.parquet"
 CMIP6_SCENARIOS: list[str] = ["ssp245", "ssp585"]
 CMIP6_DECADES: list[str] = ["2030s", "2040s", "2060s", "2080s"]
 
+# Reference period used for delta-method bias correction.
+# Must match the observational baseline period (ocean_covariates.parquet,
+# Copernicus 2019–2024).  All SSP scenarios are functionally identical
+# in 2019–2024 because cumulative emissions have not yet diverged, so
+# per-scenario reference rows differ only by sampling noise.
+CMIP6_REFERENCE_DECADE: str = "reference"
+CMIP6_REFERENCE_YEARS: tuple[int, int] = (2019, 2024)
+CMIP6_PROJECTIONS_BACKUP_FILE = CMIP6_DIR / "cmip6_projections.pre_delta"
+
 # ── SDM projections (scored on CMIP6 covariates) ───────────
 SDM_PROJECTIONS_DIR = PROCESSED_DIR / "ml" / "sdm_projections"
 ISDM_PROJECTIONS_DIR = PROCESSED_DIR / "ml" / "isdm_projections"

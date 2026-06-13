@@ -461,10 +461,18 @@ def load_ocean_covariates(cur) -> None:
 def load_cmip6_ocean_covariates(cur) -> None:
     """Load CMIP6 climate-projected ocean covariates into PostGIS.
 
-    The parquet file contains projected SST, MLD, SLA, PP at
-    (lat, lon, season, scenario, decade) grain — produced by
-    download_cmip6_projections.py from baseline + CMIP6 deltas.
-    ~3.5M rows (2 scenarios × 4 decades × 4 seasons × ~109K points).
+    The parquet file contains *bias-corrected* projected SST, MLD, SLA, PP
+    at (lat, lon, season, scenario, decade) grain.  Pipeline upstream:
+      1. ``download_cmip6_projections.py`` -- raw CDS SST + SLA, all decades
+         including 2019-2024 reference window.
+      2. ``download_cmip6_pangeo.py`` -- raw Pangeo MLD + intpp; merged
+         into the same parquet.
+      3. ``apply_cmip6_delta.py`` -- delta-method bias correction
+         (additive for SST/MLD/SLA, multiplicative ratio for PP) against
+         observational baseline ``ocean_covariates.parquet``.  Reference
+         rows are consumed and dropped; only future decades remain.
+
+    ~2.6M rows (2 scenarios * 4 decades * 4 seasons * ~82K cells).
 
     Args:
         cur: psycopg2 cursor.

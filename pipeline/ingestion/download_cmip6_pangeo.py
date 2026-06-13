@@ -73,6 +73,7 @@ from pipeline.config import (
     CMIP6_DECADES,
     CMIP6_DIR,
     CMIP6_PROJECTIONS_FILE,
+    CMIP6_REFERENCE_DECADE,
     CMIP6_SCENARIOS,
     SEASONS,
 )
@@ -388,7 +389,10 @@ def download_pangeo_vars(
     models = models or list(MODEL_MAP.keys())
     variables = variables or list(PANGEO_VARS.keys())
     scenarios = scenarios or list(CMIP6_SCENARIOS)
-    decades = decades or list(CMIP6_DECADES)
+    # Mirror the CDS default: always include the 2019–2024 reference
+    # window so the delta-method bias-correction step has model-reference
+    # MLD / intpp values to compare against the obs baseline.
+    decades = decades or [*CMIP6_DECADES, CMIP6_REFERENCE_DECADE]
 
     grid = _load_target_grid()
     if grid is None:

@@ -71,6 +71,8 @@ from pipeline.config import (
     CMIP6_DECADES,
     CMIP6_DIR,
     CMIP6_PROJECTIONS_FILE,
+    CMIP6_REFERENCE_DECADE,
+    CMIP6_REFERENCE_YEARS,
     CMIP6_SCENARIOS,
     OCEAN_COVARIATES_FILE,
     SEASONS,
@@ -115,6 +117,20 @@ CMIP6_VARS: dict[str, str] = {
     "total_primary_organic_carbon_production_by_phytoplankton": ("pp_upper_200m"),
 }
 
+# Variables CDS actually serves for `projections-cmip6`.
+#
+# `mlotst` (ocean mixed-layer thickness) and `intpp` (primary production)
+# are advertised by the CDS catalogue but every request returns
+# 400 RoocsValueError -- the CDS mirror only exposes a curated subset of
+# CMIP6.  We fetch those two variables from the Pangeo CMIP6 zarr archive
+# instead (see download_cmip6_pangeo.py).  Keeping MLD/intpp here would
+# only burn ~160 doomed CDS requests per run.  See Pitfall #27 in
+# .github/copilot-instructions.md.
+CDS_AVAILABLE_VARS: list[str] = [
+    "sea_surface_temperature",
+    "sea_surface_height_above_geoid",
+]
+
 # The NetCDF variable name inside each model's output file
 NC_VAR_MAP: dict[str, str] = {
     "sea_surface_temperature": "tos",
@@ -138,12 +154,16 @@ ENSEMBLE_MODELS: list[str] = [
     "access_cm2",
 ]
 
-# Decade → 10-year window of years (centred on the decade mid-point)
+# Decade → 10-year window of years (centred on the decade mid-point).
+# The "reference" entry is the model period that matches our
+# observational baseline (ocean_covariates.parquet, Copernicus
+# 2019–2024) and is used for delta-method bias correction.
 DECADE_YEAR_RANGES: dict[str, tuple[int, int]] = {
     "2030s": (2025, 2034),
     "2040s": (2035, 2044),
     "2060s": (2055, 2064),
     "2080s": (2075, 2084),
+    CMIP6_REFERENCE_DECADE: CMIP6_REFERENCE_YEARS,
 }
 
 ALL_MONTHS = [f"{m:02d}" for m in range(1, 13)]
@@ -525,9 +545,15 @@ def download_and_merge(
     RAW_DIR.mkdir(parents=True, exist_ok=True)
 
     models = models or ENSEMBLE_MODELS
-    variables = variables or list(CMIP6_VARS.keys())
+    # Default to only the variables CDS actually serves.  MLD + intpp
+    # come from Pangeo (download_cmip6_pangeo.py) -- requesting them
+    # via CDS just returns 400 RoocsValueError for every (model, decade).
+    variables = variables or list(CDS_AVAILABLE_VARS)
     scenarios = scenarios or list(CMIP6_SCENARIOS)
-    decades = decades or list(CMIP6_DECADES)
+    # Default decade set always includes the 2019–2024 reference window
+    # so the delta-method bias-correction step (apply_cmip6_delta.py)
+    # has model-reference values to compare against the obs baseline.
+    decades = decades or [*CMIP6_DECADES, CMIP6_REFERENCE_DECADE]
 
     grid = _load_target_grid()
     if grid is None:
