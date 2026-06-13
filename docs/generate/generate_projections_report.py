@@ -593,26 +593,37 @@ def build_report():  # noqa: C901 PLR0915
     pdf.subsection_title("4.2 Multi-model ensemble")
 
     pdf.body_text(
-        "We draw projections from a 5-model ensemble to capture "
-        "inter-model structural uncertainty:"
+        "We draw projections from a 10-model core ensemble (see "
+        "ENSEMBLE_MODELS in download_cmip6_projections.py) to "
+        "capture inter-model structural uncertainty.  Not every "
+        "model exposes every variable on every host -- missing "
+        "combinations are silently skipped and the ensemble mean "
+        "is taken over the models that do contribute."
     )
 
     pdf.metric_table(
-        ["Model", "Institution", "Resolution"],
+        ["Model", "Institution", "SST (CDS)", "MLD/PP (Pangeo)"],
         [
-            ["IPSL-CM6A-LR", "Institut Pierre-Simon Laplace", "~1deg ocean"],
-            ["MPI-ESM1-2-LR", "Max Planck Institute", "~1deg ocean"],
-            ["UKESM1-0-LL", "UK Met Office / NERC", "~1deg ocean"],
-            ["GFDL-ESM4", "NOAA GFDL", "~0.5deg ocean"],
-            ["NorESM2-LM", "Norwegian Earth System", "~1deg ocean"],
+            ["MPI-ESM1-2-LR", "Max Planck Institute", "yes", "yes"],
+            ["IPSL-CM6A-LR", "Institut Pierre-Simon Laplace", "yes", "yes"],
+            ["UKESM1-0-LL", "UK Met Office / NERC", "yes", "yes"],
+            ["GFDL-ESM4", "NOAA GFDL", "no", "yes"],
+            ["NorESM2-LM", "Norwegian Earth System", "yes", "yes"],
+            ["CNRM-CM6-1", "CNRM / CERFACS", "yes", "yes"],
+            ["EC-Earth3", "EC-Earth Consortium", "no", "no"],
+            ["MIROC6", "JAMSTEC / U. Tokyo / NIES", "yes", "no"],
+            ["CanESM5", "Env. & Climate Change Canada", "no", "yes"],
+            ["ACCESS-CM2", "CSIRO / Bureau of Meteorology", "yes", "yes"],
         ],
-        col_widths=[50, 80, 60],
+        col_widths=[40, 70, 30, 45],
     )
 
     pdf.body_text(
-        "These models span different continents, ocean model "
-        "architectures, and parameterisation choices.  Using "
-        "the ensemble mean (rather than any single model) "
+        "Effective ensemble size: 7 models contribute to SST/SLA "
+        "(via CDS), 8 to MLD and 6 to primary production (via "
+        "Pangeo).  These models span different continents, ocean "
+        "model architectures, and parameterisation choices.  "
+        "Using the ensemble mean (rather than any single model) "
         "reduces the influence of model-specific biases and "
         "provides a more robust central estimate."
     )
@@ -644,32 +655,50 @@ def build_report():  # noqa: C901 PLR0915
 
     pdf.body_text(
         "We construct projected ocean covariates using a delta "
-        "method: literature-derived CMIP6 ensemble-mean changes "
-        "are applied to our observed 2019-2024 climatological "
-        "baseline.  This preserves the fine-grained spatial "
-        "structure of our baseline data (0.25-degree Copernicus "
-        "grid) while incorporating the large-scale climate signal "
-        "from the CMIP6 ensemble."
+        "method computed directly from per-model CMIP6 output.  "
+        "For each (model, scenario), we download the same variable "
+        "for both the future decade and a 2019-2024 model reference "
+        "window that matches our observational baseline.  The "
+        "per-model change signal is then applied to the observed "
+        "2019-2024 climatological baseline.  This preserves the "
+        "fine-grained spatial structure of our baseline data "
+        "(0.25-degree Copernicus grid) while incorporating the "
+        "climate signal from the CMIP6 ensemble."
     )
 
     pdf.equation_box(
-        "Delta method",
-        "X_projected = X_baseline + delta(scenario, decade)",
+        "Delta method (additive: SST, MLD, SLA)",
+        "X_corrected = X_obs_baseline + (X_model_future - X_model_ref)",
         note=(
-            "Additive for SST, MLD, SLA.  Multiplicative (fractional) "
-            "for PP.  Baseline is the 2019-2024 seasonal climatology."
+            "X_model_ref is the per-model 2019-2024 seasonal mean.  "
+            "X_obs_baseline is the Copernicus 2019-2024 seasonal mean."
+        ),
+    )
+
+    pdf.equation_box(
+        "Delta method (multiplicative: primary production)",
+        "PP_corrected = PP_obs_baseline * (PP_future / max(PP_ref, 1.0))",
+        note=(
+            "PP is bounded below by zero and has high variance, so we "
+            "use a fractional change with a floor of 1.0 mg C/m2/day "
+            "on the denominator to handle oligotrophic gyres."
         ),
     )
 
     pdf.callout_box(
         "Why delta rather than raw CMIP6?",
-        "Raw CMIP6 model outputs have systematic biases relative "
-        "to observations (e.g. SST offsets of 1-3C in some regions). "
-        "The delta method uses only the change signal from the models "
-        "and applies it to the observational baseline, avoiding the "
-        "need for complex bias correction.  This is the standard "
-        "approach in ecological projection studies (e.g. Hazen et al. "
-        "2013, Becker et al. 2019).",
+        "Raw CMIP6 model outputs have systematic biases relative to "
+        "observations (e.g. SST offsets of 1-3C in some regions, "
+        "MLD biases of several metres).  The delta method uses only "
+        "the change signal from the models -- which is far better "
+        "constrained than the absolute state -- and applies it to "
+        "the observational baseline.  This is the standard approach "
+        "in ecological projection studies (e.g. Hazen et al. 2013, "
+        "Becker et al. 2019).  In our pipeline the correction is "
+        "applied by pipeline/ingestion/apply_cmip6_delta.py, which "
+        "runs after the CDS + Pangeo downloads and rewrites "
+        "cmip6_projections.parquet in place (backing up the raw "
+        "file to cmip6_projections.pre_delta).",
         colour=ReportPDF.ACCENT_BLUE,
     )
 
@@ -677,54 +706,36 @@ def build_report():  # noqa: C901 PLR0915
 
     pdf.body_text(
         "SST is the primary driver of whale habitat suitability "
-        "in our SDM and ISDM models.  We apply latitude-dependent "
-        "warming to capture polar amplification -- the well-documented "
-        "phenomenon where higher latitudes warm faster than the tropics "
-        "due to ice-albedo feedback and poleward heat transport."
-    )
-
-    pdf.metric_table(
-        ["Latitude band", "Region", "Amplification factor"],
-        [
-            ["3S - 20N", "Tropical", "0.8x (less warming)"],
-            ["20N - 40N", "Mid-latitude", "1.0x (baseline)"],
-            ["40N - 53N", "Subpolar", "1.3x (polar amplification)"],
-        ],
-        col_widths=[40, 60, 90],
-    )
-
-    pdf.body_text(
-        "SST deltas from IPCC AR6 WG1 Chapter 9 (Ocean, Cryosphere "
-        "and Sea Level Change):"
-    )
-
-    pdf.metric_table(
-        ["Decade", "SSP2-4.5", "SSP5-8.5"],
-        [
-            ["2030s", "+0.5C", "+0.6C"],
-            ["2040s", "+0.8C", "+1.2C"],
-            ["2060s", "+1.4C", "+2.5C"],
-            ["2080s", "+1.8C", "+3.8C"],
-        ],
-        col_widths=[40, 75, 75],
+        "in our SDM and ISDM models.  Deltas are computed per "
+        "contributing model as the difference between the "
+        "climatological seasonal mean of the future decade and the "
+        "2019-2024 reference window, then ensemble-averaged across "
+        "the 7 models that CDS serves for SST (see section 4.2).  "
+        "Polar amplification -- the well-documented phenomenon where "
+        "higher latitudes warm faster than the tropics due to ice-"
+        "albedo feedback and poleward heat transport -- emerges "
+        "naturally from the per-cell deltas; no latitude scaling is "
+        "applied by the pipeline."
     )
 
     pdf.small_text(
-        "Deltas shown are mid-latitude baseline values before "
-        "latitude amplification.  At 50N (Gulf of Maine / Alaska), "
-        "multiply by 1.3x.  SST variability (sst_sd) also increases: "
-        "+15% per degree C of warming, reflecting stronger thermal "
-        "gradients under a warming ocean."
+        "Observed end-to-end mean SST across the study area after "
+        "bias correction: 23.08C (2030s) climbing to 25.40C (2080s) "
+        "under SSP5-8.5 -- a +2.32C trend that is preserved (within "
+        "rounding) by the additive delta method.  sst_sd is fetched "
+        "directly from the model output rather than scaled by a "
+        "warming rule."
     )
 
     pdf.callout_box(
         "Ecological implication",
-        "A +1.8C warming (SSP2-4.5 by 2080s) pushes isotherms "
-        "poleward by roughly 200-400 km.  Species like right whale "
-        "and minke -- already at the warm edge of their thermal "
-        "range in the Gulf of Maine -- may see significant habitat "
-        "contraction.  Conversely, species like blue whale may expand "
-        "into newly suitable subpolar waters.",
+        "At 50N (Gulf of Maine / Alaska), per-model end-of-century "
+        "SST deltas reach roughly +2-4C depending on scenario.  "
+        "This pushes isotherms poleward by 200-400 km.  Species like "
+        "right whale and minke -- already at the warm edge of their "
+        "thermal range in the Gulf of Maine -- may see significant "
+        "habitat contraction.  Conversely, species like blue whale "
+        "may expand into newly suitable subpolar waters.",
         colour=ReportPDF.ACCENT_AMBER,
     )
 
@@ -737,23 +748,18 @@ def build_report():  # noqa: C901 PLR0915
         "shallower mixed layer, concentrating prey in a thinner "
         "layer -- potentially beneficial for lunge-feeding baleen "
         "whales in the short term, but reducing total productivity "
-        "in the long term."
-    )
-
-    pdf.metric_table(
-        ["Decade", "SSP2-4.5", "SSP5-8.5"],
-        [
-            ["2030s", "-1.0 m", "-1.5 m"],
-            ["2040s", "-2.0 m", "-3.0 m"],
-            ["2060s", "-4.0 m", "-6.5 m"],
-            ["2080s", "-5.5 m", "-10.0 m"],
-        ],
-        col_widths=[40, 75, 75],
+        "in the long term.  MLD is not available from CDS for "
+        "projections; deltas are computed from the 8 Pangeo models "
+        "that expose mlotst (see section 4.2)."
     )
 
     pdf.small_text(
-        "Negative values = shallower MLD (more stratified).  "
-        "Clamped to a minimum of 1 m.  Source: IPCC AR6 WG1 Ch9."
+        "After bias correction the projected MLD field is clamped to "
+        "a 1 m floor to prevent unphysical zero values where the "
+        "model future approaches zero in highly stratified seasons.  "
+        "The shoaling trend (negative MLD delta) is preserved from "
+        "the raw model output; the per-model bias -- typically a few "
+        "metres relative to the Copernicus baseline -- is removed."
     )
 
     pdf.subsection_title("5.3 Sea level anomaly (SLA)")
@@ -762,24 +768,15 @@ def build_report():  # noqa: C901 PLR0915
         "SLA (sea surface height above the geoid) captures both "
         "thermal expansion and dynamic ocean circulation changes.  "
         "Mesoscale SLA variability (eddies) is a key predictor of "
-        "prey concentration and whale foraging habitat."
-    )
-
-    pdf.metric_table(
-        ["Decade", "SSP2-4.5", "SSP5-8.5"],
-        [
-            ["2030s", "+0.03 m", "+0.04 m"],
-            ["2040s", "+0.06 m", "+0.08 m"],
-            ["2060s", "+0.12 m", "+0.18 m"],
-            ["2080s", "+0.20 m", "+0.32 m"],
-        ],
-        col_widths=[40, 75, 75],
+        "prey concentration and whale foraging habitat.  Deltas are "
+        "computed from the 7 CDS-served models alongside SST."
     )
 
     pdf.small_text(
-        "Additive deltas in metres.  These are dynamic sea level "
-        "changes (excluding land ice contribution).  Source: IPCC "
-        "AR6 WG1 Ch9."
+        "SLA is reported as an anomaly relative to a long-term mean, "
+        "so the additive delta in metres reflects only the change "
+        "signal -- not absolute sea level.  Land-ice contribution is "
+        "not included."
     )
 
     if pdf.get_y() > 200:
@@ -788,39 +785,32 @@ def build_report():  # noqa: C901 PLR0915
     pdf.subsection_title("5.4 Primary productivity (PP)")
 
     pdf.body_text(
-        "PP (depth-integrated primary production, mgC/m2/day) is "
-        "the base of the marine food web.  Under warming, increased "
-        "stratification reduces nutrient supply from depth, leading "
-        "to a global decline in primary productivity.  We apply a "
-        "fractional change (multiplicative delta) rather than an "
-        "additive one because PP scales differently across regions."
-    )
-
-    pdf.metric_table(
-        ["Decade", "SSP2-4.5", "SSP5-8.5"],
-        [
-            ["2030s", "-2%", "-3%"],
-            ["2040s", "-3%", "-5%"],
-            ["2060s", "-5%", "-10%"],
-            ["2080s", "-7%", "-16%"],
-        ],
-        col_widths=[40, 75, 75],
+        "PP (depth-integrated primary production, mg C m^-2 day^-1) "
+        "is the base of the marine food web.  Under warming, "
+        "increased stratification reduces nutrient supply from "
+        "depth, leading to a global decline in primary productivity.  "
+        "We apply a multiplicative delta rather than an additive one "
+        "because PP varies by orders of magnitude across the study "
+        "area (oligotrophic gyres vs upwelling shelves), so a "
+        "fractional change is more physically meaningful than an "
+        "absolute one.  Pangeo serves intpp for 6 of the 10 core "
+        "models; deltas are ensemble-averaged across those."
     )
 
     pdf.small_text(
-        "Fractional change relative to baseline.  Clamped to "
-        "minimum of zero.  Source: Kwiatkowski et al. (2020) and "
-        "IPCC AR6 WG1 Ch5."
+        "The reference value in the denominator is floored at "
+        "1.0 mg C m^-2 day^-1 (PP_REF_FLOOR_MGC) to prevent extreme "
+        "ratios in oligotrophic regions where the model reference is "
+        "near zero.  Output is clamped to non-negative values."
     )
 
     pdf.callout_box(
         "Cascading food-web effects",
-        "A 16% decline in PP (SSP5-8.5 by 2080s) propagates up "
-        "the food web with roughly 10:1 trophic transfer ratios.  "
-        "This could substantially reduce prey availability for "
-        "baleen whales, even in regions where thermal conditions "
-        "remain suitable.  Our SDMs capture this indirectly via "
-        "the PP input feature.",
+        "Declines in PP propagate up the food web with roughly 10:1 "
+        "trophic transfer ratios.  This could substantially reduce "
+        "prey availability for baleen whales, even in regions where "
+        "thermal conditions remain suitable.  Our SDMs capture this "
+        "indirectly via the PP input feature.",
         colour=ReportPDF.ACCENT_RED,
     )
 
@@ -838,22 +828,42 @@ def build_report():  # noqa: C901 PLR0915
 
     pdf.subsection_title("Stage 1: Covariate generation")
 
-    pdf.body_text(
-        "download_cmip6_projections.py first attempts to download "
-        "raw CMIP6 monthly data from the Copernicus Climate Data "
-        "Store (CDS) via the cdsapi Python client.  If CDS access "
-        "is unavailable, it falls back to the delta method described "
-        "above, applying published ensemble-mean deltas to the "
-        "observational 2019-2024 baseline."
+    pdf.body_text("Covariate generation is a three-script sequence:")
+
+    pdf.bullet(
+        "download_cmip6_projections.py fetches sea surface "
+        "temperature (tos) and sea surface height (zos) for the 10 "
+        "core models from the Copernicus Climate Data Store via the "
+        "cdsapi Python client.  Both future decades and the "
+        "2019-2024 reference window are downloaded in the same run."
+    )
+    pdf.bullet(
+        "download_cmip6_pangeo.py fetches mixed-layer thickness "
+        "(mlotst) and primary production (intpp) from the Pangeo "
+        "CMIP6 zarr archive on Google Cloud Storage via intake-esm.  "
+        "CDS does not serve these two variables for projections-cmip6 "
+        "(see Pitfall #27).  intpp is converted from mol C m^-2 s^-1 "
+        "to mg C m^-2 day^-1.  Pangeo coverage: 8/10 models for MLD, "
+        "6/10 for intpp."
+    )
+    pdf.bullet(
+        "apply_cmip6_delta.py reads the merged parquet (~2.6M rows, "
+        "future decades + reference window for both scenarios), "
+        "validates that every future row has a matching same-scenario "
+        "reference row on the same grid, then applies the delta-method "
+        "bias correction defined in section 5.  The raw model output "
+        "is backed up to cmip6_projections.pre_delta and the corrected "
+        "file is written in place."
     )
 
     pdf.body_text(
-        "For CDS downloads, the pipeline requests monthly fields "
-        "for 5 CMIP6 models, computes ensemble means, regrids to "
-        "the observational 0.25-degree grid using nearest-neighbour "
-        "interpolation, and computes climatological seasonal means "
-        "(same as the existing ocean covariates pipeline).  Output: "
-        "~2.9M rows in cmip6_projections.parquet."
+        "All downloads regrid to the observational 0.25-degree grid "
+        "via nearest-neighbour interpolation, compute climatological "
+        "seasonal means within each (model, scenario, decade) window, "
+        "and then ensemble-average across the contributing models.  "
+        "Output: ~2.6M rows in cmip6_projections.parquet covering 4 "
+        "future decades + 1 reference window x 2 scenarios x 4 "
+        "seasons."
     )
 
     pdf.subsection_title("Stage 2: SDM scoring")
@@ -1280,6 +1290,31 @@ def build_report():  # noqa: C901 PLR0915
             "the other doesn't for a given cell, we need graceful "
             "fallback.  Solution: CASE WHEN ... pattern that averages "
             "when both exist, falls back to whichever is available.",
+        ),
+        (
+            "CDS gaps for MLD and primary production",
+            "The Copernicus CDS projections-cmip6 catalogue advertises "
+            "mlotst and intpp but every request returns 400 "
+            "RoocsValueError -- the mirror only exposes a curated "
+            "subset of CMIP6.  Solution: download_cmip6_pangeo.py "
+            "fetches these two variables from the Pangeo CMIP6 zarr "
+            "archive on Google Cloud Storage (anonymous access, no "
+            "credentials needed) and merges them into the same "
+            "cmip6_projections.parquet keyed on "
+            "(model, scenario, decade, season, lat, lon).",
+        ),
+        (
+            "Raw CMIP6 bias contaminates the climate signal",
+            "Initial projections were scored directly on raw CMIP6 "
+            "output.  Per-model biases relative to Copernicus "
+            "observations (SST offsets of 1-3C, MLD offsets of "
+            "several metres) appeared in scored habitat probabilities "
+            "and were indistinguishable from the climate-change "
+            "signal.  Solution: apply_cmip6_delta.py runs after both "
+            "downloads and applies an additive delta (SST/MLD/SLA) or "
+            "a multiplicative delta with floor (PP) using the per-model "
+            "2019-2024 reference window.  This removes the model bias "
+            "while preserving the projected change signal.",
         ),
     ]
 

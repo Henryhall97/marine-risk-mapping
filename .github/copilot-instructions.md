@@ -1,6 +1,6 @@
 # Copilot Project Instructions — Marine Risk Mapping
 
-> **Last updated:** 2026-06 (Pangeo CMIP6 fetcher for MLD + intpp)
+> **Last updated:** 2026-06-13 (CMIP6 delta-method bias correction via apply_cmip6_delta.py)
 > **Update trigger:** See [§ Keeping This File Current](#keeping-this-file-current) at the bottom.
 
 ---
@@ -403,7 +403,7 @@ MLD 21m (winter) → 11m (summer).
 
 11. **Seasonal features are one-hot encoded:** The seasonal parquet files contain `season_winter`, `season_spring`, `season_summer`, `season_fall` boolean columns — NOT a string `season` column. To reconstruct the season label, use `idxmax(axis=1)` on these columns.
 
-12. **49% missing ocean covariates in scoring:** When ISDM models score the full H3 grid (7.3M rows), ~49% of cells lack Copernicus ocean covariate data (deep ocean/edge cells). These are filled with median values. This is expected and logged as a warning.
+12. **Missing ocean covariates in scoring (~0.8%):** When ISDM models score the seasonal H3 grid (7.27M rows), a small fraction of cells lack Copernicus ocean covariate data (deep-ocean/edge cells): `sst`/`sst_sd` ~0.5%, `mld`/`sla` ~0.7%, `pp_upper_200m` ~0%, any-covariate ~0.8%. These are median-filled at scoring time (logged as a warning in `train_isdm_model.py`). The figure was historically ~49% when covariates were joined raw (`int_ocean_covariates`, ~1.1M of 1.9M cells), but `int_ocean_covariates_seasonal` now does a spatial nearest-neighbour fill, cutting the gap to <1%.
 
 13. **Line length limit is 88 chars (ruff).** All generated Python code must respect the project's 88-character line limit. Break long strings, log messages, function signatures, and help text across multiple lines. Use implicit string concatenation (`"part one" "part two"`) for long log format strings.
 
@@ -433,7 +433,9 @@ MLD 21m (winter) → 11m (summer).
 
 26. **Rate-limited endpoints require a `request: Request` parameter.** slowapi's `@limiter.limit()` decorator needs access to the `Request` object to extract the client IP. When adding rate limiting to a FastAPI endpoint, add `request: Request` as the first parameter after `self` (if any). Auth endpoints: 5/min (register), 10/min (login). Classification endpoints: 10/min. Sighting reports: 20/min.
 
-27. **Copernicus CDS `projections-cmip6` does NOT expose ocean mixed-layer thickness or primary production.** Probing every (model, scenario) returns `400 Bad Request: RoocsValueError` for `ocean_mixed_layer_thickness_defined_by_sigma_t` (`mlotst`) and `total_primary_organic_carbon_production_by_phytoplankton` (`intpp`). The CDS catalogue only mirrors a curated subset of CMIP6. `download_cmip6_projections.py` silently writes NaN columns for these variables — by design, it does not synthesise fallbacks. For real climate signal on MLD and PP, use `download_cmip6_pangeo.py`, which pulls those two variables from the Pangeo CMIP6 zarr archive on Google Cloud Storage (`gs://cmip6/`) via `intake-esm` and merges them into the main `cmip6_projections.parquet`. Pangeo coverage: 8 of our 10 models for MLD, 6 of 10 for intpp (EC-Earth3 + MIROC6 missing both). Unit conversion in the Pangeo module: `intpp` (mol C m⁻² s⁻¹) → mg C m⁻² day⁻¹ via `12.011 × 1000 × 86400`.
+27. **Copernicus CDS `projections-cmip6` does NOT expose ocean mixed-layer thickness or primary production.** Probing every (model, scenario) returns `400 Bad Request: RoocsValueError` for `ocean_mixed_layer_thickness_defined_by_sigma_t` (`mlotst`) and `total_primary_organic_carbon_production_by_phytoplankton` (`intpp`). The CDS catalogue only mirrors a curated subset of CMIP6. `download_cmip6_projections.py` is restricted to `CDS_AVAILABLE_VARS = ["sea_surface_temperature", "sea_surface_height_above_geoid"]` to avoid burning ~160 doomed requests per run; the MLD and intpp columns are left as NaN and filled by `download_cmip6_pangeo.py`, which pulls those two variables from the Pangeo CMIP6 zarr archive on Google Cloud Storage (`gs://cmip6/`) via `intake-esm`. Pangeo coverage: 8 of our 10 models for MLD, 6 of 10 for intpp (EC-Earth3 + MIROC6 missing both). Unit conversion in the Pangeo module: `intpp` (mol C m⁻² s⁻¹) → mg C m⁻² day⁻¹ via `12.011 × 1000 × 86400`.
+
+28. **Raw CMIP6 model output has systematic biases that must be removed before scoring.** Per-model SST offsets of 1–3 °C and MLD offsets of several metres relative to the Copernicus 2019–2024 baseline are indistinguishable from the climate-change signal once fed into SDMs. **Both download scripts now fetch the 2019–2024 reference window** (`CMIP6_REFERENCE_DECADE`, `CMIP6_REFERENCE_YEARS`) in addition to the future decades, and `pipeline/ingestion/apply_cmip6_delta.py` applies a delta-method bias correction: additive for SST/MLD/SLA (`obs + (future − reference)`), multiplicative for PP with a 1.0 mg C m⁻² day⁻¹ floor on the reference denominator (`obs × (future / max(reference, floor))`). The corrected parquet is written in place; the raw model output is backed up to `cmip6_projections.pre_delta`. The full pipeline order is: `download_cmip6_projections.py` → `download_cmip6_pangeo.py` → `apply_cmip6_delta.py` → `score_future_sdm.py` / `score_future_isdm.py` → `load_*_projections.py`. Always run the delta script before rescoring or projection deltas (`projected − current`) will conflate model bias with climate signal.
 
 ### ALWAYS do these:
 
@@ -511,7 +513,7 @@ MLD 21m (winter) → 11m (summer).
 ### Shared modules
 | Module | Purpose |
 |---|---|
-| `pipeline/config.py` | Reads scoring weights from `dbt_project.yml` via `yaml.safe_load()`. Also: `DB_CONFIG` (env vars), `H3_RESOLUTION`, `US_BBOX`, `US_BBOX_WIDE`, `VESSEL_TYPE_CODES`, `HIGH_SPEED_KNOTS`, proximity decay constants, `SEASONS` dict, `SEASON_ORDER`, 22 audio constants (`AUDIO_*`), CMIP6 constants (`CMIP6_DIR`, `CMIP6_PROJECTIONS_FILE`, `CMIP6_SCENARIOS`, `CMIP6_DECADES`, `SDM_PROJECTIONS_DIR`), all file paths incl. `BIA_FILE`, `CRITICAL_HABITAT_FILE`, `SHIPPING_LANES_FILE`, `SLOW_ZONES_FILE` |
+| `pipeline/config.py` | Reads scoring weights from `dbt_project.yml` via `yaml.safe_load()`. Also: `DB_CONFIG` (env vars), `H3_RESOLUTION`, `US_BBOX`, `US_BBOX_WIDE`, `VESSEL_TYPE_CODES`, `HIGH_SPEED_KNOTS`, proximity decay constants, `SEASONS` dict, `SEASON_ORDER`, 22 audio constants (`AUDIO_*`), CMIP6 constants (`CMIP6_DIR`, `CMIP6_PROJECTIONS_FILE`, `CMIP6_PROJECTIONS_BACKUP_FILE`, `CMIP6_SCENARIOS`, `CMIP6_DECADES`, `CMIP6_REFERENCE_DECADE`, `CMIP6_REFERENCE_YEARS` = (2019, 2024), `SDM_PROJECTIONS_DIR`), all file paths incl. `BIA_FILE`, `CRITICAL_HABITAT_FILE`, `SHIPPING_LANES_FILE`, `SLOW_ZONES_FILE` |
 | `pipeline/utils.py` | Shared helpers: `to_python()`, `bulk_insert()`, `assign_h3_cells()`, `get_connection()`, `table_row_count()` |
 
 All pipeline scripts import from `pipeline.config` instead of defining their own constants.
@@ -533,8 +535,9 @@ Ocean covariates use `US_BBOX_WIDE` (wider margin for interpolation); all other 
 | `pipeline/ingestion/download_critical_habitat.py` | Download NMFS whale Critical Habitat from MapServer (31 polygons) | seconds |
 | `pipeline/ingestion/download_shipping_lanes.py` | Download NOAA Coast Survey shipping lanes/TSS (300 features) | seconds |
 | `pipeline/ingestion/download_slow_zones.py` | Scrape NOAA Fisheries active right whale DMAs (~6 zones) | seconds |
-| `pipeline/ingestion/download_cmip6_projections.py` | Download CMIP6 ocean covariates from Copernicus CDS (SST + SLA only — see Pitfall #27) | ~30 min |
-| `pipeline/ingestion/download_cmip6_pangeo.py` | Fetch MLD (`mlotst`) + primary production (`intpp`) from Pangeo GCS zarr stores; merges into `cmip6_projections.parquet` | ~7 min |
+| `pipeline/ingestion/download_cmip6_projections.py` | Download CMIP6 ocean covariates from Copernicus CDS — **SST + SLA only** (see Pitfall #27). Fetches both future decades and the 2019–2024 reference window for delta-method bias correction. | ~30 min |
+| `pipeline/ingestion/download_cmip6_pangeo.py` | Fetch MLD (`mlotst`) + primary production (`intpp`) from Pangeo GCS zarr stores; merges into `cmip6_projections.parquet`. Fetches future + 2019–2024 reference window. | ~7 min |
+| `pipeline/ingestion/apply_cmip6_delta.py` | **Bias-correct** raw CMIP6 projections using the delta method. Additive (SST/MLD/SLA): `obs + (future − reference)`. Multiplicative with 1.0 mg C/m²/day floor (PP): `obs × (future / max(reference, floor))`. Runs after both downloads; backs up raw to `cmip6_projections.pre_delta` and rewrites `cmip6_projections.parquet` in place. CLI: `--force`, `--dry-run`. | seconds |
 | `pipeline/aggregation/aggregate_ais.py` | Aggregate 3.1B AIS pings → 9.7M H3 rows | ~hours |
 | `pipeline/aggregation/assign_cetacean_h3.py` | Assign sightings to H3 cells | ~minutes |
 | `pipeline/aggregation/assign_ship_strike_h3.py` | Assign strikes to H3 cells | seconds |
