@@ -13,6 +13,17 @@ import {
   IconPin,
   IconGlobe,
 } from "@/components/icons/MarineIcons";
+import {
+  useProjectionData,
+  BASELINE_NOTE,
+  PROJ_SCENARIOS_LONG,
+  PROJ_DECADES,
+  type ProjScenario,
+  type ProjDecade,
+} from "@/hooks/useProjectionData";
+import GlossaryBox, { GLOSSARY } from "@/components/GlossaryBox";
+import InsightMiniMap from "@/components/InsightMiniMap";
+import { describeRegions } from "@/lib/regions";
 
 /* ── Types ──────────────────────────────────────────────── */
 
@@ -38,15 +49,8 @@ interface MacroCell {
 }
 
 type Season = "annual" | "winter" | "spring" | "summer" | "fall";
-type Scenario = "ssp245" | "ssp585";
-type Decade = "2030s" | "2040s" | "2060s" | "2080s";
 
 const SEASONS: Season[] = ["annual", "winter", "spring", "summer", "fall"];
-const SCENARIOS: { value: Scenario; label: string }[] = [
-  { value: "ssp245", label: "SSP2-4.5 (moderate)" },
-  { value: "ssp585", label: "SSP5-8.5 (high emissions)" },
-];
-const DECADES: Decade[] = ["2030s", "2040s", "2060s", "2080s"];
 
 /* ── Helpers ────────────────────────────────────────────── */
 
@@ -121,11 +125,18 @@ export default function PortsPage() {
   const [cells, setCells] = useState<MacroCell[]>([]);
   const [loading, setLoading] = useState(true);
 
-  /* Projection state */
-  const [projScenario, setProjScenario] = useState<Scenario>("ssp585");
-  const [projDecade, setProjDecade] = useState<Decade>("2060s");
-  const [projCells, setProjCells] = useState<MacroCell[]>([]);
-  const [projLoading, setProjLoading] = useState(false);
+  /* Projection state — baseline fetched at the same season as the
+     projection (season-consistent deltas) via the shared hook. */
+  const [projScenario, setProjScenario] = useState<ProjScenario>("ssp585");
+  const [projDecade, setProjDecade] = useState<ProjDecade>("2060s");
+  const {
+    projCells: projCellsRaw,
+    baseCells: baseCellsRaw,
+    loading: projLoading,
+    error: projError,
+  } = useProjectionData(season, projScenario, projDecade);
+  const projCells = projCellsRaw as unknown as MacroCell[];
+  const baseCells = baseCellsRaw as unknown as MacroCell[];
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -142,29 +153,9 @@ export default function PortsPage() {
     }
   }, [season]);
 
-  const fetchProjected = useCallback(async () => {
-    const projSeason = season === "annual" ? "winter" : season;
-    setProjLoading(true);
-    try {
-      const res = await fetch(
-        `${API_BASE}/api/v1/macro/overview?season=${projSeason}&scenario=${projScenario}&decade=${projDecade}`,
-      );
-      if (res.ok) {
-        const d = await res.json();
-        setProjCells(d.data ?? []);
-      }
-    } finally {
-      setProjLoading(false);
-    }
-  }, [season, projScenario, projDecade]);
-
   useEffect(() => {
     fetchData();
   }, [fetchData]);
-
-  useEffect(() => {
-    fetchProjected();
-  }, [fetchProjected]);
 
   /* Derived analytics */
   const total = cells.length;
@@ -291,6 +282,37 @@ export default function PortsPage() {
           </div>
         ) : (
           <>
+            {/* How to read this page */}
+            <GlossaryBox
+              terms={[GLOSSARY.cell, GLOSSARY.riskScore, GLOSSARY.whaleProb]}
+            />
+
+            {/* Headline takeaway */}
+            <div className="mb-8 rounded-2xl border border-teal-700/40 bg-gradient-to-br from-teal-950/30 to-abyss-900/40 p-6">
+              <p className="text-[11px] font-semibold uppercase tracking-widest text-teal-400">
+                Port approach risk — {season}
+              </p>
+              <p className="mt-2 text-lg font-semibold leading-snug text-slate-100">
+                {riskyApproaches.length.toLocaleString()} approach cells combine{" "}
+                <span className="text-red-400">heavy traffic with high collision risk</span>
+                , and {whaleTrafficOverlap.length.toLocaleString()} overlap active
+                whale habitat.
+              </p>
+              <p className="mt-1.5 text-sm text-slate-400">
+                {riskyApproaches.length > 0 ? (
+                  <>
+                    The pressure concentrates around{" "}
+                    <span className="font-medium text-teal-300">
+                      {describeRegions(riskyApproaches, 3)}
+                    </span>
+                    — the approaches where speed and routing measures matter most.
+                  </>
+                ) : (
+                  "No high-risk port approaches in this season's view."
+                )}
+              </p>
+            </div>
+
             {/* Summary stats */}
             <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <StatCard
@@ -531,13 +553,16 @@ export default function PortsPage() {
                 overlap zones near port approaches. Plan port operations and
                 infrastructure investments with these projections in mind.
               </p>
+              <p className="mb-4 rounded-lg border border-cyan-900/30 bg-abyss-900/40 px-3 py-2 text-[10px] leading-relaxed text-slate-500">
+                {BASELINE_NOTE}
+              </p>
 
               {/* Scenario / decade selector */}
               <div className="mb-5 flex flex-wrap items-center gap-3">
                 <div className="flex items-center gap-1.5">
                   <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Scenario</span>
                   <div className="flex gap-1 rounded-lg border border-ocean-800/30 bg-abyss-900/60 p-0.5">
-                    {SCENARIOS.map((s) => (
+                    {PROJ_SCENARIOS_LONG.map((s) => (
                       <button
                         key={s.value}
                         onClick={() => setProjScenario(s.value)}
@@ -555,7 +580,7 @@ export default function PortsPage() {
                 <div className="flex items-center gap-1.5">
                   <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Decade</span>
                   <div className="flex gap-1 rounded-lg border border-ocean-800/30 bg-abyss-900/60 p-0.5">
-                    {DECADES.map((d) => (
+                    {PROJ_DECADES.map((d) => (
                       <button
                         key={d}
                         onClick={() => setProjDecade(d)}
@@ -576,11 +601,24 @@ export default function PortsPage() {
                 <div className="flex h-24 items-center justify-center">
                   <span className="animate-pulse text-xs text-slate-500">Loading projections…</span>
                 </div>
+              ) : projError ? (
+                <p className="text-xs text-red-400/80">
+                  Could not load projection data ({projError}). The projection
+                  tables may still be initialising on the server.
+                </p>
               ) : projCells.length === 0 ? (
                 <p className="text-xs text-slate-600">No projection data available for this selection.</p>
               ) : (
                 <>
                   {(() => {
+                    /* Season-consistent baseline (same season as projection). */
+                    const baseRisky = baseCells.filter(
+                      (c) => c.traffic_score > 0.5 && c.risk_score > 0.5,
+                    );
+                    const baseWhaleTraffic = baseCells.filter(
+                      (c) => c.traffic_score > 0.3 && (c.any_whale_prob ?? 0) > 0.2,
+                    );
+
                     const projTraffic = projCells.filter((c) => c.traffic_score > 0);
                     const projRisky = projCells.filter(
                       (c) => c.traffic_score > 0.5 && c.risk_score > 0.5,
@@ -589,8 +627,8 @@ export default function PortsPage() {
                       (c) => c.traffic_score > 0.3 && (c.any_whale_prob ?? 0) > 0.2,
                     );
 
-                    const deltaRisky = projRisky.length - riskyApproaches.length;
-                    const deltaOverlap = projWhaleTraffic.length - whaleTrafficOverlap.length;
+                    const deltaRisky = projRisky.length - baseRisky.length;
+                    const deltaOverlap = projWhaleTraffic.length - baseWhaleTraffic.length;
 
                     return (
                       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -653,6 +691,36 @@ export default function PortsPage() {
                   </p>
                 </>
               )}
+            </div>
+
+            {/* Where the risky approaches are */}
+            <div className="mb-8 rounded-2xl border border-ocean-800/30 bg-abyss-900/50 p-6">
+              <h2 className="mb-1 text-sm font-semibold uppercase tracking-widest text-slate-500">
+                Where the risky approaches are — {season}
+              </h2>
+              <p className="mb-4 text-xs text-slate-500">
+                The {riskyApproaches.length.toLocaleString()} cells combining heavy
+                traffic with high collision risk, coloured by risk
+                {riskyApproaches.length > 0 && (
+                  <> — concentrated around {describeRegions(riskyApproaches, 3)}</>
+                )}
+                . Click to open them on the full map.
+              </p>
+              <InsightMiniMap
+                cells={riskyApproaches.map((c) => ({
+                  cell_lat: c.cell_lat,
+                  cell_lon: c.cell_lon,
+                  value: c.risk_score,
+                }))}
+                href={mapLink({
+                  ...centroid(riskyApproaches),
+                  zoom: 6,
+                  layer: "risk",
+                  season,
+                  overlays: ["activeSMAs", "shippingLanes"],
+                })}
+                emptyLabel="No high-risk approach cells this season."
+              />
             </div>
 
             {/* Top traffic density table */}

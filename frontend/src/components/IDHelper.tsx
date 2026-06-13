@@ -12,6 +12,7 @@ import {
   IconPin,
 } from "@/components/icons/MarineIcons";
 import { SPECIES_DESC } from "@/components/SpeciesPicker";
+import { API_BASE } from "@/lib/config";
 
 /* ── Shared constants ───────────────────────────────────── */
 
@@ -102,6 +103,17 @@ export const SPECIES_PHOTOS: Record<string, string> = {
   pygmy_sperm_whale: "dwarf_sperm_whales",
   small_sperm_whale: "dwarf_sperm_whales",
   narwhal: "narwhal",
+};
+
+/** Maps photo-classifier model species labels to wizard group keys. */
+export const MODEL_TO_WIZARD: Record<string, string> = {
+  right_whale: "right_whale",
+  humpback_whale: "humpback",
+  fin_whale: "fin_whale",
+  blue_whale: "blue_whale",
+  minke_whale: "minke_whale",
+  sei_whale: "sei_whale",
+  killer_whale: "orca",
 };
 
 /* ── Identification guidance ─────────────────────────────
@@ -672,7 +684,7 @@ function groupLabel(g: string) {
 /* ── Types ──────────────────────────────────────────────── */
 
 type WizStep = "start" | "whale-kind" | "result";
-type AnimalChoice = "" | "whale" | "dolphin" | "porpoise" | "unsure";
+type AnimalChoice = "" | "whale" | "dolphin" | "porpoise" | "unsure" | "all";
 type WhaleChoice = "" | "baleen" | "toothed_whale" | "whale_unsure";
 
 /**
@@ -710,6 +722,14 @@ export default function IDHelper(props: IDHelperProps) {
   const [selectedTraits, setSelectedTraits] = useState<Set<string>>(new Set());
   const [showTraitFilter, setShowTraitFilter] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
+
+  /* ── AI photo classification ── */
+  const [photoPrediction, setPhotoPrediction] = useState<
+    { group: string; confidence: number } | null
+  >(null);
+  const [photoClassifying, setPhotoClassifying] = useState(false);
+  const [photoClassifyFailed, setPhotoClassifyFailed] = useState(false);
+  const classifiedPhotoRef = useRef<string | null>(null);
 
   /* ── Region filter ── */
   const [regionFilter, setRegionFilter] = useState<string | null>(
@@ -760,6 +780,57 @@ export default function IDHelper(props: IDHelperProps) {
     try { sessionStorage.removeItem("idhelper_photo"); } catch { /* noop */ }
     if (photoInputRef.current) photoInputRef.current.value = "";
   }, []);
+
+  /* ── Classify the active photo with the species model ── */
+  useEffect(() => {
+    if (!activePhoto) {
+      setPhotoPrediction(null);
+      setPhotoClassifying(false);
+      setPhotoClassifyFailed(false);
+      classifiedPhotoRef.current = null;
+      return;
+    }
+    if (classifiedPhotoRef.current === activePhoto) return;
+    classifiedPhotoRef.current = activePhoto;
+
+    let cancelled = false;
+    setPhotoClassifying(true);
+    setPhotoClassifyFailed(false);
+    setPhotoPrediction(null);
+
+    (async () => {
+      try {
+        const blob = await (await fetch(activePhoto)).blob();
+        const form = new FormData();
+        form.append("file", blob, "photo.jpg");
+        const res = await fetch(`${API_BASE}/api/v1/photo/classify`, {
+          method: "POST",
+          body: form,
+        });
+        if (!res.ok) throw new Error(`Server ${res.status}`);
+        const data = await res.json();
+        if (cancelled) return;
+        const species: string | undefined =
+          data?.classification?.predicted_species;
+        const confidence: number = data?.classification?.confidence ?? 0;
+        const wizardKey = species ? MODEL_TO_WIZARD[species] : undefined;
+        if (wizardKey && species !== "other_cetacean") {
+          setPhotoPrediction({ group: wizardKey, confidence });
+        } else {
+          setPhotoPrediction(null);
+        }
+      } catch {
+        if (!cancelled) {
+          setPhotoClassifyFailed(true);
+          setPhotoPrediction(null);
+        }
+      } finally {
+        if (!cancelled) setPhotoClassifying(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [activePhoto]);
 
   function reset() {
     setStep("start");
@@ -816,8 +887,10 @@ export default function IDHelper(props: IDHelperProps) {
   const rawGroups =
     resultKey === "unsure"
       ? []
-      : resultKey === "whale_unsure"
-        ? [
+      : resultKey === "all"
+        ? Object.values(WIZARD_GROUPS).flat()
+        : resultKey === "whale_unsure"
+          ? [
             ...WIZARD_GROUPS.baleen,
             ...WIZARD_GROUPS.toothed_whale,
           ]
@@ -973,7 +1046,15 @@ export default function IDHelper(props: IDHelperProps) {
   }, [searchResults, activeRegions, regionLocked, showAllSpecies]);
 
   /* ── Species card (compact grid item — click to expand detail below grid) ── */
-  function SpeciesCard({ grp }: { grp: string }) {
+  function SpeciesCard({
+    grp,
+    highlight,
+    confidence,
+  }: {
+    grp: string;
+    highlight?: "ai" | "traits";
+    confidence?: number;
+  }) {
     const photo = SPECIES_PHOTOS[grp] ?? null;
     const label = groupLabel(grp);
     const tip = SPECIES_ID_TIPS[grp] ?? null;
@@ -981,6 +1062,13 @@ export default function IDHelper(props: IDHelperProps) {
     const isLikely = likelySet === null || likelySet.has(grp);
     const range = SPECIES_RANGE[grp];
     const rangeLabel = range?.map(r => REGION_LABELS[r] ?? r).join(", ");
+    const regionNames = activeRegions?.map(r => REGION_LABELS[r] ?? r).join(", ");
+    const likelyTitle = regionNames
+      ? `Recorded in ${regionNames} — likely to occur where you are`
+      : "Known to occur in this area";
+    const uncommonTitle = regionNames
+      ? `Not typically recorded in ${regionNames} — would be unusual here`
+      : "Uncommon in this area";
 
     return (
       <button
@@ -989,9 +1077,13 @@ export default function IDHelper(props: IDHelperProps) {
         className={`flex w-full items-center gap-2.5 rounded-lg border p-2.5 text-left transition-all ${
           isSelected
             ? "border-ocean-500/50 bg-ocean-900/40 ring-1 ring-ocean-500/30"
-            : !isLikely
-              ? "border-ocean-800/20 bg-abyss-900/30 opacity-60 hover:opacity-80"
-              : "border-ocean-800/30 bg-abyss-900/50 hover:border-ocean-600/40 hover:bg-ocean-900/30"
+            : highlight === "ai"
+              ? "border-bioluminescent-500/40 bg-bioluminescent-950/20 ring-1 ring-bioluminescent-500/20 hover:bg-bioluminescent-950/30"
+              : highlight === "traits"
+                ? "border-teal-500/40 bg-teal-950/20 ring-1 ring-teal-500/20 hover:bg-teal-950/30"
+                : !isLikely
+                  ? "border-ocean-800/20 bg-abyss-900/30 opacity-60 hover:opacity-80"
+                  : "border-ocean-800/30 bg-abyss-900/50 hover:border-ocean-600/40 hover:bg-ocean-900/30"
         }`}
       >
         {photo ? (
@@ -1006,13 +1098,29 @@ export default function IDHelper(props: IDHelperProps) {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             <p className="truncate text-xs font-semibold text-slate-200">{label}</p>
+            {highlight === "ai" && (
+              <span className="shrink-0 rounded-full bg-bioluminescent-500/20 px-1.5 py-px text-[9px] font-semibold text-bioluminescent-300">
+                AI{typeof confidence === "number" ? ` ${Math.round(confidence * 100)}%` : ""}
+              </span>
+            )}
+            {highlight === "traits" && (
+              <span className="shrink-0 rounded-full bg-teal-500/20 px-1.5 py-px text-[9px] font-semibold text-teal-300">
+                Best match
+              </span>
+            )}
             {likelySet && isLikely && (
-              <span className="shrink-0 rounded-full bg-teal-500/20 px-1.5 py-px text-[9px] font-medium text-teal-400">
+              <span
+                title={likelyTitle}
+                className="shrink-0 cursor-help rounded-full bg-teal-500/20 px-1.5 py-px text-[9px] font-medium text-teal-400"
+              >
                 Likely here
               </span>
             )}
             {likelySet && !isLikely && (
-              <span className="shrink-0 rounded-full bg-amber-500/15 px-1.5 py-px text-[9px] font-medium text-amber-500/80">
+              <span
+                title={uncommonTitle}
+                className="shrink-0 cursor-help rounded-full bg-amber-500/15 px-1.5 py-px text-[9px] font-medium text-amber-500/80"
+              >
                 Uncommon here
               </span>
             )}
@@ -1496,6 +1604,112 @@ export default function IDHelper(props: IDHelperProps) {
     );
   }
 
+  /* ── Which wizard category contains a given species ── */
+  function categoryOf(
+    group: string,
+  ): { animal: AnimalChoice; whaleKind: WhaleChoice } | null {
+    if (WIZARD_GROUPS.baleen.includes(group))
+      return { animal: "whale", whaleKind: "baleen" };
+    if (WIZARD_GROUPS.toothed_whale.includes(group))
+      return { animal: "whale", whaleKind: "toothed_whale" };
+    if (WIZARD_GROUPS.dolphin.includes(group))
+      return { animal: "dolphin", whaleKind: "" };
+    if (WIZARD_GROUPS.porpoise.includes(group))
+      return { animal: "porpoise", whaleKind: "" };
+    return null;
+  }
+
+  /* Pick the AI-predicted species directly (quick path). */
+  function useAiPrediction() {
+    if (!photoPrediction) return;
+    const grp = photoPrediction.group;
+    if (props.mode === "navigate") {
+      if (activePhoto) {
+        try { sessionStorage.setItem("idhelper_photo", activePhoto); } catch { /* quota */ }
+      }
+      router.push(`/report?species=${grp}`);
+    } else {
+      handleSelect(grp);
+    }
+  }
+
+  /* Jump straight to the full searchable species list. */
+  function browseAllSpecies() {
+    setAnimal("all");
+    setWhaleKind("");
+    setSelectedTraits(new Set());
+    setExpandedSpecies(null);
+    setStep("result");
+  }
+
+  /* ── Breadcrumb trail ── */
+  const animalLabelMap: Record<string, string> = {
+    whale: "Whale", dolphin: "Dolphin", porpoise: "Porpoise",
+    unsure: "Unsure", all: "All species",
+  };
+  const breadcrumb: { label: string; onClick?: () => void; current: boolean }[] =
+    (() => {
+      const items: { label: string; onClick?: () => void; current: boolean }[] = [];
+      if (step === "start") {
+        items.push({ label: "Choose type", current: true });
+        return items;
+      }
+      items.push({
+        label: animalLabelMap[animal] ?? "Type",
+        onClick: () => {
+          setAnimal(""); setWhaleKind(""); setSelectedTraits(new Set());
+          setStep("start");
+        },
+        current: false,
+      });
+      if (animal === "whale") {
+        if (step === "whale-kind") {
+          items.push({ label: "Baleen or toothed", current: true });
+          return items;
+        }
+        const kindLabelMap: Record<string, string> = {
+          baleen: "Baleen", toothed_whale: "Toothed", whale_unsure: "Either",
+        };
+        items.push({
+          label: kindLabelMap[whaleKind] ?? "Type",
+          onClick: () => {
+            setWhaleKind(""); setSelectedTraits(new Set());
+            setStep("whale-kind");
+          },
+          current: false,
+        });
+      }
+      items.push({ label: "Pick species", current: true });
+      return items;
+    })();
+
+  /* ── Photo-prediction context for the AI banner ── */
+  const predictionLabel = photoPrediction ? groupLabel(photoPrediction.group) : null;
+  const predictionInPool =
+    photoPrediction != null && groups.includes(photoPrediction.group);
+  const predictionCategory =
+    photoPrediction && step === "result" && !predictionInPool
+      ? categoryOf(photoPrediction.group)
+      : null;
+
+  /* ── Best matches (shown above the species grid) ── */
+  const bestMatchList: { group: string; reason: "ai" | "traits"; confidence?: number }[] = [];
+  if (predictionInPool && photoPrediction) {
+    bestMatchList.push({
+      group: photoPrediction.group, reason: "ai",
+      confidence: photoPrediction.confidence,
+    });
+  }
+  if (selectedTraits.size > 0 && groups.length > 0 && groups.length <= 2) {
+    for (const g of groups) {
+      if (!bestMatchList.some((b) => b.group === g)) {
+        bestMatchList.push({ group: g, reason: "traits" });
+      }
+    }
+  }
+  const bestMatchKeys = new Set(bestMatchList.map((b) => b.group));
+  const gridGroups = groups.filter((g) => !bestMatchKeys.has(g));
+
   return (
     <div
       className={
@@ -1546,6 +1760,42 @@ export default function IDHelper(props: IDHelperProps) {
             ))}
           </div>
         </div>
+      </div>
+
+      {/* Breadcrumb + quick escape hatch */}
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <nav className="flex flex-wrap items-center gap-1 text-[11px]" aria-label="Breadcrumb">
+          {breadcrumb.map((c, i) => (
+            <span key={i} className="flex items-center gap-1">
+              {i > 0 && <span className="text-slate-600">›</span>}
+              {c.onClick ? (
+                <button
+                  type="button"
+                  onClick={c.onClick}
+                  className="rounded px-1.5 py-0.5 font-medium text-ocean-400 transition hover:bg-ocean-900/30 hover:text-ocean-300"
+                >
+                  {c.label}
+                </button>
+              ) : (
+                <span className="px-1.5 py-0.5 font-semibold text-slate-300">
+                  {c.label}
+                </span>
+              )}
+            </span>
+          ))}
+        </nav>
+        {step !== "result" && (
+          <button
+            type="button"
+            onClick={browseAllSpecies}
+            className="flex items-center gap-1 rounded-md border border-ocean-800/40 px-2.5 py-1 text-[11px] font-medium text-slate-400 transition hover:border-ocean-600/40 hover:text-ocean-300"
+          >
+            Short on time? Browse all species
+            <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
+        )}
       </div>
 
       {/* Photo upload / compare zone — own upload in navigate mode, or show passed-in photo */}
@@ -1669,6 +1919,63 @@ export default function IDHelper(props: IDHelperProps) {
           </div>
         )}
       </div>
+
+      {/* AI photo analysis banner — shown on every step when a photo exists */}
+      {activePhoto && (photoClassifying || photoPrediction || photoClassifyFailed) && (
+        <div className="mb-4 rounded-lg border border-bioluminescent-500/30 bg-bioluminescent-950/15 px-3 py-2.5">
+          {photoClassifying ? (
+            <p className="flex items-center gap-2 text-[11px] text-slate-400">
+              <svg className="h-3.5 w-3.5 animate-spin text-bioluminescent-400" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.4 0 0 5.4 0 12h4z" />
+              </svg>
+              Analysing your photo with AI…
+            </p>
+          ) : photoPrediction ? (
+            <div className="flex items-center gap-3">
+              <div className="h-11 w-11 flex-shrink-0 overflow-hidden rounded-md border border-bioluminescent-500/30 bg-abyss-900/60">
+                {SPECIES_PHOTOS[photoPrediction.group] ? (
+                  /* eslint-disable-next-line @next/next/no-img-element */
+                  <img
+                    src={`/species/${SPECIES_PHOTOS[photoPrediction.group]}.jpg`}
+                    alt={predictionLabel ?? ""}
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  <div className="flex h-full w-full items-center justify-center">
+                    <IconWhale className="h-5 w-5 text-bioluminescent-400" />
+                  </div>
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-[11px] text-slate-400">
+                  <span className="font-semibold text-bioluminescent-300">AI photo match:</span>{" "}
+                  <span className="font-semibold text-white">{predictionLabel}</span>{" "}
+                  <span className="text-slate-500">
+                    {Math.round(photoPrediction.confidence * 100)}% confident
+                  </span>
+                </p>
+                <p className="text-[10px] text-slate-500">
+                  {predictionCategory
+                    ? "Not in your current shortlist — tap to use it anyway"
+                    : "Tap to use, or keep identifying manually below"}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={useAiPrediction}
+                className="flex-shrink-0 rounded-md border border-bioluminescent-500/40 bg-bioluminescent-600/20 px-3 py-1.5 text-[11px] font-semibold text-bioluminescent-200 transition hover:bg-bioluminescent-600/30"
+              >
+                Use this
+              </button>
+            </div>
+          ) : (
+            <p className="text-[11px] text-slate-500">
+              Couldn’t analyse the photo automatically — continue identifying below.
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Step 1: What type of animal? */}
       {step === "start" && (
@@ -2023,6 +2330,60 @@ export default function IDHelper(props: IDHelperProps) {
             <GuidanceCard stageKey={resultKey} />
           )}
 
+          {/* ── Inline size selector (strongest first clue) ── */}
+          {rawGroups.length > 0 &&
+            (() => {
+              const sizeKeys = ["small", "medium", "large", "very_large"].filter(
+                (k) => availableTraits.has(k),
+              );
+              if (sizeKeys.length < 2) return null;
+              return (
+                <div className="mb-3 rounded-xl border border-ocean-800/40 bg-ocean-950/30 px-4 py-3">
+                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                    How big was it?
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {sizeKeys.map((key) => {
+                      const active = selectedTraits.has(key);
+                      return (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => toggleTrait(key)}
+                          className={`rounded-full px-3 py-1 text-[11px] font-medium transition-all ${
+                            active
+                              ? "border border-teal-500/60 bg-teal-600/25 text-teal-300"
+                              : "border border-ocean-800/40 text-slate-400 hover:border-ocean-600/40 hover:text-slate-200"
+                          }`}
+                        >
+                          {FIELD_TRAITS[key]?.label ?? key}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+
+          {/* ── Live match count (always visible when filtering) ── */}
+          {selectedTraits.size > 0 && rawGroups.length > 0 && (
+            <div className="mb-3 flex items-center justify-between rounded-lg border border-teal-700/25 bg-teal-950/15 px-3 py-2">
+              <p className="text-[11px] text-teal-300">
+                <span className="font-semibold">{groups.length}</span>{" "}
+                {groups.length === 1 ? "species matches" : "species match"} your{" "}
+                <span className="font-semibold">{selectedTraits.size}</span>{" "}
+                {selectedTraits.size === 1 ? "clue" : "clues"}
+              </p>
+              <button
+                type="button"
+                onClick={() => setSelectedTraits(new Set())}
+                className="text-[10px] text-slate-500 transition hover:text-red-400"
+              >
+                Clear
+              </button>
+            </div>
+          )}
+
           {/* ── Narrow by field observations ── */}
           {rawGroups.length > 0 && (
             <div className="mb-4 rounded-xl border border-ocean-800/40 bg-ocean-950/30">
@@ -2046,7 +2407,7 @@ export default function IDHelper(props: IDHelperProps) {
                     />
                   </svg>
                   <span className="text-xs font-semibold text-slate-300">
-                    Narrow by features
+                    Narrow by behaviour &amp; features
                   </span>
                   {selectedTraits.size > 0 && (
                     <span className="rounded-full bg-teal-600/30 px-2 py-0.5 text-[10px] font-medium text-teal-300">
@@ -2097,7 +2458,7 @@ export default function IDHelper(props: IDHelperProps) {
                     </div>
                   )}
                   {(
-                    ["size", "behavior", "feature", "blow"] as const
+                    ["behavior", "feature", "blow"] as const
                   ).map((cat) => {
                     const traits = Object.entries(FIELD_TRAITS).filter(
                       ([k, d]) =>
@@ -2305,8 +2666,58 @@ export default function IDHelper(props: IDHelperProps) {
                   Select a region above or add your sighting location to narrow species.
                 </p>
               )}
+
+              {/* AI suggestion for a species outside the current shortlist */}
+              {predictionCategory && photoPrediction && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAnimal(predictionCategory.animal);
+                    setWhaleKind(predictionCategory.whaleKind);
+                    setSelectedTraits(new Set());
+                    setExpandedSpecies(photoPrediction.group);
+                    setStep("result");
+                  }}
+                  className="mb-3 flex w-full items-center gap-2 rounded-lg border border-bioluminescent-500/30 bg-bioluminescent-950/15 px-3 py-2 text-left transition hover:bg-bioluminescent-950/25"
+                >
+                  <IconCamera className="h-4 w-4 shrink-0 text-bioluminescent-400" />
+                  <p className="flex-1 text-[11px] text-slate-400">
+                    AI thinks your photo shows a{" "}
+                    <span className="font-semibold text-bioluminescent-300">
+                      {predictionLabel}
+                    </span>{" "}
+                    — not in this group. Tap to switch.
+                  </p>
+                  <svg className="h-3.5 w-3.5 shrink-0 text-bioluminescent-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                  </svg>
+                </button>
+              )}
+
+              {/* Best matches — promoted above the full grid */}
+              {bestMatchList.length > 0 && (
+                <div className="mb-3">
+                  <p className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-bioluminescent-300/80">
+                    <svg className="h-3 w-3" fill="currentColor" viewBox="0 0 20 20">
+                      <path d="M9.05 2.927c.3-.921 1.6-.921 1.9 0l1.286 3.957a1 1 0 00.95.69h4.162c.97 0 1.371 1.24.588 1.81l-3.368 2.447a1 1 0 00-.364 1.118l1.287 3.957c.3.922-.755 1.688-1.539 1.118l-3.367-2.447a1 1 0 00-1.176 0l-3.367 2.447c-.784.57-1.838-.196-1.539-1.118l1.287-3.957a1 1 0 00-.364-1.118L2.343 9.384c-.783-.57-.38-1.81.588-1.81h4.163a1 1 0 00.949-.69l1.286-3.957z" />
+                    </svg>
+                    {bestMatchList[0].reason === "ai" ? "AI suggests" : "Best match"}
+                  </p>
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                    {bestMatchList.map((b) => (
+                      <SpeciesCard
+                        key={b.group}
+                        grp={b.group}
+                        highlight={b.reason}
+                        confidence={b.confidence}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div className="mb-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                {groups.map((grp) => (
+                {gridGroups.map((grp) => (
                   <SpeciesCard key={grp} grp={grp} />
                 ))}
               </div>

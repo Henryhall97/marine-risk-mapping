@@ -17,6 +17,17 @@ import {
   IconPin,
   IconGlobe,
 } from "@/components/icons/MarineIcons";
+import {
+  useProjectionData,
+  BASELINE_NOTE,
+  PROJ_SCENARIOS_LONG,
+  PROJ_DECADES,
+  type ProjScenario,
+  type ProjDecade,
+} from "@/hooks/useProjectionData";
+import GlossaryBox, { GLOSSARY } from "@/components/GlossaryBox";
+import InsightMiniMap from "@/components/InsightMiniMap";
+import { describeRegions } from "@/lib/regions";
 
 /* ── Types ──────────────────────────────────────────────── */
 
@@ -41,15 +52,8 @@ interface MacroCell {
 }
 
 type Season = "annual" | "winter" | "spring" | "summer" | "fall";
-type Scenario = "ssp245" | "ssp585";
-type Decade = "2030s" | "2040s" | "2060s" | "2080s";
 
 const SEASONS: Season[] = ["annual", "winter", "spring", "summer", "fall"];
-const SCENARIOS: { value: Scenario; label: string }[] = [
-  { value: "ssp245", label: "SSP2-4.5 (moderate)" },
-  { value: "ssp585", label: "SSP5-8.5 (high emissions)" },
-];
-const DECADES: Decade[] = ["2030s", "2040s", "2060s", "2080s"];
 
 /* ── Helpers ────────────────────────────────────────────── */
 
@@ -164,11 +168,17 @@ export default function CaptainsPage() {
   const [cells, setCells] = useState<MacroCell[]>([]);
   const [loading, setLoading] = useState(true);
 
-  /* Projection state */
-  const [projScenario, setProjScenario] = useState<Scenario>("ssp585");
-  const [projDecade, setProjDecade] = useState<Decade>("2060s");
-  const [projCells, setProjCells] = useState<MacroCell[]>([]);
-  const [projLoading, setProjLoading] = useState(false);
+  /* Projection state — season-consistent baseline via shared hook. */
+  const [projScenario, setProjScenario] = useState<ProjScenario>("ssp585");
+  const [projDecade, setProjDecade] = useState<ProjDecade>("2060s");
+  const {
+    projCells: projCellsRaw,
+    baseCells: baseCellsRaw,
+    loading: projLoading,
+    error: projError,
+  } = useProjectionData(season, projScenario, projDecade);
+  const projCells = projCellsRaw as unknown as MacroCell[];
+  const baseCells = baseCellsRaw as unknown as MacroCell[];
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -185,29 +195,9 @@ export default function CaptainsPage() {
     }
   }, [season]);
 
-  const fetchProjected = useCallback(async () => {
-    const projSeason = season === "annual" ? "winter" : season;
-    setProjLoading(true);
-    try {
-      const res = await fetch(
-        `${API_BASE}/api/v1/macro/overview?season=${projSeason}&scenario=${projScenario}&decade=${projDecade}`,
-      );
-      if (res.ok) {
-        const d = await res.json();
-        setProjCells(d.data ?? []);
-      }
-    } finally {
-      setProjLoading(false);
-    }
-  }, [season, projScenario, projDecade]);
-
   useEffect(() => {
     fetchData();
   }, [fetchData]);
-
-  useEffect(() => {
-    fetchProjected();
-  }, [fetchProjected]);
 
   /* Derived analytics */
   const trafficCells = cells.filter((c) => c.traffic_score > 0);
@@ -218,6 +208,11 @@ export default function CaptainsPage() {
   );
   const nightHeavy = cells.filter(
     (c) => (c.night_traffic_ratio ?? 0) > 0.3,
+  );
+
+  /* Danger zones — heavy traffic that overlaps whale presence */
+  const dangerZones = cells.filter(
+    (c) => (c.any_whale_prob ?? 0) > 0.3 && c.traffic_score > 0.3,
   );
 
   /* Top 10 riskiest shipping cells */
@@ -308,6 +303,38 @@ export default function CaptainsPage() {
           </div>
         ) : (
           <>
+            {/* How to read this page */}
+            <GlossaryBox
+              terms={[GLOSSARY.cell, GLOSSARY.riskScore, GLOSSARY.whaleProb]}
+            />
+
+            {/* Headline takeaway */}
+            <div className="mb-8 rounded-2xl border border-blue-700/40 bg-gradient-to-br from-blue-950/30 to-abyss-900/40 p-6">
+              <p className="text-[11px] font-semibold uppercase tracking-widest text-blue-400">
+                Plan your transit — {season}
+              </p>
+              <p className="mt-2 text-lg font-semibold leading-snug text-slate-100">
+                {dangerZones.length.toLocaleString()} cells along the busiest
+                routes combine{" "}
+                <span className="text-red-400">heavy traffic with whale presence</span>
+                {" "}— slow to 10 kn here.
+              </p>
+              <p className="mt-1.5 text-sm text-slate-400">
+                {dangerZones.length > 0 ? (
+                  <>
+                    These watch-out zones cluster in{" "}
+                    <span className="font-medium text-blue-300">
+                      {describeRegions(dangerZones, 3)}
+                    </span>
+                    . {highSpeedZones.length.toLocaleString()} cells also carry
+                    heavy high-speed traffic.
+                  </>
+                ) : (
+                  "No high-overlap transit cells in this season's view."
+                )}
+              </p>
+            </div>
+
             {/* Summary stats */}
             <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <StatCard
@@ -467,13 +494,16 @@ export default function CaptainsPage() {
                 may shift under different emission scenarios. Plan ahead for
                 changing risk corridors.
               </p>
+              <p className="mb-4 rounded-lg border border-cyan-900/30 bg-abyss-900/40 px-3 py-2 text-[10px] leading-relaxed text-slate-500">
+                {BASELINE_NOTE}
+              </p>
 
               {/* Scenario / decade selector */}
               <div className="mb-5 flex flex-wrap items-center gap-3">
                 <div className="flex items-center gap-1.5">
                   <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Scenario</span>
                   <div className="flex gap-1 rounded-lg border border-ocean-800/30 bg-abyss-900/60 p-0.5">
-                    {SCENARIOS.map((s) => (
+                    {PROJ_SCENARIOS_LONG.map((s) => (
                       <button
                         key={s.value}
                         onClick={() => setProjScenario(s.value)}
@@ -491,7 +521,7 @@ export default function CaptainsPage() {
                 <div className="flex items-center gap-1.5">
                   <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Decade</span>
                   <div className="flex gap-1 rounded-lg border border-ocean-800/30 bg-abyss-900/60 p-0.5">
-                    {DECADES.map((d) => (
+                    {PROJ_DECADES.map((d) => (
                       <button
                         key={d}
                         onClick={() => setProjDecade(d)}
@@ -512,16 +542,23 @@ export default function CaptainsPage() {
                 <div className="flex h-24 items-center justify-center">
                   <span className="animate-pulse text-xs text-slate-500">Loading projections…</span>
                 </div>
+              ) : projError ? (
+                <p className="text-xs text-red-400/80">
+                  Could not load projection data ({projError}). The projection
+                  tables may still be initialising on the server.
+                </p>
               ) : projCells.length === 0 ? (
                 <p className="text-xs text-slate-600">No projection data available for this selection.</p>
               ) : (
                 <>
                   {(() => {
+                    const baseHighRisk = baseCells.filter((c) => c.risk_score >= 0.5);
+                    const baseWhaleZones = baseCells.filter((c) => (c.any_whale_prob ?? 0) > 0.3);
                     const projHighRisk = projCells.filter((c) => c.risk_score >= 0.5);
                     const projWhaleZones = projCells.filter((c) => (c.any_whale_prob ?? 0) > 0.3);
                     const projHighSpeed = projCells.filter((c) => (c.avg_high_speed_fraction ?? 0) > 0.3);
-                    const deltaRisk = projHighRisk.length - highRisk.length;
-                    const deltaWhale = projWhaleZones.length - whaleZones.length;
+                    const deltaRisk = projHighRisk.length - baseHighRisk.length;
+                    const deltaWhale = projWhaleZones.length - baseWhaleZones.length;
 
                     return (
                       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -583,6 +620,36 @@ export default function CaptainsPage() {
                   </p>
                 </>
               )}
+            </div>
+
+            {/* Where the watch-out zones are */}
+            <div className="mb-8 rounded-2xl border border-ocean-800/30 bg-abyss-900/50 p-6">
+              <h2 className="mb-1 text-sm font-semibold uppercase tracking-widest text-slate-500">
+                Where to slow down — {season}
+              </h2>
+              <p className="mb-4 text-xs text-slate-500">
+                The {dangerZones.length.toLocaleString()} transit cells where heavy
+                traffic meets whale activity, coloured by collision risk
+                {dangerZones.length > 0 && (
+                  <> — concentrated in {describeRegions(dangerZones, 3)}</>
+                )}
+                . Click to open them on the full map.
+              </p>
+              <InsightMiniMap
+                cells={dangerZones.map((c) => ({
+                  cell_lat: c.cell_lat,
+                  cell_lon: c.cell_lon,
+                  value: c.risk_score,
+                }))}
+                href={mapLink({
+                  ...centroid(dangerZones),
+                  zoom: 6,
+                  layer: "risk",
+                  season,
+                  overlays: ["activeSMAs", "proposedZones", "slowZones"],
+                })}
+                emptyLabel="No high-overlap transit cells this season."
+              />
             </div>
 
             {/* Top 10 riskiest shipping lanes */}

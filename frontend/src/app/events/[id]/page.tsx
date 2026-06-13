@@ -1489,7 +1489,7 @@ export default function EventDetailPage() {
       method: "DELETE",
       headers: { Authorization: `Bearer ${token}` },
     });
-    if (res.ok) router.push("/community?tab=events");
+    if (res.ok) router.push("/community/events");
   };
 
   const copyInvite = () => {
@@ -1523,7 +1523,7 @@ export default function EventDetailPage() {
         <IconWarning className="h-12 w-12 text-red-400/50" />
         <p className="text-sm text-slate-400">Event not found.</p>
         <Link
-          href="/community?tab=events"
+          href="/community/events"
           className="text-sm text-ocean-400 underline"
         >
           ← Back to events
@@ -1543,7 +1543,7 @@ export default function EventDetailPage() {
       <div className="mx-auto max-w-4xl px-4 sm:px-6">
         {/* Breadcrumb */}
         <Link
-          href="/community?tab=events"
+          href="/community/events"
           className="mb-4 inline-flex items-center gap-1 text-xs text-slate-500 transition hover:text-ocean-400"
         >
           ← Back to events

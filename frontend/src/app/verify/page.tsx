@@ -69,8 +69,8 @@ interface Submission {
   direction_of_travel?: string | null;
 }
 
-type SwipeDir = "left" | "right" | "up" | null;
-type VoteType = "agree" | "disagree" | "refine";
+type SwipeDir = "left" | "right" | "up" | "down" | null;
+type VoteType = "agree" | "disagree" | "refine" | "skip";
 
 /* ── Constants ───────────────────────────────────────────── */
 
@@ -401,7 +401,7 @@ function SwipeOverlay({
   dir,
   opacity,
 }: {
-  dir: "left" | "right" | "up";
+  dir: "left" | "right" | "up" | "down";
   opacity: number;
 }) {
   if (dir === "left") {
@@ -443,19 +443,53 @@ function SwipeOverlay({
     );
   }
   /* up */
+  if (dir === "up") {
+    return (
+      <div
+        className="absolute inset-0 rounded-2xl flex items-center justify-center pointer-events-none z-20"
+        style={{
+          background: `rgba(168,85,247,${opacity * 0.4})`,
+          opacity,
+        }}
+      >
+        <div className="bg-purple-500/90 rounded-full p-4 shadow-lg">
+          <IconInfo className="h-12 w-12 text-white" />
+        </div>
+        <span className="absolute bottom-8 text-purple-200 font-bold text-lg tracking-wide">
+          REFINE
+        </span>
+      </div>
+    );
+  }
+  /* down — skip / not sure */
   return (
     <div
       className="absolute inset-0 rounded-2xl flex items-center justify-center pointer-events-none z-20"
       style={{
-        background: `rgba(168,85,247,${opacity * 0.4})`,
+        background: `rgba(100,116,139,${opacity * 0.45})`,
         opacity,
       }}
     >
-      <div className="bg-purple-500/90 rounded-full p-4 shadow-lg">
-        <IconInfo className="h-12 w-12 text-white" />
+      <div className="bg-slate-500/90 rounded-full p-4 shadow-lg">
+        <svg
+          viewBox="0 0 24 24"
+          className="h-12 w-12 text-white"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+          />
+        </svg>
       </div>
-      <span className="absolute bottom-8 text-purple-200 font-bold text-lg tracking-wide">
-        REFINE
+      <span className="absolute top-8 text-slate-200 font-bold text-lg tracking-wide">
+        NOT SURE
+      </span>
+      <span className="absolute bottom-8 text-slate-400 font-medium text-sm tracking-wide">
+        Skip this one
       </span>
     </div>
   );
@@ -536,7 +570,9 @@ function SwipeCard({
             : null
         : drag.y < -30
           ? "up"
-          : null
+          : drag.y > 30
+            ? "down"
+            : null
       : demoY < 0 ? "up" : demoX > 0 ? "right" : demoX < 0 ? "left" : null);
 
   const overlayOpacity = flyDir
@@ -579,7 +615,7 @@ function SwipeCard({
     const horizontalSwipe =
       Math.abs(drag.x) > SWIPE_THRESHOLD || vx > SWIPE_VELOCITY;
     const verticalSwipe =
-      -drag.y > SWIPE_THRESHOLD || vy > SWIPE_VELOCITY;
+      Math.abs(drag.y) > SWIPE_THRESHOLD || vy > SWIPE_VELOCITY;
     const isHorizontal = Math.abs(drag.x) > Math.abs(drag.y) * 1.2;
 
     if (isHorizontal && horizontalSwipe) {
@@ -592,6 +628,9 @@ function SwipeCard({
     } else if (!isHorizontal && verticalSwipe && drag.y < 0) {
       setFlyDir("up");
       setShowRefine(true);
+    } else if (!isHorizontal && verticalSwipe && drag.y > 0) {
+      setFlyDir("down");
+      setTimeout(() => onVote("skip"), 300);
     } else {
       setDrag({ x: 0, y: 0, active: false });
     }
@@ -616,7 +655,7 @@ function SwipeCard({
   const flying = flyDir && !showRefine;
   const effectiveX = drag.active ? drag.x : demoX;
   const tx = flying ? (flyDir === "left" ? -FLY_DISTANCE : flyDir === "right" ? FLY_DISTANCE : 0) : effectiveX;
-  const ty = flying ? (flyDir === "up" ? -FLY_DISTANCE / 2 : 0) : (drag.active ? drag.y * 0.3 : demoY);
+  const ty = flying ? (flyDir === "up" ? -FLY_DISTANCE / 2 : flyDir === "down" ? FLY_DISTANCE / 2 : 0) : (drag.active ? drag.y * 0.3 : demoY);
   const rot = tx * 0.04;
 
   const species = submission.model_species ?? submission.species_guess;
@@ -1059,6 +1098,15 @@ function VoteToast({
       label: "Refinement submitted  +2 rep",
       cls: "bg-purple-600 text-white",
     },
+    skip: {
+      icon: (
+        <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2.5">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+        </svg>
+      ),
+      label: "Skipped — no opinion recorded",
+      cls: "bg-slate-600 text-white",
+    },
   };
   const c = config[vote];
   return (
@@ -1257,6 +1305,8 @@ function VerifyPageInner() {
       notes?: string,
     ) => {
       if (!token) return;
+      /* Skip / "not sure" is a no-opinion action — never recorded as a vote */
+      if (vote === "skip") return;
       try {
         await fetch(
           `${API_BASE}/api/v1/submissions/${submissionId}/vote`,
@@ -1313,6 +1363,7 @@ function VerifyPageInner() {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return;
       if (e.key === "ArrowLeft" || e.key === "a") handleVote("disagree");
       else if (e.key === "ArrowRight" || e.key === "d") handleVote("agree");
+      else if (e.key === "ArrowDown" || e.key === "s") handleVote("skip");
       else if (e.key === "ArrowUp" || e.key === "w" || e.key === "r") {
         /* Open the refine panel on the current card */
         const topCard = document.querySelector('[data-top-card]');
@@ -1356,7 +1407,7 @@ function VerifyPageInner() {
           </Link>
         </div>
         <p className="text-sm text-slate-500 mb-3">
-          Swipe right to agree, left to disagree, up to refine.
+          Swipe right to agree, left to disagree, up to refine, down to skip.
         </p>
         <StatsBar reviewed={reviewed} remaining={queue.length} />
 

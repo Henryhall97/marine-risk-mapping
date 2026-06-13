@@ -8,23 +8,26 @@ import Image from "next/image";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
-import type { MapSubmission } from "@/components/SubmissionMap";
+import { useCallback, useEffect, useRef, useState } from "react";
 import VesselManager from "@/components/VesselManager";
 import {
-  IconAnchor,
+  rarityOf,
+  speciesLabel,
+  silhouetteFor,
+  timeAgo,
+  basinOf,
+  tierMeta,
+} from "@/app/community/_field";
+import {
   IconCalendar,
   IconCamera,
   IconCheck,
   IconEye,
   IconMap,
-  IconMicroscope,
   IconRefresh,
   IconShield,
-  IconStar,
   IconThumbDown,
   IconThumbUp,
-  IconUser,
   IconUsers,
   IconWaves,
   IconWhale,
@@ -152,14 +155,6 @@ const RISK_COLOR: Record<string, string> = {
   low: "text-green-400",
 };
 
-const TIER_STYLE: Record<string, { color: string; icon: ReactNode }> = {
-  newcomer: { color: "text-slate-400", icon: <IconUser className="inline h-3.5 w-3.5" /> },
-  observer: { color: "text-ocean-400", icon: <IconEye className="inline h-3.5 w-3.5" /> },
-  contributor: { color: "text-green-400", icon: <IconStar className="inline h-3.5 w-3.5" /> },
-  expert: { color: "text-purple-400", icon: <IconMicroscope className="inline h-3.5 w-3.5" /> },
-  authority: { color: "text-yellow-400", icon: <IconAnchor className="inline h-3.5 w-3.5" /> },
-};
-
 const TIER_THRESHOLDS = [
   { name: "Newcomer", min: 0 },
   { name: "Observer", min: 50 },
@@ -195,7 +190,6 @@ export default function ProfilePage() {
   const [credFile, setCredFile] = useState<File | null>(null);
   const [credSubmitting, setCredSubmitting] = useState(false);
   const credFileRef = useRef<HTMLInputElement>(null);
-  const [showSubMap, setShowSubMap] = useState(false);
   const [subView, setSubView] = useState<SubView>("tiles");
   const [avatarUploading, setAvatarUploading] = useState(false);
   const avatarInputRef = useRef<HTMLInputElement>(null);
@@ -365,7 +359,7 @@ export default function ProfilePage() {
   }
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
-  const tier = TIER_STYLE[user.reputation_tier] ?? TIER_STYLE.newcomer;
+  const tm = tierMeta(user.reputation_tier);
   const nextTier = TIER_THRESHOLDS.find((t) => t.min > user.reputation_score);
   const currentTierThreshold =
     [...TIER_THRESHOLDS].reverse().find((t) => t.min <= user.reputation_score)
@@ -375,221 +369,301 @@ export default function ProfilePage() {
     ? user.reputation_score - currentTierThreshold
     : 1;
   const progressPct = Math.min(100, (progressVal / progressMax) * 100);
+  const verifiedCount = submissions.filter(
+    (s) =>
+      s.verification_status === "verified" ||
+      s.verification_status === "community_verified",
+  ).length;
+  const speciesCount = new Set(
+    submissions.map((s) => s.model_species ?? s.species_guess).filter(Boolean),
+  ).size;
+  const publicCount = submissions.filter((s) => s.is_public).length;
 
   return (
-    <div className="min-h-screen bg-abyss-950 px-4 pt-20 pb-12">
-      <div className="mx-auto max-w-5xl">
-        {/* Profile header + reputation */}
-        <div className="mb-6 grid gap-4 sm:grid-cols-3">
-          {/* User info */}
-          <div className="rounded-2xl border border-ocean-800 bg-abyss-900/80 p-6 sm:col-span-2">
-            <div className="flex items-start justify-between">
-              <div className="flex items-start gap-4">
-                {/* Avatar with upload overlay */}
-                <button
-                  type="button"
-                  onClick={() => avatarInputRef.current?.click()}
-                  className="group relative shrink-0"
-                  disabled={avatarUploading}
-                  title="Change avatar"
-                >
+    <div className="relative min-h-screen bg-abyss-950 px-4 pt-20 pb-16">
+      {/* Ambient tier-tinted backdrop */}
+      <div
+        aria-hidden
+        className="pointer-events-none fixed inset-0 opacity-[0.07]"
+        style={{
+          background: `radial-gradient(60rem 40rem at 80% -10%, ${tm.pennant}, transparent 70%)`,
+        }}
+      />
+      <div className="relative mx-auto max-w-5xl">
+        {/* ── MASTHEAD ─────────────────────────────────── */}
+        <div className="flex items-center justify-between">
+          <p className="font-mono text-[10px] uppercase tracking-[0.3em] text-slate-500">
+            Field Station / Personal Logbook
+          </p>
+          <button
+            onClick={() => {
+              logout();
+              router.push("/");
+            }}
+            className="font-mono text-[10px] uppercase tracking-[0.2em] text-slate-500 transition-colors hover:text-red-400"
+          >
+            Sign out →
+          </button>
+        </div>
+        <div className="mt-3 border-t border-white/[0.08]" />
+
+        <div className="mt-6 grid gap-8 sm:grid-cols-[1fr_auto] sm:items-start">
+          {/* Identity block */}
+          <div className="flex items-start gap-5">
+            {/* Avatar in tier ring with pennant badge + upload overlay */}
+            <button
+              type="button"
+              onClick={() => avatarInputRef.current?.click()}
+              className="group relative shrink-0"
+              disabled={avatarUploading}
+              title="Change avatar"
+            >
+              <span
+                className="block rounded-full p-[2px]"
+                style={{ background: tm.pennant }}
+              >
+                <span className="block rounded-full bg-abyss-950 p-[2px]">
                   <UserAvatar
                     avatarUrl={user.avatar_url}
                     displayName={user.display_name}
-                    size={64}
+                    size={76}
                   />
-                  <div className="absolute inset-0 flex items-center justify-center rounded-full bg-black/50 opacity-0 transition-opacity group-hover:opacity-100">
-                    {avatarUploading ? (
-                      <span className="text-xs text-white">…</span>
-                    ) : (
-                      <IconCamera className="h-4 w-4 text-white" />
-                    )}
-                  </div>
-                  <input
-                    ref={avatarInputRef}
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp"
-                    className="hidden"
-                    onChange={handleAvatarChange}
-                  />
-                </button>
+                </span>
+              </span>
+              {/* Pennant tier badge */}
+              <span
+                className="absolute -bottom-1 -right-1 flex h-7 w-7 items-center justify-center rounded-full ring-2 ring-abyss-950"
+                style={{ background: tm.pennant, color: "#0b1622" }}
+              >
+                {tm.icon}
+              </span>
+              {/* Upload overlay */}
+              <div className="absolute inset-0 flex items-center justify-center rounded-full bg-black/55 opacity-0 transition-opacity group-hover:opacity-100">
+                {avatarUploading ? (
+                  <span className="text-xs text-white">…</span>
+                ) : (
+                  <IconCamera className="h-4 w-4 text-white" />
+                )}
+              </div>
+              <input
+                ref={avatarInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                className="hidden"
+                onChange={handleAvatarChange}
+              />
+            </button>
 
-                <div>
-                  <div className="flex items-center gap-3">
-                    <h1 className="text-2xl font-bold text-white">
-                      {user.display_name}
-                    </h1>
-                    {user.is_moderator && (
-                      <span
-                        className="inline-flex items-center gap-1 rounded-full border border-amber-700/60 bg-amber-900/30 px-2.5 py-0.5 text-xs font-semibold text-amber-300"
-                        title="Platform Moderator"
-                      >
-                        <IconShield className="h-3.5 w-3.5" /> Moderator
-                      </span>
-                    )}
-                    <span
-                      className={`rounded-full border border-ocean-800 px-2.5 py-0.5 text-xs font-medium ${tier.color}`}
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-3">
+                <h1 className="font-display text-3xl font-black leading-none tracking-tight text-white">
+                  {user.display_name}
+                </h1>
+                {user.is_moderator && (
+                  <span
+                    className="inline-flex items-center gap-1 rounded-full border border-amber-700/60 bg-amber-900/30 px-2.5 py-0.5 text-[11px] font-semibold text-amber-300"
+                    title="Platform Moderator"
+                  >
+                    <IconShield className="h-3.5 w-3.5" /> Moderator
+                  </span>
+                )}
+              </div>
+              <div className="mt-1.5 flex items-center gap-2">
+                <span
+                  className="inline-flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-[0.18em]"
+                  style={{ color: tm.pennant }}
+                >
+                  {tm.icon} {tm.label}
+                </span>
+                <span className="text-slate-700">·</span>
+                <span className="text-xs text-slate-500">{user.email}</span>
+              </div>
+              <p className="mt-1 font-mono text-[11px] uppercase tracking-[0.12em] text-slate-600">
+                Logging since{" "}
+                {new Date(user.created_at).toLocaleDateString("en-US", {
+                  month: "long",
+                  year: "numeric",
+                })}{" "}
+                · {total} entr{total !== 1 ? "ies" : "y"}
+              </p>
+
+              {/* Bio — margin note style */}
+              {editingBio ? (
+                <div className="mt-4 flex flex-col gap-2">
+                  <textarea
+                    value={bioText}
+                    onChange={(e) => setBioText(e.target.value)}
+                    maxLength={500}
+                    rows={3}
+                    placeholder="Tell the community about yourself…"
+                    className="w-full rounded-lg border border-white/[0.1] bg-abyss-900 px-3 py-2 text-sm text-white placeholder-slate-600 focus:border-ocean-500 focus:outline-none"
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={saveBio}
+                      disabled={bioSaving}
+                      className="rounded-lg bg-ocean-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-ocean-500 disabled:opacity-50"
                     >
-                      {tier.icon} {user.reputation_tier}
+                      {bioSaving ? "Saving…" : "Save"}
+                    </button>
+                    <button
+                      onClick={() => {
+                        setEditingBio(false);
+                        setBioText(user.bio ?? "");
+                      }}
+                      className="rounded-lg px-3 py-1.5 text-xs text-slate-400 hover:text-white"
+                    >
+                      Cancel
+                    </button>
+                    <span className="ml-auto text-[11px] text-slate-600">
+                      {bioText.length}/500
                     </span>
                   </div>
-                  <p className="mt-1 text-sm text-slate-400">{user.email}</p>
-                  <p className="mt-2 text-sm text-slate-500">
-                    Joined {new Date(user.created_at).toLocaleDateString()} ·{" "}
-                    {total} submission{total !== 1 ? "s" : ""}
-                  </p>
-
-                  {/* Bio */}
-                  {editingBio ? (
-                    <div className="mt-3 flex flex-col gap-2">
-                      <textarea
-                        value={bioText}
-                        onChange={(e) => setBioText(e.target.value)}
-                        maxLength={500}
-                        rows={3}
-                        placeholder="Tell the community about yourself…"
-                        className="w-full rounded-lg border border-ocean-800 bg-abyss-800 px-3 py-2 text-sm text-white placeholder-slate-600 focus:border-ocean-500 focus:outline-none"
-                      />
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={saveBio}
-                          disabled={bioSaving}
-                          className="rounded-lg bg-ocean-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-ocean-500 disabled:opacity-50"
-                        >
-                          {bioSaving ? "Saving…" : "Save"}
-                        </button>
-                        <button
-                          onClick={() => {
-                            setEditingBio(false);
-                            setBioText(user.bio ?? "");
-                          }}
-                          className="rounded-lg px-3 py-1.5 text-xs text-slate-400 hover:text-white"
-                        >
-                          Cancel
-                        </button>
-                        <span className="ml-auto text-[11px] text-slate-600">
-                          {bioText.length}/500
-                        </span>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="mt-3 group/bio">
-                      {user.bio ? (
-                        <p className="text-sm leading-relaxed text-slate-300">
-                          {user.bio}
-                        </p>
-                      ) : (
-                        <p className="text-sm italic text-slate-600">
-                          No bio yet
-                        </p>
-                      )}
-                      <button
-                        onClick={() => {
-                          setBioText(user.bio ?? "");
-                          setEditingBio(true);
-                        }}
-                        className="mt-1 text-xs text-ocean-400 opacity-0 transition-opacity hover:underline group-hover/bio:opacity-100"
-                      >
-                        {user.bio ? "Edit bio" : "Add a bio"}
-                      </button>
-                    </div>
-                  )}
                 </div>
-              </div>
-              <button
-                onClick={() => {
-                  logout();
-                  router.push("/");
-                }}
-                className="rounded-lg border border-ocean-800 px-4 py-2 text-sm text-slate-400 transition-colors hover:border-red-700 hover:text-red-400"
-              >
-                Sign Out
-              </button>
-            </div>
-
-            {/* Credentials */}
-            {user.credentials.length > 0 && (
-              <div className="mt-4 flex flex-wrap gap-2">
-                {user.credentials.map((c: Credential) => (
-                  <span
-                    key={c.id}
-                    className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ${
-                      c.is_verified
-                        ? "border border-green-800 bg-green-900/30 text-green-300"
-                        : "border border-ocean-800 bg-abyss-800 text-slate-400"
-                    }`}
-                    title={c.description}
+              ) : (
+                <div className="group/bio mt-4 max-w-prose">
+                  {user.bio ? (
+                    <p
+                      className="border-l-2 pl-3 text-sm italic leading-relaxed text-slate-300"
+                      style={{ borderColor: `${tm.pennant}66` }}
+                    >
+                      {user.bio}
+                    </p>
+                  ) : (
+                    <p className="text-sm italic text-slate-600">
+                      No field notes yet
+                    </p>
+                  )}
+                  <button
+                    onClick={() => {
+                      setBioText(user.bio ?? "");
+                      setEditingBio(true);
+                    }}
+                    className="mt-1.5 font-mono text-[10px] uppercase tracking-[0.15em] text-ocean-400 opacity-0 transition-opacity hover:underline group-hover/bio:opacity-100"
                   >
-                    {c.is_verified ? <IconCheck className="inline h-3.5 w-3.5" /> : <IconRefresh className="inline h-3.5 w-3.5" />}
-                    {CREDENTIAL_LABELS[c.credential_type] ?? c.credential_type}
-                    {c.evidence_url && (
-                      <a
-                        href={`${API_BASE}${c.evidence_url}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="ml-0.5 text-ocean-400 hover:text-ocean-300"
-                        title="View evidence"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <svg className="inline h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                        </svg>
-                      </a>
-                    )}
-                  </span>
-                ))}
-              </div>
-            )}
+                    {user.bio ? "Edit notes" : "Add notes"}
+                  </button>
+                </div>
+              )}
+
+              {/* Credentials */}
+              {user.credentials.length > 0 && (
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {user.credentials.map((c: Credential) => (
+                    <span
+                      key={c.id}
+                      className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium ${
+                        c.is_verified
+                          ? "border border-green-800 bg-green-900/30 text-green-300"
+                          : "border border-white/[0.1] bg-abyss-900 text-slate-400"
+                      }`}
+                      title={c.description}
+                    >
+                      {c.is_verified ? (
+                        <IconCheck className="inline h-3.5 w-3.5" />
+                      ) : (
+                        <IconRefresh className="inline h-3.5 w-3.5" />
+                      )}
+                      {CREDENTIAL_LABELS[c.credential_type] ?? c.credential_type}
+                      {c.evidence_url && (
+                        <a
+                          href={`${API_BASE}${c.evidence_url}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="ml-0.5 text-ocean-400 hover:text-ocean-300"
+                          title="View evidence"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <svg
+                            className="inline h-3 w-3"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={2}
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"
+                            />
+                          </svg>
+                        </a>
+                      )}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
-          {/* Reputation card */}
-          <div className="rounded-2xl border border-ocean-800 bg-abyss-900/80 p-6">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-              Reputation Score
-            </h3>
-            <div className={`mt-2 text-3xl font-bold ${tier.color}`}>
+          {/* Reputation aside — oversized numeral + rail */}
+          <div className="sm:w-56 sm:border-l sm:border-white/[0.08] sm:pl-6">
+            <p className="font-mono text-[10px] uppercase tracking-[0.25em] text-slate-500">
+              Reputation
+            </p>
+            <div
+              className="mt-1 font-display text-6xl font-black leading-none tabular-nums"
+              style={{ color: tm.pennant }}
+            >
               {user.reputation_score}
             </div>
 
-            {/* Progress bar to next tier */}
-            {nextTier && (
-              <div className="mt-3">
-                <div className="mb-1 flex justify-between text-xs text-slate-500">
-                  <span>{user.reputation_tier}</span>
-                  <span>{nextTier.name}</span>
-                </div>
-                <div className="h-2 overflow-hidden rounded-full bg-abyss-800">
+            {nextTier ? (
+              <div className="mt-4">
+                <div className="h-1 overflow-hidden rounded-full bg-white/[0.07]">
                   <div
-                    className="h-full rounded-full bg-ocean-500 transition-all"
-                    style={{ width: `${progressPct}%` }}
+                    className="h-full rounded-full transition-all"
+                    style={{
+                      width: `${progressPct}%`,
+                      background: tm.pennant,
+                    }}
                   />
                 </div>
-                <p className="mt-1 text-xs text-slate-600">
-                  {nextTier.min - user.reputation_score} points to{" "}
-                  {nextTier.name}
+                <p className="mt-2 font-mono text-[10px] uppercase tracking-[0.12em] text-slate-500">
+                  {nextTier.min - user.reputation_score} pts to {nextTier.name}
                 </p>
               </div>
+            ) : (
+              <p className="mt-4 font-mono text-[10px] uppercase tracking-[0.12em] text-amber-300/80">
+                Top rank reached
+              </p>
             )}
 
             {/* Quick actions */}
-            <div className="mt-4 flex flex-col gap-2">
+            <div className="mt-4 flex flex-col gap-1.5">
               <button
                 onClick={() => {
                   setShowHistory(!showHistory);
                   if (!showHistory) fetchRepHistory();
                 }}
-                className="text-left text-xs text-ocean-400 hover:underline"
+                className="text-left font-mono text-[10px] uppercase tracking-[0.12em] text-ocean-400 hover:underline"
               >
-                {showHistory ? "Hide" : "View"} reputation history
+                {showHistory ? "Hide" : "View"} history
               </button>
               <button
                 onClick={() => setShowCredForm(!showCredForm)}
-                className="text-left text-xs text-ocean-400 hover:underline"
+                className="text-left font-mono text-[10px] uppercase tracking-[0.12em] text-ocean-400 hover:underline"
               >
                 {showCredForm ? "Cancel" : "+ Add credential"}
               </button>
             </div>
           </div>
+        </div>
+
+        {/* ── STAT RIBBON ──────────────────────────────── */}
+        <div className="mt-8 grid grid-cols-2 gap-y-6 border-y border-white/[0.07] py-5 sm:grid-cols-4">
+          <DossierStat value={String(total)} label="Interactions" />
+          <DossierStat
+            value={String(verifiedCount)}
+            label="Verified"
+            accent="text-emerald-400"
+          />
+          <DossierStat
+            value={String(speciesCount)}
+            label="Species"
+            accent="text-ocean-300"
+          />
+          <DossierStat value={String(publicCount)} label="Public" />
         </div>
 
         {/* Reputation history (expandable) */}
@@ -738,34 +812,6 @@ export default function ProfilePage() {
           </details>
         </div>
 
-        {/* Quick stats row */}
-        {submissions.length > 0 && (
-          <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <div className="rounded-xl border border-ocean-800 bg-abyss-900/60 p-3 text-center">
-              <div className="text-xl font-bold text-white">{total}</div>
-              <div className="text-xs text-slate-500">Total</div>
-            </div>
-            <div className="rounded-xl border border-ocean-800 bg-abyss-900/60 p-3 text-center">
-              <div className="text-xl font-bold text-green-400">
-                {submissions.filter((s) => s.verification_status === "verified" || s.verification_status === "community_verified").length}
-              </div>
-              <div className="text-xs text-slate-500">Verified</div>
-            </div>
-            <div className="rounded-xl border border-ocean-800 bg-abyss-900/60 p-3 text-center">
-              <div className="text-xl font-bold text-ocean-400">
-                {new Set(submissions.map((s) => s.model_species ?? s.species_guess).filter(Boolean)).size}
-              </div>
-              <div className="text-xs text-slate-500">Species</div>
-            </div>
-            <div className="rounded-xl border border-ocean-800 bg-abyss-900/60 p-3 text-center">
-              <div className="text-xl font-bold text-white">
-                {submissions.filter((s) => s.is_public).length}
-              </div>
-              <div className="text-xs text-slate-500">Public</div>
-            </div>
-          </div>
-        )}
-
         {/* ── Verification nudge ──────────────────────── */}
         <Link
           href="/community"
@@ -801,7 +847,7 @@ export default function ProfilePage() {
                 Upcoming Events
               </h2>
               <Link
-                href="/community?tab=events"
+                href="/community/events"
                 className="text-xs text-ocean-400 hover:underline"
               >
                 Browse all →
@@ -893,11 +939,16 @@ export default function ProfilePage() {
         )}
 
         {/* Submissions list header */}
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-white">
-            Your Submissions
-          </h2>
-          <div className="flex gap-1 rounded-lg border border-ocean-800 bg-abyss-900 p-1">
+        <div className="mb-5 mt-12 flex items-end justify-between border-b border-white/[0.07] pb-3">
+          <div>
+            <h2 className="font-mono text-[10px] uppercase tracking-[0.3em] text-slate-500">
+              The Logbook
+            </h2>
+            <p className="mt-1 font-display text-xl font-bold text-white">
+              Your interactions
+            </p>
+          </div>
+          <div className="flex gap-1 rounded-lg border border-white/[0.08] bg-abyss-900 p-1">
             {([
               { key: "tiles" as SubView, label: "▦ Tiles" },
               { key: "list" as SubView, label: "☰ List" },
@@ -909,7 +960,6 @@ export default function ProfilePage() {
                 key={v.key}
                 onClick={() => {
                   setSubView(v.key);
-                  setShowSubMap(v.key === "map");
                 }}
                 className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
                   subView === v.key ? "bg-ocean-600 text-white" : "text-slate-400 hover:text-white"
@@ -924,7 +974,7 @@ export default function ProfilePage() {
 
         {/* Submissions map */}
         {subView === "map" && (
-          <div className="mb-6 h-[380px] overflow-hidden rounded-xl border border-ocean-800">
+          <div className="mb-6 h-[380px] overflow-hidden rounded-xl border border-white/[0.08]">
             <SubmissionMap
               data={submissions
                 .filter((s): s is typeof s & { lat: number; lon: number } =>
@@ -950,8 +1000,10 @@ export default function ProfilePage() {
             Loading submissions…
           </div>
         ) : submissions.length === 0 ? (
-          <div className="rounded-xl border border-ocean-800 bg-abyss-900/60 py-16 text-center">
-            <p className="text-slate-400">No submissions yet.</p>
+          <div className="rounded-xl border border-dashed border-white/[0.1] py-16 text-center">
+            <p className="font-mono text-xs uppercase tracking-[0.2em] text-slate-500">
+              Logbook empty — no entries yet
+            </p>
             <Link
               href="/report"
               className="mt-3 inline-block text-sm text-ocean-400 hover:underline"
@@ -970,85 +1022,130 @@ export default function ProfilePage() {
               </div>
             )}
 
-            {/* List view */}
+            {/* List view — logbook entries */}
             {subView === "list" && (
-              <div className="space-y-3">
-                {submissions.map((s) => (
-                  <div
-                    key={s.id}
-                    className="flex items-center justify-between rounded-xl border border-ocean-800 bg-abyss-900/70 px-5 py-4 transition-colors hover:border-ocean-700/60"
-                  >
-                    <Link href={`/submissions/${s.id}`} className="flex-1">
-                      <div className="flex items-center gap-3">
-                        <span className="text-sm font-medium text-white">
-                          {s.model_species?.replace(/_/g, " ") ??
-                            s.species_guess ??
-                            "Unknown"}
-                        </span>
-                        {s.risk_category && (
-                          <span
-                            className={`text-xs font-medium ${RISK_COLOR[s.risk_category] ?? "text-slate-400"}`}
-                          >
-                            {s.risk_category}
-                          </span>
-                        )}
-                        {(() => {
-                          const st = STATUS_STYLE[s.verification_status] ?? STATUS_STYLE.unverified;
-                          return (
-                            <span
-                              className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${st.bg} ${st.text}`}
-                            >
-                              <span className={`h-1.5 w-1.5 rounded-full ${st.dot}`} />
-                              {s.moderator_status ? <><IconShield className="inline h-3.5 w-3.5" />{" "}</> : null}
-                              {STATUS_LABELS[s.verification_status] ?? s.verification_status}
-                            </span>
-                          );
-                        })()}
-                        {(s.community_agree > 0 || s.community_disagree > 0) && (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-abyss-800/60 px-2 py-0.5 text-[11px] text-slate-400">
-                            <span className="inline-flex items-center gap-0.5 text-green-400"><IconThumbUp className="h-3.5 w-3.5" />{s.community_agree}</span>
-                            <span className="inline-flex items-center gap-0.5 text-red-400"><IconThumbDown className="h-3.5 w-3.5" />{s.community_disagree}</span>
-                          </span>
-                        )}
-                      </div>
-                      <div className="mt-1 flex gap-4 text-xs text-slate-500">
-                        <span>
-                          {new Date(s.created_at).toLocaleDateString()}
-                        </span>
-                        {s.lat != null && s.lon != null && (
-                          <span>
-                            {s.lat.toFixed(2)}°, {s.lon.toFixed(2)}°
-                          </span>
-                        )}
-                        {s.model_source && <span>via {s.model_source}</span>}
-                        {s.model_confidence != null && (
-                          <span>
-                            {(s.model_confidence * 100).toFixed(0)}% conf
-                          </span>
-                        )}
-                      </div>
-                    </Link>
-
-                    <button
-                      onClick={(e) => {
-                        e.preventDefault();
-                        togglePublic(s.id, s.is_public);
-                      }}
-                      className={`ml-4 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
-                        s.is_public
-                          ? "border border-green-800 text-green-400 hover:bg-green-900/30"
-                          : "border border-ocean-800 text-slate-400 hover:bg-abyss-800"
-                      }`}
-                      title={
-                        s.is_public
-                          ? "Click to make private"
-                          : "Click to make public for verification"
-                      }
+              <div className="divide-y divide-white/[0.06] overflow-hidden rounded-xl border border-white/[0.07] bg-abyss-900/40">
+                {submissions.map((s) => {
+                  const sp = s.model_species ?? s.species_guess;
+                  const r = rarityOf(sp);
+                  const sil = silhouetteFor(sp);
+                  const st =
+                    STATUS_STYLE[s.verification_status] ??
+                    STATUS_STYLE.unverified;
+                  return (
+                    <div
+                      key={s.id}
+                      className="group relative flex items-center gap-4 px-4 py-3.5 transition-colors hover:bg-white/[0.025] sm:px-5"
                     >
-                      {s.is_public ? "Public ✓" : "Private"}
-                    </button>
-                  </div>
-                ))}
+                      {/* Rarity rule */}
+                      <span
+                        className="absolute inset-y-0 left-0 w-[3px]"
+                        style={{ background: r.hex }}
+                      />
+                      {/* Silhouette */}
+                      <Link
+                        href={`/submissions/${s.id}`}
+                        className="flex h-10 w-10 shrink-0 items-center justify-center"
+                      >
+                        {sil ? (
+                          <Image
+                            src={sil}
+                            alt={speciesLabel(sp)}
+                            width={40}
+                            height={40}
+                            className="h-10 w-10 object-contain opacity-90"
+                            style={{ filter: r.tint }}
+                          />
+                        ) : (
+                          <span
+                            className="h-2.5 w-2.5 rounded-full"
+                            style={{ background: r.hex }}
+                          />
+                        )}
+                      </Link>
+
+                      <Link
+                        href={`/submissions/${s.id}`}
+                        className="min-w-0 flex-1"
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-semibold text-white">
+                            {speciesLabel(sp)}
+                          </span>
+                          <span
+                            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${st.bg} ${st.text}`}
+                          >
+                            <span
+                              className={`h-1.5 w-1.5 rounded-full ${st.dot}`}
+                            />
+                            {s.moderator_status ? (
+                              <IconShield className="inline h-3 w-3" />
+                            ) : null}
+                            {STATUS_LABELS[s.verification_status] ??
+                              s.verification_status}
+                          </span>
+                          {(s.community_agree > 0 ||
+                            s.community_disagree > 0) && (
+                            <span className="inline-flex items-center gap-1.5 text-[11px] text-slate-500">
+                              <span className="inline-flex items-center gap-0.5 text-green-400">
+                                <IconThumbUp className="h-3 w-3" />
+                                {s.community_agree}
+                              </span>
+                              <span className="inline-flex items-center gap-0.5 text-red-400">
+                                <IconThumbDown className="h-3 w-3" />
+                                {s.community_disagree}
+                              </span>
+                            </span>
+                          )}
+                        </div>
+                        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 font-mono text-[11px] text-slate-500">
+                          <span>{timeAgo(s.created_at)}</span>
+                          {s.lat != null && s.lon != null && (
+                            <span className="text-slate-400">
+                              {basinOf(s.lat, s.lon)}
+                            </span>
+                          )}
+                          {s.interaction_type && (
+                            <span className="capitalize">
+                              {s.interaction_type.replace(/_/g, " ")}
+                            </span>
+                          )}
+                          {s.model_confidence != null && (
+                            <span>
+                              {(s.model_confidence * 100).toFixed(0)}% conf
+                            </span>
+                          )}
+                          {s.risk_category && (
+                            <span
+                              className={`font-semibold uppercase ${RISK_COLOR[s.risk_category] ?? "text-slate-400"}`}
+                            >
+                              {s.risk_category} risk
+                            </span>
+                          )}
+                        </div>
+                      </Link>
+
+                      <button
+                        onClick={(e) => {
+                          e.preventDefault();
+                          togglePublic(s.id, s.is_public);
+                        }}
+                        className={`shrink-0 rounded-full px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.1em] transition-colors ${
+                          s.is_public
+                            ? "bg-green-900/30 text-green-400 hover:bg-green-900/50"
+                            : "bg-abyss-800 text-slate-500 hover:text-white"
+                        }`}
+                        title={
+                          s.is_public
+                            ? "Click to make private"
+                            : "Click to make public for verification"
+                        }
+                      >
+                        {s.is_public ? "Public" : "Private"}
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             )}
 
@@ -1075,6 +1172,31 @@ export default function ProfilePage() {
             )}
           </>
         ))}
+      </div>
+    </div>
+  );
+}
+
+/* ── Helpers ──────────────────────────────────────────── */
+
+function DossierStat({
+  label,
+  value,
+  accent,
+}: {
+  label: string;
+  value: string;
+  accent?: string;
+}) {
+  return (
+    <div>
+      <div
+        className={`font-display text-4xl font-black leading-none tabular-nums ${accent ?? "text-white"}`}
+      >
+        {value}
+      </div>
+      <div className="mt-2 font-mono text-[10px] uppercase tracking-[0.15em] text-slate-500">
+        {label}
       </div>
     </div>
   );

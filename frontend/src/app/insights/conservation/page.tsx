@@ -13,6 +13,17 @@ import {
   IconPin,
   IconGlobe,
 } from "@/components/icons/MarineIcons";
+import {
+  useProjectionData,
+  BASELINE_NOTE,
+  PROJ_SCENARIOS_LONG,
+  PROJ_DECADES,
+  type ProjScenario,
+  type ProjDecade,
+} from "@/hooks/useProjectionData";
+import GlossaryBox, { GLOSSARY } from "@/components/GlossaryBox";
+import InsightMiniMap from "@/components/InsightMiniMap";
+import { describeRegions } from "@/lib/regions";
 
 /* ── Types ──────────────────────────────────────────────── */
 
@@ -42,15 +53,8 @@ interface MacroCell {
 }
 
 type Season = "annual" | "winter" | "spring" | "summer" | "fall";
-type Scenario = "ssp245" | "ssp585";
-type Decade = "2030s" | "2040s" | "2060s" | "2080s";
 
 const SEASONS: Season[] = ["annual", "winter", "spring", "summer", "fall"];
-const SCENARIOS: { value: Scenario; label: string }[] = [
-  { value: "ssp245", label: "SSP2-4.5 (moderate)" },
-  { value: "ssp585", label: "SSP5-8.5 (high emissions)" },
-];
-const DECADES: Decade[] = ["2030s", "2040s", "2060s", "2080s"];
 
 /* ── Helpers ────────────────────────────────────────────── */
 
@@ -154,11 +158,17 @@ export default function ConservationPage() {
   const [cells, setCells] = useState<MacroCell[]>([]);
   const [loading, setLoading] = useState(true);
 
-  /* Projection state */
-  const [projScenario, setProjScenario] = useState<Scenario>("ssp585");
-  const [projDecade, setProjDecade] = useState<Decade>("2060s");
-  const [projCells, setProjCells] = useState<MacroCell[]>([]);
-  const [projLoading, setProjLoading] = useState(false);
+  /* Projection state — season-consistent baseline via shared hook. */
+  const [projScenario, setProjScenario] = useState<ProjScenario>("ssp585");
+  const [projDecade, setProjDecade] = useState<ProjDecade>("2060s");
+  const {
+    projCells: projCellsRaw,
+    baseCells: baseCellsRaw,
+    loading: projLoading,
+    error: projError,
+  } = useProjectionData(season, projScenario, projDecade);
+  const projCells = projCellsRaw as unknown as MacroCell[];
+  const baseCells = baseCellsRaw as unknown as MacroCell[];
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -175,29 +185,9 @@ export default function ConservationPage() {
     }
   }, [season]);
 
-  const fetchProjected = useCallback(async () => {
-    const projSeason = season === "annual" ? "winter" : season;
-    setProjLoading(true);
-    try {
-      const res = await fetch(
-        `${API_BASE}/api/v1/macro/overview?season=${projSeason}&scenario=${projScenario}&decade=${projDecade}`,
-      );
-      if (res.ok) {
-        const d = await res.json();
-        setProjCells(d.data ?? []);
-      }
-    } finally {
-      setProjLoading(false);
-    }
-  }, [season, projScenario, projDecade]);
-
   useEffect(() => {
     fetchData();
   }, [fetchData]);
-
-  useEffect(() => {
-    fetchProjected();
-  }, [fetchProjected]);
 
   /* Derived analytics */
   const total = cells.length;
@@ -367,6 +357,42 @@ export default function ConservationPage() {
           </div>
         ) : (
           <>
+            {/* How to read this page */}
+            <GlossaryBox
+              terms={[
+                GLOSSARY.cell,
+                GLOSSARY.whaleProb,
+                GLOSSARY.protectionGap,
+                GLOSSARY.riskScore,
+              ]}
+            />
+
+            {/* Headline takeaway */}
+            <div className="mb-8 rounded-2xl border border-emerald-700/40 bg-gradient-to-br from-emerald-950/30 to-abyss-900/40 p-6">
+              <p className="text-[11px] font-semibold uppercase tracking-widest text-emerald-400">
+                The conservation picture — {season}
+              </p>
+              <p className="mt-2 text-lg font-semibold leading-snug text-slate-100">
+                {threatOverlap.length.toLocaleString()} cells are{" "}
+                <span className="text-red-400">whale–ship overlap zones</span>, and{" "}
+                {unprotectedCritical.length.toLocaleString()} of the most important
+                habitat cells have <span className="text-amber-300">no protection</span>.
+              </p>
+              <p className="mt-1.5 text-sm text-slate-400">
+                {threatOverlap.length > 0 ? (
+                  <>
+                    The overlap is heaviest in{" "}
+                    <span className="font-medium text-emerald-300">
+                      {describeRegions(threatOverlap, 3)}
+                    </span>
+                    — where slowing ships would protect the most whales.
+                  </>
+                ) : (
+                  "No significant whale–ship overlap in this season's view."
+                )}
+              </p>
+            </div>
+
             {/* Summary stats */}
             <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <StatCard
@@ -408,6 +434,72 @@ export default function ConservationPage() {
                 {speciesList.map((sp) => (
                   <SpeciesCard key={sp.name} sp={sp} />
                 ))}
+              </div>
+            </div>
+
+            {/* Where the whale–ship overlap is */}
+            <div className="mb-8 grid gap-6 lg:grid-cols-2">
+              <div className="rounded-2xl border border-ocean-800/30 bg-abyss-900/50 p-6">
+                <h2 className="mb-1 text-sm font-semibold uppercase tracking-widest text-slate-500">
+                  Whale–ship overlap zones
+                </h2>
+                <p className="mb-4 text-xs text-slate-500">
+                  {threatOverlap.length.toLocaleString()} cells with both whale
+                  activity and vessel traffic
+                  {threatOverlap.length > 0 && (
+                    <> — heaviest in {describeRegions(threatOverlap, 3)}</>
+                  )}
+                  .
+                </p>
+                <InsightMiniMap
+                  cells={threatOverlap.map((c) => ({
+                    cell_lat: c.cell_lat,
+                    cell_lon: c.cell_lon,
+                    value: Math.min((c.any_whale_prob ?? 0) + c.traffic_score, 1),
+                  }))}
+                  href={mapLink({
+                    ...centroid(threatOverlap),
+                    zoom: 6,
+                    layer: "risk",
+                    season,
+                    overlays: ["criticalHabitat", "bias", "mpas"],
+                  })}
+                  emptyLabel="No whale–ship overlap cells this season."
+                />
+              </div>
+              <div className="rounded-2xl border border-ocean-800/30 bg-abyss-900/50 p-6">
+                <h2 className="mb-1 text-sm font-semibold uppercase tracking-widest text-slate-500">
+                  Unprotected critical habitat
+                </h2>
+                <p className="mb-4 text-xs text-slate-500">
+                  {unprotectedCritical.length.toLocaleString()} important habitat
+                  cells with weak protection
+                  {unprotectedCritical.length > 0 && (
+                    <> — mostly {describeRegions(unprotectedCritical, 3)}</>
+                  )}
+                  .
+                </p>
+                <InsightMiniMap
+                  cells={unprotectedCritical.map((c) => ({
+                    cell_lat: c.cell_lat,
+                    cell_lon: c.cell_lon,
+                    value: c.any_whale_prob ?? 0,
+                  }))}
+                  colorStops={[
+                    [0, "#1e3a8a"],
+                    [0.4, "#3b82f6"],
+                    [0.7, "#22d3ee"],
+                    [1, "#a5f3fc"],
+                  ]}
+                  href={mapLink({
+                    ...centroid(unprotectedCritical),
+                    zoom: 6,
+                    layer: "whale_predictions",
+                    season,
+                    overlays: ["criticalHabitat", "mpas"],
+                  })}
+                  emptyLabel="No unprotected habitat cells this season."
+                />
               </div>
             </div>
 
@@ -521,13 +613,16 @@ export default function ConservationPage() {
                 as ocean temperatures rise. Warming waters may push species poleward,
                 creating new threat overlaps in areas that are currently low-risk.
               </p>
+              <p className="mb-4 rounded-lg border border-cyan-900/30 bg-abyss-900/40 px-3 py-2 text-[10px] leading-relaxed text-slate-500">
+                {BASELINE_NOTE}
+              </p>
 
               {/* Scenario / decade selector */}
               <div className="mb-5 flex flex-wrap items-center gap-3">
                 <div className="flex items-center gap-1.5">
                   <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Scenario</span>
                   <div className="flex gap-1 rounded-lg border border-ocean-800/30 bg-abyss-900/60 p-0.5">
-                    {SCENARIOS.map((s) => (
+                    {PROJ_SCENARIOS_LONG.map((s) => (
                       <button
                         key={s.value}
                         onClick={() => setProjScenario(s.value)}
@@ -545,7 +640,7 @@ export default function ConservationPage() {
                 <div className="flex items-center gap-1.5">
                   <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Decade</span>
                   <div className="flex gap-1 rounded-lg border border-ocean-800/30 bg-abyss-900/60 p-0.5">
-                    {DECADES.map((d) => (
+                    {PROJ_DECADES.map((d) => (
                       <button
                         key={d}
                         onClick={() => setProjDecade(d)}
@@ -566,11 +661,27 @@ export default function ConservationPage() {
                 <div className="flex h-24 items-center justify-center">
                   <span className="animate-pulse text-xs text-slate-500">Loading projections…</span>
                 </div>
+              ) : projError ? (
+                <p className="text-xs text-red-400/80">
+                  Could not load projection data ({projError}). The projection
+                  tables may still be initialising on the server.
+                </p>
               ) : projCells.length === 0 ? (
                 <p className="text-xs text-slate-600">No projection data available for this selection.</p>
               ) : (
                 <>
                   {(() => {
+                    /* Season-consistent baseline (same season as projection). */
+                    const baseCritHabitat = baseCells.filter(
+                      (c) => (c.any_whale_prob ?? 0) > 0.5 && (c.habitat_score ?? 0) > 0.3,
+                    );
+                    const baseOverlap = baseCells.filter(
+                      (c) => (c.any_whale_prob ?? 0) > 0.3 && c.traffic_score > 0.3,
+                    );
+                    const baseUnprotected = baseCells.filter(
+                      (c) => (c.any_whale_prob ?? 0) > 0.3 && (c.protection_gap ?? 0) >= 0.7,
+                    );
+
                     const projCritHabitat = projCells.filter(
                       (c) => (c.any_whale_prob ?? 0) > 0.5 && (c.habitat_score ?? 0) > 0.3,
                     );
@@ -581,9 +692,9 @@ export default function ConservationPage() {
                       (c) => (c.any_whale_prob ?? 0) > 0.3 && (c.protection_gap ?? 0) >= 0.7,
                     );
 
-                    const deltaHabitat = projCritHabitat.length - criticalHabitat.length;
-                    const deltaOverlap = projOverlap.length - threatOverlap.length;
-                    const deltaUnprot = projUnprotected.length - unprotectedCritical.length;
+                    const deltaHabitat = projCritHabitat.length - baseCritHabitat.length;
+                    const deltaOverlap = projOverlap.length - baseOverlap.length;
+                    const deltaUnprot = projUnprotected.length - baseUnprotected.length;
 
                     /* Per-species vulnerability shift */
                     const speciesShift = [
@@ -635,7 +746,7 @@ export default function ConservationPage() {
                         {/* Per-species vulnerability */}
                         <div className="grid gap-3 sm:grid-cols-5">
                           {speciesShift.map((sp) => {
-                            const curVals = cells.map((c) => c[sp.key] as number | null).filter((v): v is number => v != null && v > 0);
+                            const curVals = baseCells.map((c) => c[sp.key] as number | null).filter((v): v is number => v != null && v > 0);
                             const projVals = projCells.map((c) => c[sp.key] as number | null).filter((v): v is number => v != null && v > 0);
                             const curHigh = curVals.filter((v) => v > 0.3).length;
                             const projHigh = projVals.filter((v) => v > 0.3).length;

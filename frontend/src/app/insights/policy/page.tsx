@@ -14,6 +14,17 @@ import {
   IconGlobe,
   IconTrending,
 } from "@/components/icons/MarineIcons";
+import {
+  useProjectionData,
+  BASELINE_NOTE,
+  PROJ_SCENARIOS_LONG,
+  PROJ_DECADES,
+  type ProjScenario,
+  type ProjDecade,
+} from "@/hooks/useProjectionData";
+import GlossaryBox, { GLOSSARY } from "@/components/GlossaryBox";
+import InsightMiniMap from "@/components/InsightMiniMap";
+import { describeRegions } from "@/lib/regions";
 
 /* ── Types ──────────────────────────────────────────────── */
 
@@ -40,15 +51,8 @@ interface MacroCell {
 }
 
 type Season = "annual" | "winter" | "spring" | "summer" | "fall";
-type Scenario = "ssp245" | "ssp585";
-type Decade = "2030s" | "2040s" | "2060s" | "2080s";
 
 const SEASONS: Season[] = ["annual", "winter", "spring", "summer", "fall"];
-const SCENARIOS: { value: Scenario; label: string }[] = [
-  { value: "ssp245", label: "SSP2-4.5 (moderate)" },
-  { value: "ssp585", label: "SSP5-8.5 (high emissions)" },
-];
-const DECADES: Decade[] = ["2030s", "2040s", "2060s", "2080s"];
 
 /* ── Helpers ────────────────────────────────────────────── */
 
@@ -135,11 +139,17 @@ export default function PolicyPage() {
   const [cells, setCells] = useState<MacroCell[]>([]);
   const [loading, setLoading] = useState(true);
 
-  /* Projection state */
-  const [projScenario, setProjScenario] = useState<Scenario>("ssp585");
-  const [projDecade, setProjDecade] = useState<Decade>("2060s");
-  const [projCells, setProjCells] = useState<MacroCell[]>([]);
-  const [projLoading, setProjLoading] = useState(false);
+  /* Projection state — season-consistent baseline via shared hook. */
+  const [projScenario, setProjScenario] = useState<ProjScenario>("ssp585");
+  const [projDecade, setProjDecade] = useState<ProjDecade>("2060s");
+  const {
+    projCells: projCellsRaw,
+    baseCells: baseCellsRaw,
+    loading: projLoading,
+    error: projError,
+  } = useProjectionData(season, projScenario, projDecade);
+  const projCells = projCellsRaw as unknown as MacroCell[];
+  const baseCells = baseCellsRaw as unknown as MacroCell[];
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -156,29 +166,9 @@ export default function PolicyPage() {
     }
   }, [season]);
 
-  const fetchProjected = useCallback(async () => {
-    const projSeason = season === "annual" ? "winter" : season;
-    setProjLoading(true);
-    try {
-      const res = await fetch(
-        `${API_BASE}/api/v1/macro/overview?season=${projSeason}&scenario=${projScenario}&decade=${projDecade}`,
-      );
-      if (res.ok) {
-        const d = await res.json();
-        setProjCells(d.data ?? []);
-      }
-    } finally {
-      setProjLoading(false);
-    }
-  }, [season, projScenario, projDecade]);
-
   useEffect(() => {
     fetchData();
   }, [fetchData]);
-
-  useEffect(() => {
-    fetchProjected();
-  }, [fetchProjected]);
 
   /* Derived analytics */
   const total = cells.length;
@@ -294,6 +284,43 @@ export default function PolicyPage() {
           </div>
         ) : (
           <>
+            {/* How to read this page */}
+            <GlossaryBox
+              terms={[
+                GLOSSARY.cell,
+                GLOSSARY.riskScore,
+                GLOSSARY.protectionGap,
+                GLOSSARY.whaleProb,
+              ]}
+            />
+
+            {/* Headline takeaway — the page's story in one line */}
+            <div className="mb-8 rounded-2xl border border-amber-700/40 bg-gradient-to-br from-amber-950/30 to-abyss-900/40 p-6">
+              <p className="text-[11px] font-semibold uppercase tracking-widest text-amber-400">
+                The bottom line — {season}
+              </p>
+              <p className="mt-2 text-lg font-semibold leading-snug text-slate-100">
+                {regulatoryPriority.length.toLocaleString()} cells (~
+                {Math.round(regulatoryPriority.length * 4.7).toLocaleString()} km²)
+                are <span className="text-red-400">high-risk yet unprotected</span> —
+                the clearest candidates for new speed rules.
+              </p>
+              <p className="mt-1.5 text-sm text-slate-400">
+                {regulatoryPriority.length > 0 ? (
+                  <>
+                    They cluster in{" "}
+                    <span className="font-medium text-amber-300">
+                      {describeRegions(regulatoryPriority, 3)}
+                    </span>
+                    . A further {whaleNoSpeed.length.toLocaleString()} cells carry
+                    real whale activity with no speed restriction in place.
+                  </>
+                ) : (
+                  "No high-risk unprotected cells in this season — protection coverage is strong."
+                )}
+              </p>
+            </div>
+
             {/* Summary stats */}
             <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <StatCard
@@ -357,6 +384,66 @@ export default function PolicyPage() {
               </p>
             </div>
 
+            {/* Where are the priority areas? — mini-map grounds the counts */}
+            <div className="mb-8 grid gap-6 lg:grid-cols-2">
+              <div className="rounded-2xl border border-ocean-800/30 bg-abyss-900/50 p-6">
+                <h2 className="mb-1 text-sm font-semibold uppercase tracking-widest text-slate-500">
+                  Where the priority areas are
+                </h2>
+                <p className="mb-4 text-xs text-slate-500">
+                  The {regulatoryPriority.length.toLocaleString()} high-risk,
+                  unprotected cells plotted on the map — coloured by risk. Click
+                  to open them in the full risk map.
+                </p>
+                <InsightMiniMap
+                  cells={regulatoryPriority.map((c) => ({
+                    cell_lat: c.cell_lat,
+                    cell_lon: c.cell_lon,
+                    value: c.risk_score,
+                  }))}
+                  href={mapLink({
+                    ...centroid(regulatoryPriority),
+                    zoom: 6,
+                    layer: "risk",
+                    season,
+                    overlays: ["mpas", "proposedZones", "activeSMAs"],
+                  })}
+                  emptyLabel="No unprotected high-risk cells this season."
+                />
+              </div>
+              <div className="rounded-2xl border border-ocean-800/30 bg-abyss-900/50 p-6">
+                <h2 className="mb-1 text-sm font-semibold uppercase tracking-widest text-slate-500">
+                  Whale activity without speed limits
+                </h2>
+                <p className="mb-4 text-xs text-slate-500">
+                  {whaleNoSpeed.length.toLocaleString()} cells with &gt;30% whale
+                  probability and weak protection — where a seasonal speed rule
+                  would protect the most animals.
+                </p>
+                <InsightMiniMap
+                  cells={whaleNoSpeed.map((c) => ({
+                    cell_lat: c.cell_lat,
+                    cell_lon: c.cell_lon,
+                    value: c.any_whale_prob ?? 0,
+                  }))}
+                  colorStops={[
+                    [0, "#1e3a8a"],
+                    [0.4, "#3b82f6"],
+                    [0.7, "#22d3ee"],
+                    [1, "#a5f3fc"],
+                  ]}
+                  href={mapLink({
+                    ...centroid(whaleNoSpeed),
+                    zoom: 6,
+                    layer: "risk",
+                    season,
+                    overlays: ["activeSMAs", "proposedZones"],
+                  })}
+                  emptyLabel="No exposed whale-activity cells this season."
+                />
+              </div>
+            </div>
+
             {/* Policy recommendations */}
             <div className="mb-8 rounded-2xl border border-amber-800/30 bg-amber-950/20 p-6">
               <h2 className="mb-4 flex items-center gap-1.5 text-sm font-semibold uppercase tracking-widest text-amber-400">
@@ -372,6 +459,12 @@ export default function PolicyPage() {
                       • <strong className="text-amber-300">{regulatoryPriority.length.toLocaleString()}</strong>{" "}
                       cells are high-risk AND unprotected — strongest candidates
                       for new SMA/speed zone designations
+                      {regulatoryPriority.length > 0 && (
+                        <span className="text-slate-500">
+                          {" "}
+                          (mostly {describeRegions(regulatoryPriority, 2)})
+                        </span>
+                      )}
                     </li>
                     <li>
                       • <strong className="text-amber-300">{whaleNoSpeed.length.toLocaleString()}</strong>{" "}
@@ -458,13 +551,16 @@ export default function PolicyPage() {
                 habitat and collision risk. Use these projections to plan
                 forward-looking regulatory frameworks.
               </p>
+              <p className="mb-4 rounded-lg border border-cyan-900/30 bg-abyss-900/40 px-3 py-2 text-[10px] leading-relaxed text-slate-500">
+                {BASELINE_NOTE}
+              </p>
 
               {/* Scenario / decade selector */}
               <div className="mb-5 flex flex-wrap items-center gap-3">
                 <div className="flex items-center gap-1.5">
                   <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Scenario</span>
                   <div className="flex gap-1 rounded-lg border border-ocean-800/30 bg-abyss-900/60 p-0.5">
-                    {SCENARIOS.map((s) => (
+                    {PROJ_SCENARIOS_LONG.map((s) => (
                       <button
                         key={s.value}
                         onClick={() => setProjScenario(s.value)}
@@ -482,7 +578,7 @@ export default function PolicyPage() {
                 <div className="flex items-center gap-1.5">
                   <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Decade</span>
                   <div className="flex gap-1 rounded-lg border border-ocean-800/30 bg-abyss-900/60 p-0.5">
-                    {DECADES.map((d) => (
+                    {PROJ_DECADES.map((d) => (
                       <button
                         key={d}
                         onClick={() => setProjDecade(d)}
@@ -503,12 +599,26 @@ export default function PolicyPage() {
                 <div className="flex h-24 items-center justify-center">
                   <span className="animate-pulse text-xs text-slate-500">Loading projections…</span>
                 </div>
+              ) : projError ? (
+                <p className="text-xs text-red-400/80">
+                  Could not load projection data ({projError}). The projection
+                  tables may still be initialising on the server.
+                </p>
               ) : projCells.length === 0 ? (
                 <p className="text-xs text-slate-600">No projection data available for this selection.</p>
               ) : (
                 <>
                   {(() => {
-                    const projTotal = projCells.length;
+                    /* Season-consistent baseline (same season as projection). */
+                    const baseHighRisk = baseCells.filter((c) => c.risk_score >= 0.5);
+                    const baseCritical = baseCells.filter((c) => c.risk_score >= 0.75);
+                    const baseRegPriority = baseCells.filter(
+                      (c) => c.risk_score >= 0.5 && (c.protection_gap ?? 0) >= 0.7,
+                    );
+                    const baseWhaleNoSpeed = baseCells.filter(
+                      (c) => (c.any_whale_prob ?? 0) > 0.3 && (c.protection_gap ?? 0) >= 0.6,
+                    );
+
                     const projHighRisk = projCells.filter((c) => c.risk_score >= 0.5);
                     const projCritical = projCells.filter((c) => c.risk_score >= 0.75);
                     const projRegPriority = projCells.filter(
@@ -518,10 +628,10 @@ export default function PolicyPage() {
                       (c) => (c.any_whale_prob ?? 0) > 0.3 && (c.protection_gap ?? 0) >= 0.6,
                     );
 
-                    const deltaHigh = projHighRisk.length - highRisk.length;
-                    const deltaCrit = projCritical.length - critical.length;
-                    const deltaReg = projRegPriority.length - regulatoryPriority.length;
-                    const deltaWhale = projWhaleNoSpeed.length - whaleNoSpeed.length;
+                    const deltaHigh = projHighRisk.length - baseHighRisk.length;
+                    const deltaCrit = projCritical.length - baseCritical.length;
+                    const deltaReg = projRegPriority.length - baseRegPriority.length;
+                    const deltaWhale = projWhaleNoSpeed.length - baseWhaleNoSpeed.length;
 
                     return (
                       <div className="space-y-5">
@@ -564,7 +674,7 @@ export default function PolicyPage() {
                               Projected Grid Cells
                             </p>
                             <p className="mt-1 text-xl font-bold text-white">
-                              {projTotal.toLocaleString()}
+                              {projCells.length.toLocaleString()}
                             </p>
                             <Link
                               href={mapLink({ lat: 37.5, lon: -76, layer: "sdm_projections", season: season === "annual" ? "winter" : season, scenario: projScenario, decade: projDecade, overlays: ["mpas", "proposedZones"] })}
@@ -573,6 +683,39 @@ export default function PolicyPage() {
                               View projected map →
                             </Link>
                           </div>
+                        </div>
+
+                        {/* Where the projected priority areas sit */}
+                        <div className="rounded-xl border border-cyan-800/20 bg-abyss-900/60 p-4">
+                          <h3 className="mb-1 flex items-center gap-1 text-xs font-bold text-white">
+                            <IconPin className="h-4 w-4 text-cyan-400" /> Projected priority areas
+                          </h3>
+                          <p className="mb-3 text-[11px] text-slate-500">
+                            {projRegPriority.length.toLocaleString()} cells projected
+                            high-risk &amp; unprotected by the {projDecade}
+                            {projRegPriority.length > 0 && (
+                              <> — mostly {describeRegions(projRegPriority, 3)}</>
+                            )}
+                            .
+                          </p>
+                          <InsightMiniMap
+                            cells={projRegPriority.map((c) => ({
+                              cell_lat: c.cell_lat,
+                              cell_lon: c.cell_lon,
+                              value: c.risk_score,
+                            }))}
+                            height={200}
+                            href={mapLink({
+                              lat: 37.5,
+                              lon: -76,
+                              layer: "sdm_projections",
+                              season: season === "annual" ? "winter" : season,
+                              scenario: projScenario,
+                              decade: projDecade,
+                              overlays: ["mpas", "proposedZones"],
+                            })}
+                            emptyLabel="No projected priority cells for this selection."
+                          />
                         </div>
 
                         <div className="rounded-xl border border-ocean-800/20 bg-abyss-900/60 p-4">

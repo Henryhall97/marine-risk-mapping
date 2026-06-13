@@ -242,6 +242,30 @@ function AdvisoryBanner({ level, message }: { level: string; message: string }) 
   );
 }
 
+/** Numbered chapter divider — gives the form a guided, narrative flow. */
+function ChapterHeading({
+  step,
+  title,
+  subtitle,
+}: {
+  step: number;
+  title: string;
+  subtitle: string;
+}) {
+  return (
+    <div className="flex items-center gap-3 pt-1">
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-ocean-600/50 bg-ocean-600/15 text-xs font-bold text-ocean-300">
+        {step}
+      </span>
+      <div className="min-w-0">
+        <h2 className="text-base font-bold leading-tight text-white">{title}</h2>
+        <p className="text-xs text-slate-500">{subtitle}</p>
+      </div>
+      <div className="ml-1 h-px flex-1 bg-gradient-to-r from-ocean-800/60 to-transparent" />
+    </div>
+  );
+}
+
 /* ── Main Form ───────────────────────────────────────────── */
 
 export default function SightingForm({
@@ -259,7 +283,7 @@ export default function SightingForm({
   const [speciesGuess, setSpeciesGuess] = useState(
     initialSpecies ?? "",
   );
-  const [wizardOpen, setWizardOpen] = useState(!initialSpecies);
+  const [wizardOpen, setWizardOpen] = useState(false);
   const [submittedRank, setSubmittedRank] = useState<string>("");
   const [submittedScientificName, setSubmittedScientificName] = useState("");
   const [groupSize, setGroupSize] = useState("");
@@ -306,6 +330,7 @@ export default function SightingForm({
   const [privacyAccepted, setPrivacyAccepted] = useState(false);
   const [mapPickerActive, setMapPickerActive] = useState(false);
   const [showPhotoProbs, setShowPhotoProbs] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
 
   /* ── Hydrate photo from ID wizard (sessionStorage carry-over) ── */
   useEffect(() => {
@@ -1507,9 +1532,309 @@ export default function SightingForm({
       ) : (
         /* ── Form view ── */
         <form onSubmit={handleSubmit} className="space-y-8">
+          {/* ── Mode toggle: quick vs detailed ── */}
+          <div className="flex flex-col gap-3 rounded-xl border border-ocean-800/50 bg-abyss-900/60 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold text-slate-200">
+                {showDetails ? "Detailed report" : "Quick post"}
+              </p>
+              <p className="mt-0.5 text-xs text-slate-500">
+                {showDetails
+                  ? "All fields shown — best for scientific & OBIS-grade records."
+                  : "Just the essentials: where, what and when. Add more anytime."}
+              </p>
+            </div>
+            <div className="flex shrink-0 rounded-lg border border-ocean-800 bg-abyss-950/60 p-1">
+              <button
+                type="button"
+                onClick={() => setShowDetails(false)}
+                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                  !showDetails ? "bg-ocean-600 text-white" : "text-slate-400 hover:text-white"
+                }`}
+              >
+                Quick
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowDetails(true)}
+                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                  showDetails ? "bg-ocean-600 text-white" : "text-slate-400 hover:text-white"
+                }`}
+              >
+                Detailed
+              </button>
+            </div>
+          </div>
+
           <p className="text-right text-[11px] text-slate-500">
             <span className="text-red-400">*</span> Required field
           </p>
+
+          {/* ════ Chapter 1 · Evidence ════ */}
+          <ChapterHeading
+            step={1}
+            title="Add your evidence"
+            subtitle="Optional — a photo or recording lets our AI name the species and auto-fill the location & time below."
+          />
+
+          {/* ── Media uploads ── */}
+          <section className="rounded-xl border border-ocean-800/50 bg-abyss-900/60 p-5">
+            <h3 className="mb-1 text-sm font-semibold uppercase tracking-wider text-slate-400">
+                            <IconPaperclip className="mr-1.5 inline h-4 w-4" /> Media
+            </h3>
+            <p className="mb-4 text-xs text-slate-500">
+              Optional — upload a photo and/or audio recording for AI species
+              classification.
+            </p>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              {/* Photo upload */}
+              <div
+                onClick={() => photoInputRef.current?.click()}
+                className="group cursor-pointer rounded-lg border-2 border-dashed border-ocean-800 p-6 text-center transition-colors hover:border-blue-500/50 hover:bg-abyss-800/50"
+              >
+                {photoPreview ? (
+                  <div className="space-y-2">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={photoPreview}
+                      alt="Preview"
+                      className="mx-auto max-h-40 rounded-lg object-contain"
+                    />
+                    <p className="text-xs text-slate-400">{photo?.name}</p>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setPhoto(null);
+                        setPhotoPreview(null);
+                        setExifLat(null);
+                        setExifLon(null);
+                        setExifDatetime(null);
+                      }}
+                      className="text-xs text-red-400 hover:text-red-300"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="mb-2"><IconCamera className="mx-auto h-8 w-8 text-slate-400" /></div>
+                    <p className="text-sm font-medium text-slate-300">
+                      Upload Photo
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      JPG, PNG, WEBP · Max 20 MB
+                    </p>
+                  </>
+                )}
+                <input
+                  ref={photoInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,image/tiff"
+                  onChange={handlePhoto}
+                  className="hidden"
+                />
+              </div>
+
+              {/* Audio upload */}
+              <div
+                onClick={() => audioInputRef.current?.click()}
+                className="group cursor-pointer rounded-lg border-2 border-dashed border-ocean-800 p-6 text-center transition-colors hover:border-blue-500/50 hover:bg-abyss-800/50"
+              >
+                {audio ? (
+                  <div className="space-y-2">
+                    <div><IconMusic className="mx-auto h-8 w-8 text-slate-400" /></div>
+                    <p className="text-xs text-slate-400">{audio.name}</p>
+                    <p className="text-xs text-slate-500">
+                      {(audio.size / 1_048_576).toFixed(1)} MB
+                    </p>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setAudio(null);
+                      }}
+                      className="text-xs text-red-400 hover:text-red-300"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="mb-2"><IconMicrophone className="mx-auto h-8 w-8 text-slate-400" /></div>
+                    <p className="text-sm font-medium text-slate-300">
+                      Upload Audio
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      WAV, FLAC, MP3, AIF · Max 100 MB
+                    </p>
+                  </>
+                )}
+                <input
+                  ref={audioInputRef}
+                  type="file"
+                  accept="audio/wav,audio/x-wav,audio/flac,audio/mpeg,audio/aiff,audio/x-aiff"
+                  onChange={handleAudio}
+                  className="hidden"
+                />
+              </div>
+            </div>
+          </section>
+
+          {/* ── Photo EXIF metadata suggestions ── */}
+          {(exifLoading || exifLat != null || exifLon != null || exifDatetime != null) && (
+            <section className="rounded-xl border border-cyan-700/40 bg-cyan-950/30 p-5">
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-cyan-300">
+                  <IconCamera className="h-3.5 w-3.5" />
+                  Photo Metadata Detected
+                </h3>
+                {!exifLoading && (exifLat != null || exifDatetime != null) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (exifLat != null && exifLon != null) {
+                        setLat(String(exifLat));
+                        setLon(String(exifLon));
+                      }
+                      if (exifDatetime) setSightingDatetime(exifDatetime);
+                    }}
+                    className="rounded bg-cyan-600/30 px-2 py-0.5 text-[10px] font-medium text-cyan-200 transition hover:bg-cyan-600/40"
+                  >
+                    Apply all
+                  </button>
+                )}
+              </div>
+
+              {exifLoading ? (
+                <p className="flex items-center gap-1.5 text-[11px] text-slate-500">
+                  <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border-2 border-slate-500 border-t-transparent" />
+                  Reading photo metadata…
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {/* GPS from EXIF */}
+                  {exifLat != null && exifLon != null && (
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                      <p className="text-[11px] text-slate-300">
+                        <span className="text-slate-500">Location:</span>{" "}
+                        <strong className="text-cyan-300">
+                          {exifLat.toFixed(6)}, {exifLon.toFixed(6)}
+                        </strong>
+                      </p>
+                      {/* Conflict warning */}
+                      {lat && lon && (
+                        Math.abs(parseFloat(lat) - exifLat) > 0.01 ||
+                        Math.abs(parseFloat(lon) - exifLon) > 0.01
+                      ) && (
+                        <span className="flex items-center gap-1 rounded-full border border-amber-600/40 bg-amber-900/30 px-2 py-0.5 text-[10px] text-amber-300">
+                          <IconWarning className="h-3 w-3" />
+                          Differs from entered location by{" "}
+                          {(
+                            Math.sqrt(
+                              Math.pow(parseFloat(lat) - exifLat, 2) +
+                              Math.pow(parseFloat(lon) - exifLon, 2),
+                            ) * 111
+                          ).toFixed(1)}{" "}
+                          km
+                        </span>
+                      )}
+                      {(!lat || !lon) ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setLat(String(exifLat));
+                            setLon(String(exifLon));
+                          }}
+                          className="rounded bg-cyan-600/30 px-2 py-0.5 text-[10px] font-medium text-cyan-200 transition hover:bg-cyan-600/40"
+                        >
+                          Use this location
+                        </button>
+                      ) : (
+                        lat && lon && (
+                          Math.abs(parseFloat(lat) - exifLat) > 0.001 ||
+                          Math.abs(parseFloat(lon) - exifLon) > 0.001
+                        ) && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setLat(String(exifLat));
+                              setLon(String(exifLon));
+                            }}
+                            className="rounded bg-cyan-600/30 px-2 py-0.5 text-[10px] font-medium text-cyan-200 transition hover:bg-cyan-600/40"
+                          >
+                            Use photo location
+                          </button>
+                        )
+                      )}
+                    </div>
+                  )}
+
+                  {/* DateTime from EXIF */}
+                  {exifDatetime && (
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                      <p className="text-[11px] text-slate-300">
+                        <span className="text-slate-500">Date/time:</span>{" "}
+                        <strong className="text-cyan-300">
+                          {exifDatetime.replace("T", " ")}
+                        </strong>
+                      </p>
+                      {/* Conflict warning */}
+                      {sightingDatetime && sightingDatetime !== exifDatetime && (() => {
+                        const userMs = new Date(sightingDatetime).getTime();
+                        const exifMs = new Date(exifDatetime).getTime();
+                        const diffMin = Math.abs(userMs - exifMs) / 60_000;
+                        if (diffMin < 5) return null;
+                        const label = diffMin < 60
+                          ? `${Math.round(diffMin)} min`
+                          : diffMin < 1440
+                            ? `${(diffMin / 60).toFixed(1)} hrs`
+                            : `${(diffMin / 1440).toFixed(1)} days`;
+                        return (
+                          <span className="flex items-center gap-1 rounded-full border border-amber-600/40 bg-amber-900/30 px-2 py-0.5 text-[10px] text-amber-300">
+                            <IconWarning className="h-3 w-3" />
+                            Differs by {label}
+                          </span>
+                        );
+                      })()}
+                      {!sightingDatetime ? (
+                        <button
+                          type="button"
+                          onClick={() => setSightingDatetime(exifDatetime)}
+                          className="rounded bg-cyan-600/30 px-2 py-0.5 text-[10px] font-medium text-cyan-200 transition hover:bg-cyan-600/40"
+                        >
+                          Use this date/time
+                        </button>
+                      ) : sightingDatetime !== exifDatetime && (
+                        <button
+                          type="button"
+                          onClick={() => setSightingDatetime(exifDatetime)}
+                          className="rounded bg-cyan-600/30 px-2 py-0.5 text-[10px] font-medium text-cyan-200 transition hover:bg-cyan-600/40"
+                        >
+                          Use photo date/time
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {/* No useful metadata found */}
+                  {exifLat == null && exifLon == null && !exifDatetime && (
+                    <p className="text-[11px] text-slate-500">
+                      No location or date/time metadata found in this photo.
+                    </p>
+                  )}
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* ════ Chapter 2 · Where & when ════ */}
+          <ChapterHeading
+            step={2}
+            title="Where & when"
+            subtitle="Pin the spot and the time so we can match your sighting to live risk data."
+          />
 
           {/* ── Location ── */}
           <section className="rounded-xl border border-ocean-800/50 bg-abyss-900/60 p-5">
@@ -1647,6 +1972,57 @@ export default function SightingForm({
             )}
           </section>
 
+          {/* ── When (essential) ── */}
+          <section className="rounded-xl border border-ocean-800/50 bg-abyss-900/60 p-5">
+            <h3 className="mb-1 text-sm font-semibold uppercase tracking-wider text-slate-400">
+              <IconCalendar className="mr-1.5 inline h-4 w-4" /> When{" "}
+              <span className="text-red-400">*</span>
+            </h3>
+            <p className="mb-3 text-xs text-slate-500">
+              Date &amp; time you saw the animal.
+            </p>
+            <input
+              type="datetime-local"
+              value={sightingDatetime}
+              onChange={(e) => setSightingDatetime(e.target.value)}
+              className="w-full rounded-lg border border-ocean-800 bg-abyss-800 px-3 py-2 text-sm text-white focus:border-ocean-500 focus:outline-none sm:w-auto"
+            />
+            {/* EXIF date/time mismatch warning */}
+            {exifDatetime && sightingDatetime && sightingDatetime !== exifDatetime && (() => {
+              const userMs = new Date(sightingDatetime).getTime();
+              const exifMs = new Date(exifDatetime).getTime();
+              const diffMin = Math.abs(userMs - exifMs) / 60_000;
+              if (diffMin < 5) return null;
+              const label = diffMin < 60
+                ? `${Math.round(diffMin)} min`
+                : diffMin < 1440
+                  ? `${(diffMin / 60).toFixed(1)} hrs`
+                  : `${(diffMin / 1440).toFixed(1)} days`;
+              return (
+                <div className="mt-2 flex items-center gap-2 rounded-lg border border-amber-600/40 bg-amber-900/20 px-3 py-2 text-[11px] text-amber-300">
+                  <IconCamera className="h-3.5 w-3.5 flex-shrink-0" />
+                  <span className="flex-1">
+                    Differs from photo metadata ({exifDatetime.replace("T", " ")}) by {label}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setSightingDatetime(exifDatetime)}
+                    className="shrink-0 rounded bg-amber-600/30 px-2 py-0.5 text-[10px] font-medium text-amber-200 transition hover:bg-amber-600/40"
+                  >
+                    Use photo time
+                  </button>
+                </div>
+              );
+            })()}
+          </section>
+
+          {/* ════ Chapter 3 · What you saw ════ */}
+          <ChapterHeading
+            step={3}
+            title="What you saw"
+            subtitle="Identify the species — from your photo, the guided wizard, or the list."
+          />
+
           {/* ── Species wizard (collapsible) ── */}
           {wizardOpen ? (
             <IDHelper
@@ -1665,16 +2041,18 @@ export default function SightingForm({
                 }
               }}
             />
-          ) : speciesGuess ? (
+          ) : (
             <button
               type="button"
               onClick={() => setWizardOpen(true)}
               className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-ocean-700/40 py-2.5 text-xs text-slate-500 transition-colors hover:border-ocean-500/50 hover:text-ocean-400"
             >
               <IconWhale className="h-3.5 w-3.5" />
-              Re-identify with guided wizard
+              {speciesGuess
+                ? "Re-identify with guided wizard"
+                : "Not sure what it was? Use the guided ID wizard"}
             </button>
-          ) : null}
+          )}
 
           {/* ── Species ── */}
           <div>
@@ -1695,7 +2073,9 @@ export default function SightingForm({
             />
           </div>
 
-          {/* ── Group size ── */}
+          {/* ── Group size (detailed) ── */}
+          {showDetails && (
+          <>
           <section className="rounded-xl border border-ocean-800/50 bg-abyss-900/60 p-5">
             <h3 className="mb-1 text-sm font-semibold uppercase tracking-wider text-slate-400">
               Group Size
@@ -1781,6 +2161,15 @@ export default function SightingForm({
               ))}
             </div>
           </section>
+          </>
+          )}
+
+          {/* ════ Chapter 4 · What happened ════ */}
+          <ChapterHeading
+            step={4}
+            title="What happened"
+            subtitle="Describe the encounter and anything notable you observed."
+          />
 
           {/* ── Interaction type ── */}
           <section className="rounded-xl border border-ocean-800/50 bg-abyss-900/60 p-5">
@@ -1809,7 +2198,8 @@ export default function SightingForm({
             </div>
           </section>
 
-          {/* ── Observation details ── */}
+          {/* ── Observation details (detailed) ── */}
+          {showDetails && (
           <section className="rounded-xl border border-ocean-800/50 bg-abyss-900/60 p-5">
             <h3 className="mb-1 text-sm font-semibold uppercase tracking-wider text-slate-400">
               <IconCalendar className="mr-1.5 inline h-4 w-4" /> Observation Details
@@ -1819,46 +2209,6 @@ export default function SightingForm({
             </p>
 
             <div className="grid gap-4 sm:grid-cols-2">
-              {/* Sighting date/time */}
-              <div>
-                <label className="mb-1 block text-xs font-medium text-slate-400">
-                  Date &amp; Time of Sighting <span className="text-red-400">*</span>
-                </label>
-                <input
-                  type="datetime-local"
-                  value={sightingDatetime}
-                  onChange={(e) => setSightingDatetime(e.target.value)}
-                  className="w-full rounded-lg border border-ocean-800 bg-abyss-800 px-3 py-2 text-sm text-white focus:border-ocean-500 focus:outline-none"
-                />
-                {/* EXIF date/time mismatch warning */}
-                {exifDatetime && sightingDatetime && sightingDatetime !== exifDatetime && (() => {
-                  const userMs = new Date(sightingDatetime).getTime();
-                  const exifMs = new Date(exifDatetime).getTime();
-                  const diffMin = Math.abs(userMs - exifMs) / 60_000;
-                  if (diffMin < 5) return null;
-                  const label = diffMin < 60
-                    ? `${Math.round(diffMin)} min`
-                    : diffMin < 1440
-                      ? `${(diffMin / 60).toFixed(1)} hrs`
-                      : `${(diffMin / 1440).toFixed(1)} days`;
-                  return (
-                    <div className="mt-2 flex items-center gap-2 rounded-lg border border-amber-600/40 bg-amber-900/20 px-3 py-2 text-[11px] text-amber-300">
-                      <IconCamera className="h-3.5 w-3.5 flex-shrink-0" />
-                      <span className="flex-1">
-                        Differs from photo metadata ({exifDatetime.replace("T", " ")}) by {label}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setSightingDatetime(exifDatetime)}
-                        className="shrink-0 rounded bg-amber-600/30 px-2 py-0.5 text-[10px] font-medium text-amber-200 transition hover:bg-amber-600/40"
-                      >
-                        Use photo time
-                      </button>
-                    </div>
-                  );
-                })()}
-              </div>
-
               {/* ── Weather conditions card ── */}
               {(weatherLoading || suggestedBeaufort != null || suggestedVisibility != null || suggestedGlare != null) && (
                 <div className="sm:col-span-2 rounded-lg border border-ocean-700/40 bg-ocean-900/20 px-4 py-3">
@@ -2216,260 +2566,10 @@ export default function SightingForm({
               </div>
             </div>
           </section>
-
-          {/* ── Media uploads ── */}
-          <section className="rounded-xl border border-ocean-800/50 bg-abyss-900/60 p-5">
-            <h3 className="mb-1 text-sm font-semibold uppercase tracking-wider text-slate-400">
-                            <IconPaperclip className="mr-1.5 inline h-4 w-4" /> Media
-            </h3>
-            <p className="mb-4 text-xs text-slate-500">
-              Optional — upload a photo and/or audio recording for AI species
-              classification.
-            </p>
-
-            <div className="grid gap-4 md:grid-cols-2">
-              {/* Photo upload */}
-              <div
-                onClick={() => photoInputRef.current?.click()}
-                className="group cursor-pointer rounded-lg border-2 border-dashed border-ocean-800 p-6 text-center transition-colors hover:border-blue-500/50 hover:bg-abyss-800/50"
-              >
-                {photoPreview ? (
-                  <div className="space-y-2">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={photoPreview}
-                      alt="Preview"
-                      className="mx-auto max-h-40 rounded-lg object-contain"
-                    />
-                    <p className="text-xs text-slate-400">{photo?.name}</p>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setPhoto(null);
-                        setPhotoPreview(null);
-                        setExifLat(null);
-                        setExifLon(null);
-                        setExifDatetime(null);
-                      }}
-                      className="text-xs text-red-400 hover:text-red-300"
-                    >
-                      Remove
-                    </button>
-                  </div>
-                ) : (
-                  <>
-                    <div className="mb-2"><IconCamera className="mx-auto h-8 w-8 text-slate-400" /></div>
-                    <p className="text-sm font-medium text-slate-300">
-                      Upload Photo
-                    </p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      JPG, PNG, WEBP · Max 20 MB
-                    </p>
-                  </>
-                )}
-                <input
-                  ref={photoInputRef}
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp,image/tiff"
-                  onChange={handlePhoto}
-                  className="hidden"
-                />
-              </div>
-
-              {/* Audio upload */}
-              <div
-                onClick={() => audioInputRef.current?.click()}
-                className="group cursor-pointer rounded-lg border-2 border-dashed border-ocean-800 p-6 text-center transition-colors hover:border-blue-500/50 hover:bg-abyss-800/50"
-              >
-                {audio ? (
-                  <div className="space-y-2">
-                    <div><IconMusic className="mx-auto h-8 w-8 text-slate-400" /></div>
-                    <p className="text-xs text-slate-400">{audio.name}</p>
-                    <p className="text-xs text-slate-500">
-                      {(audio.size / 1_048_576).toFixed(1)} MB
-                    </p>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setAudio(null);
-                      }}
-                      className="text-xs text-red-400 hover:text-red-300"
-                    >
-                      Remove
-                    </button>
-                  </div>
-                ) : (
-                  <>
-                    <div className="mb-2"><IconMicrophone className="mx-auto h-8 w-8 text-slate-400" /></div>
-                    <p className="text-sm font-medium text-slate-300">
-                      Upload Audio
-                    </p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      WAV, FLAC, MP3, AIF · Max 100 MB
-                    </p>
-                  </>
-                )}
-                <input
-                  ref={audioInputRef}
-                  type="file"
-                  accept="audio/wav,audio/x-wav,audio/flac,audio/mpeg,audio/aiff,audio/x-aiff"
-                  onChange={handleAudio}
-                  className="hidden"
-                />
-              </div>
-            </div>
-          </section>
-
-          {/* ── Photo EXIF metadata suggestions ── */}
-          {(exifLoading || exifLat != null || exifLon != null || exifDatetime != null) && (
-            <section className="rounded-xl border border-cyan-700/40 bg-cyan-950/30 p-5">
-              <div className="mb-2 flex items-center justify-between">
-                <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-cyan-300">
-                  <IconCamera className="h-3.5 w-3.5" />
-                  Photo Metadata Detected
-                </h3>
-                {!exifLoading && (exifLat != null || exifDatetime != null) && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (exifLat != null && exifLon != null) {
-                        setLat(String(exifLat));
-                        setLon(String(exifLon));
-                      }
-                      if (exifDatetime) setSightingDatetime(exifDatetime);
-                    }}
-                    className="rounded bg-cyan-600/30 px-2 py-0.5 text-[10px] font-medium text-cyan-200 transition hover:bg-cyan-600/40"
-                  >
-                    Apply all
-                  </button>
-                )}
-              </div>
-
-              {exifLoading ? (
-                <p className="flex items-center gap-1.5 text-[11px] text-slate-500">
-                  <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border-2 border-slate-500 border-t-transparent" />
-                  Reading photo metadata…
-                </p>
-              ) : (
-                <div className="space-y-2">
-                  {/* GPS from EXIF */}
-                  {exifLat != null && exifLon != null && (
-                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-                      <p className="text-[11px] text-slate-300">
-                        <span className="text-slate-500">Location:</span>{" "}
-                        <strong className="text-cyan-300">
-                          {exifLat.toFixed(6)}, {exifLon.toFixed(6)}
-                        </strong>
-                      </p>
-                      {/* Conflict warning */}
-                      {lat && lon && (
-                        Math.abs(parseFloat(lat) - exifLat) > 0.01 ||
-                        Math.abs(parseFloat(lon) - exifLon) > 0.01
-                      ) && (
-                        <span className="flex items-center gap-1 rounded-full border border-amber-600/40 bg-amber-900/30 px-2 py-0.5 text-[10px] text-amber-300">
-                          <IconWarning className="h-3 w-3" />
-                          Differs from entered location by{" "}
-                          {(
-                            Math.sqrt(
-                              Math.pow(parseFloat(lat) - exifLat, 2) +
-                              Math.pow(parseFloat(lon) - exifLon, 2),
-                            ) * 111
-                          ).toFixed(1)}{" "}
-                          km
-                        </span>
-                      )}
-                      {(!lat || !lon) ? (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setLat(String(exifLat));
-                            setLon(String(exifLon));
-                          }}
-                          className="rounded bg-cyan-600/30 px-2 py-0.5 text-[10px] font-medium text-cyan-200 transition hover:bg-cyan-600/40"
-                        >
-                          Use this location
-                        </button>
-                      ) : (
-                        lat && lon && (
-                          Math.abs(parseFloat(lat) - exifLat) > 0.001 ||
-                          Math.abs(parseFloat(lon) - exifLon) > 0.001
-                        ) && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setLat(String(exifLat));
-                              setLon(String(exifLon));
-                            }}
-                            className="rounded bg-cyan-600/30 px-2 py-0.5 text-[10px] font-medium text-cyan-200 transition hover:bg-cyan-600/40"
-                          >
-                            Use photo location
-                          </button>
-                        )
-                      )}
-                    </div>
-                  )}
-
-                  {/* DateTime from EXIF */}
-                  {exifDatetime && (
-                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-                      <p className="text-[11px] text-slate-300">
-                        <span className="text-slate-500">Date/time:</span>{" "}
-                        <strong className="text-cyan-300">
-                          {exifDatetime.replace("T", " ")}
-                        </strong>
-                      </p>
-                      {/* Conflict warning */}
-                      {sightingDatetime && sightingDatetime !== exifDatetime && (() => {
-                        const userMs = new Date(sightingDatetime).getTime();
-                        const exifMs = new Date(exifDatetime).getTime();
-                        const diffMin = Math.abs(userMs - exifMs) / 60_000;
-                        if (diffMin < 5) return null;
-                        const label = diffMin < 60
-                          ? `${Math.round(diffMin)} min`
-                          : diffMin < 1440
-                            ? `${(diffMin / 60).toFixed(1)} hrs`
-                            : `${(diffMin / 1440).toFixed(1)} days`;
-                        return (
-                          <span className="flex items-center gap-1 rounded-full border border-amber-600/40 bg-amber-900/30 px-2 py-0.5 text-[10px] text-amber-300">
-                            <IconWarning className="h-3 w-3" />
-                            Differs by {label}
-                          </span>
-                        );
-                      })()}
-                      {!sightingDatetime ? (
-                        <button
-                          type="button"
-                          onClick={() => setSightingDatetime(exifDatetime)}
-                          className="rounded bg-cyan-600/30 px-2 py-0.5 text-[10px] font-medium text-cyan-200 transition hover:bg-cyan-600/40"
-                        >
-                          Use this date/time
-                        </button>
-                      ) : sightingDatetime !== exifDatetime && (
-                        <button
-                          type="button"
-                          onClick={() => setSightingDatetime(exifDatetime)}
-                          className="rounded bg-cyan-600/30 px-2 py-0.5 text-[10px] font-medium text-cyan-200 transition hover:bg-cyan-600/40"
-                        >
-                          Use photo date/time
-                        </button>
-                      )}
-                    </div>
-                  )}
-
-                  {/* No useful metadata found */}
-                  {exifLat == null && exifLon == null && !exifDatetime && (
-                    <p className="text-[11px] text-slate-500">
-                      No location or date/time metadata found in this photo.
-                    </p>
-                  )}
-                </div>
-              )}
-            </section>
           )}
 
-          {/* ── Description ── */}
+          {/* ── Description (detailed) ── */}
+          {showDetails && (
           <section className="rounded-xl border border-ocean-800/50 bg-abyss-900/60 p-5">
             <h3 className="mb-1 text-sm font-semibold uppercase tracking-wider text-slate-400">
                             <IconPencil className="mr-1.5 inline h-4 w-4" /> Description
@@ -2489,6 +2589,26 @@ export default function SightingForm({
               {description.length} / 2000
             </p>
           </section>
+          )}
+
+          {/* ── Add-details nudge (quick mode) ── */}
+          {!showDetails && (
+            <button
+              type="button"
+              onClick={() => setShowDetails(true)}
+              className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-ocean-700/40 py-3 text-xs font-medium text-slate-400 transition-colors hover:border-ocean-500/50 hover:text-ocean-300"
+            >
+              <IconPencil className="h-3.5 w-3.5" />
+              Add more detail for science &amp; OBIS (group size, behaviour, conditions…)
+            </button>
+          )}
+
+          {/* ════ Chapter 5 · Share & submit ════ */}
+          <ChapterHeading
+            step={5}
+            title="Share & submit"
+            subtitle="Choose how your sighting is shared, then post it to the community."
+          />
 
           {/* ── Privacy & sharing ── */}
           {user && (

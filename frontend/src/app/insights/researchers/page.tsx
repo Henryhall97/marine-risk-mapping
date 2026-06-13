@@ -4,6 +4,20 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { API_BASE, mapLink } from "@/lib/config";
 import { IconMicroscope, IconMap, IconGlobe } from "@/components/icons/MarineIcons";
+import {
+  useProjectionData,
+  meanField,
+  meanPositiveField,
+  countAbove,
+  BASELINE_NOTE,
+  PROJ_SCENARIOS,
+  PROJ_DECADES,
+  type ProjScenario,
+  type ProjDecade,
+} from "@/hooks/useProjectionData";
+import GlossaryBox, { GLOSSARY } from "@/components/GlossaryBox";
+import InsightMiniMap from "@/components/InsightMiniMap";
+import { describeRegions } from "@/lib/regions";
 
 /* ── Types ──────────────────────────────────────────────── */
 
@@ -38,15 +52,8 @@ interface MacroCell {
 }
 
 type Season = "annual" | "winter" | "spring" | "summer" | "fall";
-type Scenario = "ssp245" | "ssp585";
-type Decade = "2030s" | "2040s" | "2060s" | "2080s";
 
 const SEASONS: Season[] = ["annual", "winter", "spring", "summer", "fall"];
-const SCENARIOS: { value: Scenario; label: string }[] = [
-  { value: "ssp245", label: "SSP2-4.5" },
-  { value: "ssp585", label: "SSP5-8.5" },
-];
-const DECADES: Decade[] = ["2030s", "2040s", "2060s", "2080s"];
 
 const SPECIES = [
   { key: "any_whale_prob", isdm: "any_whale_prob", sdm: "sdm_any_whale", label: "Any Whale", color: "text-cyan-400" },
@@ -114,11 +121,16 @@ export default function ResearchersPage() {
   const [cells, setCells] = useState<MacroCell[]>([]);
   const [loading, setLoading] = useState(true);
 
-  /* Projection state */
-  const [projScenario, setProjScenario] = useState<Scenario>("ssp585");
-  const [projDecade, setProjDecade] = useState<Decade>("2060s");
-  const [projCells, setProjCells] = useState<MacroCell[]>([]);
-  const [projLoading, setProjLoading] = useState(false);
+  /* Projection state — baseline fetched at the same season as the
+     projection (season-consistent deltas) via the shared hook. */
+  const [projScenario, setProjScenario] = useState<ProjScenario>("ssp585");
+  const [projDecade, setProjDecade] = useState<ProjDecade>("2060s");
+  const {
+    projCells,
+    baseCells,
+    loading: projLoading,
+    error: projError,
+  } = useProjectionData(season, projScenario, projDecade);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -135,29 +147,9 @@ export default function ResearchersPage() {
     }
   }, [season]);
 
-  const fetchProjected = useCallback(async () => {
-    const projSeason = season === "annual" ? "winter" : season;
-    setProjLoading(true);
-    try {
-      const res = await fetch(
-        `${API_BASE}/api/v1/macro/overview?season=${projSeason}&scenario=${projScenario}&decade=${projDecade}`,
-      );
-      if (res.ok) {
-        const d = await res.json();
-        setProjCells(d.data ?? []);
-      }
-    } finally {
-      setProjLoading(false);
-    }
-  }, [season, projScenario, projDecade]);
-
   useEffect(() => {
     fetchData();
   }, [fetchData]);
-
-  useEffect(() => {
-    fetchProjected();
-  }, [fetchProjected]);
 
   /* Derived analytics */
   const total = cells.length;
@@ -212,6 +204,14 @@ export default function ResearchersPage() {
   /* Sightings coverage */
   const sightingCells = cells.filter((c) => (c.total_sightings ?? 0) > 0);
   const totalSightings = cells.reduce((s, c) => s + (c.total_sightings ?? 0), 0);
+
+  /* High-probability whale habitat — the page's anchor metric */
+  const highWhale = cells.filter((c) => (c.any_whale_prob ?? 0) > 0.5);
+  const modelDisagree = bothModels.filter((c) => {
+    const isdm = c.any_whale_prob! > 0.5;
+    const sdm = (c.sdm_any_whale ?? 0) > 0.5;
+    return isdm !== sdm;
+  });
 
   return (
     <main className="min-h-screen bg-abyss-950 px-4 pb-20 pt-24">
@@ -275,6 +275,43 @@ export default function ResearchersPage() {
           </div>
         ) : (
           <>
+            {/* How to read this page */}
+            <GlossaryBox
+              terms={[GLOSSARY.cell, GLOSSARY.whaleProb, GLOSSARY.riskScore]}
+            />
+
+            {/* Headline takeaway */}
+            <div className="mb-8 rounded-2xl border border-purple-700/40 bg-gradient-to-br from-purple-950/30 to-abyss-900/40 p-6">
+              <p className="text-[11px] font-semibold uppercase tracking-widest text-purple-400">
+                What the models say — {season}
+              </p>
+              <p className="mt-2 text-lg font-semibold leading-snug text-slate-100">
+                {highWhale.length.toLocaleString()} cells carry a{" "}
+                <span className="text-cyan-300">&gt;50% modelled whale probability</span>
+                {agreement != null && (
+                  <>
+                    , and the ISDM &amp; SDM models agree on{" "}
+                    <span className="text-emerald-300">{pct(agreement)}</span> of cells
+                  </>
+                )}
+                .
+              </p>
+              <p className="mt-1.5 text-sm text-slate-400">
+                {highWhale.length > 0 ? (
+                  <>
+                    Predicted habitat concentrates in{" "}
+                    <span className="font-medium text-purple-300">
+                      {describeRegions(highWhale, 3)}
+                    </span>
+                    . The two models diverge on {modelDisagree.length.toLocaleString()}{" "}
+                    cells — the best targets for new survey effort.
+                  </>
+                ) : (
+                  "No high-probability habitat cells in this season's view."
+                )}
+              </p>
+            </div>
+
             {/* Summary stats */}
             <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <StatCard
@@ -362,6 +399,42 @@ export default function ResearchersPage() {
               </div>
             </div>
 
+            {/* Where the predicted habitat is */}
+            <div className="mb-8 rounded-2xl border border-ocean-800/30 bg-abyss-900/50 p-6">
+              <h2 className="mb-1 text-sm font-semibold uppercase tracking-widest text-slate-500">
+                Where the predicted habitat is — {season}
+              </h2>
+              <p className="mb-4 text-xs text-slate-500">
+                The {highWhale.length.toLocaleString()} cells with &gt;50% ensemble
+                whale probability, coloured by probability
+                {highWhale.length > 0 && (
+                  <> — concentrated in {describeRegions(highWhale, 3)}</>
+                )}
+                . Click to open the habitat layer on the full map.
+              </p>
+              <InsightMiniMap
+                cells={highWhale.map((c) => ({
+                  cell_lat: c.cell_lat,
+                  cell_lon: c.cell_lon,
+                  value: c.any_whale_prob ?? 0,
+                }))}
+                colorStops={[
+                  [0, "#1e3a8a"],
+                  [0.4, "#3b82f6"],
+                  [0.7, "#22d3ee"],
+                  [1, "#a5f3fc"],
+                ]}
+                href={mapLink({
+                  ...centroid(highWhale),
+                  zoom: 6,
+                  layer: "whale_predictions",
+                  season,
+                  overlays: ["criticalHabitat", "bias"],
+                })}
+                emptyLabel="No high-probability habitat cells this season."
+              />
+            </div>
+
             {/* Habitat covariates */}
             <div className="mb-8 rounded-2xl border border-ocean-800/30 bg-abyss-900/50 p-6">
               <h2 className="mb-4 text-sm font-semibold uppercase tracking-widest text-slate-500">
@@ -445,13 +518,16 @@ export default function ResearchersPage() {
                 covariates from CMIP6 climate models. Compare current vs projected
                 environmental conditions and species distributions.
               </p>
+              <p className="mb-4 rounded-lg border border-cyan-900/30 bg-abyss-900/40 px-3 py-2 text-[10px] leading-relaxed text-slate-500">
+                {BASELINE_NOTE}
+              </p>
 
               {/* Scenario / decade selector */}
               <div className="mb-5 flex flex-wrap items-center gap-3">
                 <div className="flex items-center gap-1.5">
                   <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Scenario</span>
                   <div className="flex gap-1 rounded-lg border border-ocean-800/30 bg-abyss-900/60 p-0.5">
-                    {SCENARIOS.map((s) => (
+                    {PROJ_SCENARIOS.map((s) => (
                       <button
                         key={s.value}
                         onClick={() => setProjScenario(s.value)}
@@ -469,7 +545,7 @@ export default function ResearchersPage() {
                 <div className="flex items-center gap-1.5">
                   <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Decade</span>
                   <div className="flex gap-1 rounded-lg border border-ocean-800/30 bg-abyss-900/60 p-0.5">
-                    {DECADES.map((d) => (
+                    {PROJ_DECADES.map((d) => (
                       <button
                         key={d}
                         onClick={() => setProjDecade(d)}
@@ -496,27 +572,41 @@ export default function ResearchersPage() {
                 <div className="flex h-24 items-center justify-center">
                   <span className="animate-pulse text-xs text-slate-500">Loading projections…</span>
                 </div>
+              ) : projError ? (
+                <p className="text-xs text-red-400/80">
+                  Could not load projection data ({projError}). The projection
+                  tables may still be initialising on the server.
+                </p>
               ) : projCells.length === 0 ? (
                 <p className="text-xs text-slate-600">No projection data available for this selection.</p>
               ) : (
                 <>
                   {(() => {
-                    /* Projected covariates */
-                    const pSst = projCells.map((c) => c.sst).filter((v): v is number => v != null);
-                    const pPp = projCells.map((c) => c.pp_upper_200m).filter((v): v is number => v != null);
-                    const pSstMean = pSst.length > 0 ? pSst.reduce((s, v) => s + v, 0) / pSst.length : null;
-                    const pPpMean = pPp.length > 0 ? pPp.reduce((s, v) => s + v, 0) / pPp.length : null;
-                    const sstDelta = sstMean != null && pSstMean != null ? pSstMean - sstMean : null;
-                    const ppDelta = ppMean != null && pPpMean != null ? pPpMean - ppMean : null;
+                    /* Season-consistent baseline (same season as projection). */
+                    const bSstMean = meanField(baseCells, "sst");
+                    const bPpMean = meanField(baseCells, "pp_upper_200m");
 
-                    /* Projected species stats */
-                    function projSpeciesStats(isdmKey: string | null, sdmKey: string) {
-                      const sdmVals = projCells
-                        .map((c) => c[sdmKey] as number | null)
-                        .filter((v): v is number => v != null && v > 0);
-                      const sdmMean = sdmVals.length > 0 ? sdmVals.reduce((s, v) => s + v, 0) / sdmVals.length : null;
-                      const sdmHigh = sdmVals.filter((v) => v > 0.5).length;
-                      return { sdmMean, sdmHigh, sdmCount: sdmVals.length };
+                    /* Projected covariates */
+                    const pSstMean = meanField(projCells, "sst");
+                    const pPpMean = meanField(projCells, "pp_upper_200m");
+                    const sstDelta =
+                      bSstMean != null && pSstMean != null ? pSstMean - bSstMean : null;
+                    const ppDelta =
+                      bPpMean != null && pPpMean != null ? pPpMean - bPpMean : null;
+
+                    /* Per-species presence stats (current baseline vs projected),
+                       both at the same season for an honest comparison. */
+                    function curSpeciesStats(sdmKey: string) {
+                      return {
+                        sdmMean: meanPositiveField(baseCells, sdmKey as never),
+                        sdmHigh: countAbove(baseCells, sdmKey as never),
+                      };
+                    }
+                    function projSpeciesStats(sdmKey: string) {
+                      return {
+                        sdmMean: meanPositiveField(projCells, sdmKey as never),
+                        sdmHigh: countAbove(projCells, sdmKey as never),
+                      };
                     }
 
                     return (
@@ -589,8 +679,8 @@ export default function ResearchersPage() {
                             </thead>
                             <tbody className="divide-y divide-ocean-800/20">
                               {SPECIES.map((sp) => {
-                                const cur = speciesStats(sp.isdm, sp.sdm);
-                                const proj = projSpeciesStats(sp.isdm, sp.sdm);
+                                const cur = curSpeciesStats(sp.sdm);
+                                const proj = projSpeciesStats(sp.sdm);
                                 const meanDelta = cur.sdmMean != null && proj.sdmMean != null ? proj.sdmMean - cur.sdmMean : null;
                                 const cellDelta = proj.sdmHigh - cur.sdmHigh;
                                 return (
@@ -626,11 +716,9 @@ export default function ResearchersPage() {
                     );
                   })()}
                   <p className="mt-4 text-[10px] text-slate-600">
-                    CMIP6 projections: SSP2-4.5 (moderate mitigation) and SSP5-8.5
-                    (high emissions). Ocean covariates (SST, MLD, SLA, PP) are
-                    projected; bathymetry and traffic held constant.
-                    {season === "annual" && " Annual view defaults to winter projections."}
-                    {" "}Δ values show change from current baseline; pp = percentage points.
+                    Δ values compare the projected decade against the current
+                    baseline at the same season (pp = percentage points).
+                    {season === "annual" && " Annual view uses winter for both baseline and projection."}
                   </p>
                 </>
               )}

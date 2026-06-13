@@ -4,6 +4,9 @@ import { useRef, useMemo, useEffect, useState, useCallback } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Html } from "@react-three/drei";
 import * as THREE from "three";
+import { feature } from "topojson-client";
+import landTopo from "world-atlas/land-50m.json";
+import type { FeatureCollection, Geometry, Position } from "geojson";
 import Image from "next/image";
 
 /* ═══════════════════════════════════════════════════════════════
@@ -215,7 +218,7 @@ interface PlaceLabel {
   name: string;
   lat: number;
   lon: number;
-  kind: "ocean" | "sea" | "place" | "region";
+  kind: "ocean" | "sea" | "place" | "region" | "city";
 }
 
 const PLACE_LABELS: PlaceLabel[] = [
@@ -253,6 +256,25 @@ const PLACE_LABELS: PlaceLabel[] = [
   { name: "Svalbard", lat: 78, lon: 16, kind: "region" },
   { name: "South Georgia", lat: -54.5, lon: -36, kind: "place" },
   { name: "Great Barrier Reef", lat: -17, lon: 147, kind: "place" },
+  /* Assorted coastal cities for global orientation */
+  { name: "Boston", lat: 42.36, lon: -71.06, kind: "city" },
+  { name: "New York", lat: 40.71, lon: -74.01, kind: "city" },
+  { name: "San Francisco", lat: 37.77, lon: -122.42, kind: "city" },
+  { name: "Vancouver", lat: 49.28, lon: -123.12, kind: "city" },
+  { name: "Anchorage", lat: 61.22, lon: -149.9, kind: "city" },
+  { name: "Honolulu", lat: 21.31, lon: -157.86, kind: "city" },
+  { name: "Reykjavík", lat: 64.15, lon: -21.94, kind: "city" },
+  { name: "Lisbon", lat: 38.72, lon: -9.14, kind: "city" },
+  { name: "Cape Town", lat: -33.92, lon: 18.42, kind: "city" },
+  { name: "Sydney", lat: -33.87, lon: 151.21, kind: "city" },
+  { name: "Auckland", lat: -36.85, lon: 174.76, kind: "city" },
+  { name: "Tokyo", lat: 35.68, lon: 139.69, kind: "city" },
+  { name: "Ushuaia", lat: -54.8, lon: -68.3, kind: "city" },
+  { name: "Tromsø", lat: 69.65, lon: 18.96, kind: "city" },
+  { name: "Halifax", lat: 44.65, lon: -63.58, kind: "city" },
+  { name: "Valparaíso", lat: -33.05, lon: -71.62, kind: "city" },
+  { name: "Dakar", lat: 14.72, lon: -17.47, kind: "city" },
+  { name: "Mumbai", lat: 19.08, lon: 72.88, kind: "city" },
 ];
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -354,29 +376,22 @@ function Globe() {
           vec2 ll = vUv * vec2(10.0, 5.0);
           float n = fbm(ll + vec2(0.3, -0.7));
 
+          /* Clean dark ocean — real coastlines are drawn on top as lines,
+             so the sphere itself is pure water with gentle depth variation. */
           vec3 deepOcean    = vec3(0.02, 0.06, 0.14);
-          vec3 shallowOcean = vec3(0.04, 0.12, 0.22);
-          vec3 land          = vec3(0.08, 0.14, 0.08);
-          vec3 highland      = vec3(0.12, 0.18, 0.10);
+          vec3 midOcean     = vec3(0.03, 0.09, 0.19);
+          vec3 color = mix(deepOcean, midOcean, smoothstep(0.25, 0.75, n));
 
-          float lt = 0.52;
-          vec3 color;
-          if (n < lt - 0.05)
-            color = mix(deepOcean, shallowOcean,
-                        smoothstep(0.2, 0.47, n));
-          else if (n < lt)
-            color = mix(shallowOcean, land,
-                        smoothstep(lt - 0.05, lt, n));
-          else
-            color = mix(land, highland,
-                        smoothstep(lt, 0.7, n));
-
-          /* subtle grid */
+          /* Graticule — clearer lat / lon reference grid */
           float gLat = abs(fract(vUv.y * 18.0) - 0.5);
           float gLon = abs(fract(vUv.x * 36.0) - 0.5);
-          float grid = smoothstep(0.48, 0.5, gLat)
-                     + smoothstep(0.48, 0.5, gLon);
-          color += vec3(0.015, 0.03, 0.05) * grid * 0.4;
+          float grid = smoothstep(0.47, 0.5, gLat)
+                     + smoothstep(0.47, 0.5, gLon);
+          color += vec3(0.04, 0.10, 0.16) * grid * 0.5;
+          /* Equator + prime meridian accent lines */
+          float eq  = 1.0 - smoothstep(0.0, 0.004, abs(vUv.y - 0.5));
+          float pm  = 1.0 - smoothstep(0.0, 0.003, abs(vUv.x - 0.5));
+          color += vec3(0.10, 0.20, 0.28) * (eq + pm) * 0.6;
 
           /* fresnel edge glow */
           vec3 viewDir = normalize(-vPosition);
@@ -483,9 +498,11 @@ function StarField() {
 function SightingPins({
   stops,
   activeIndex,
+  hero = false,
 }: {
   stops: TourStop[];
   activeIndex: number;
+  hero?: boolean;
 }) {
   const clockRef = useRef(0);
   useFrame((_, dt) => {
@@ -509,6 +526,7 @@ function SightingPins({
               tip={tip}
               color={stop.color}
               active={isActive}
+              hero={hero}
             />
             {isActive && (
               <GlowBeam position={tip} normal={dir} color={stop.color} />
@@ -532,57 +550,102 @@ function SpeciesPin({
   tip,
   color,
   active,
+  hero = false,
 }: {
   base: THREE.Vector3;
   tip: THREE.Vector3;
   color: string;
   active: boolean;
+  hero?: boolean;
 }) {
   const dir = tip.clone().sub(base);
   const mid = base.clone().add(dir.clone().multiplyScalar(0.5));
   const length = dir.length();
 
-  const quaternion = useMemo(() => {
+  /* Cone apex points down toward the surface → classic teardrop pin */
+  const coneQuaternion = useMemo(() => {
     const q = new THREE.Quaternion();
     q.setFromUnitVectors(
       new THREE.Vector3(0, 1, 0),
+      dir.clone().normalize().negate(),
+    );
+    return q;
+  }, [dir]);
+
+  /* Footprint ring sits flush on the globe surface (normal = +z plane) */
+  const ringQuaternion = useMemo(() => {
+    const q = new THREE.Quaternion();
+    q.setFromUnitVectors(
+      new THREE.Vector3(0, 0, 1),
       dir.clone().normalize(),
     );
     return q;
   }, [dir]);
 
+  /* Hero variant lifts the idle markers from dim grey to softly glowing
+     species-coloured beacons, so the whole globe reads as alive. */
+  const headRadius = active
+    ? PIN_RADIUS * 2.13
+    : hero
+      ? PIN_RADIUS * 1.6
+      : PIN_RADIUS * 1.27;
+  const headOpacity = active ? 1 : hero ? 0.9 : 0.6;
+  const stemColor = active || hero ? color : "#3f4f65";
+  const stemOpacity = active ? 0.9 : hero ? 0.6 : 0.35;
+  const lit = active || hero;
+
   return (
     <group>
-      {/* Stem */}
-      <mesh position={mid} quaternion={quaternion}>
-        <cylinderGeometry
-          args={[PIN_RADIUS * 0.4, PIN_RADIUS * 0.9, length, 6]}
-        />
-        <meshBasicMaterial
-          color={active ? color : "#3f4f65"}
-          transparent
-          opacity={active ? 0.9 : 0.35}
-        />
-      </mesh>
-      {/* Head — species-coloured sphere */}
-      <mesh position={tip}>
-        <sphereGeometry
-          args={[active ? PIN_RADIUS * 3.5 : PIN_RADIUS * 2, 16, 16]}
+      {/* Footprint ring — anchors the marker to a precise location */}
+      <mesh position={base} quaternion={ringQuaternion}>
+        <ringGeometry
+          args={[PIN_RADIUS * 1.4, PIN_RADIUS * 2.1, 24]}
         />
         <meshBasicMaterial
           color={color}
           transparent
-          opacity={active ? 1 : 0.55}
+          opacity={lit ? 0.5 : 0.22}
+          side={THREE.DoubleSide}
+          depthWrite={false}
         />
       </mesh>
-      {/* Inner glow core (additive) — active only */}
-      {active && (
+      {/* Teardrop body — cone tapering down to the surface (map-pin shape) */}
+      <mesh position={mid} quaternion={coneQuaternion}>
+        <coneGeometry args={[PIN_RADIUS * 1.1, length, 12]} />
+        <meshBasicMaterial
+          color={stemColor}
+          transparent
+          opacity={stemOpacity}
+        />
+      </mesh>
+      {/* Head — species-coloured bulb */}
+      <mesh position={tip}>
+        <sphereGeometry args={[headRadius, 18, 18]} />
+        <meshBasicMaterial color={color} transparent opacity={headOpacity} />
+      </mesh>
+      {/* White-hot inner core — gives the bulb a "lit" gem highlight */}
+      {lit && (
         <mesh position={tip}>
-          <sphereGeometry args={[PIN_RADIUS * 5, 16, 16]} />
+          <sphereGeometry args={[headRadius * 0.45, 12, 12]} />
+          <meshBasicMaterial
+            color="#ffffff"
+            transparent
+            opacity={active ? 0.85 : 0.55}
+            depthWrite={false}
+            blending={THREE.AdditiveBlending}
+          />
+        </mesh>
+      )}
+      {/* Soft outer glow halo (additive) */}
+      {lit && (
+        <mesh position={tip}>
+          <sphereGeometry
+            args={[active ? PIN_RADIUS * 5.5 : PIN_RADIUS * 4.2, 16, 16]}
+          />
           <meshBasicMaterial
             color={color}
             transparent
-            opacity={0.15}
+            opacity={active ? 0.18 : 0.12}
             depthWrite={false}
             blending={THREE.AdditiveBlending}
           />
@@ -867,6 +930,7 @@ function PlaceLabels() {
     sea: "text-[8px] font-medium tracking-[0.08em]",
     place: "text-[7px] font-medium",
     region: "text-[8px] font-semibold tracking-[0.1em] uppercase",
+    city: "text-[7px] font-semibold tracking-[0.05em]",
   };
 
   const colorClass: Record<string, string> = {
@@ -874,6 +938,7 @@ function PlaceLabels() {
     sea: "text-cyan-300/25",
     place: "text-slate-400/30",
     region: "text-indigo-300/25",
+    city: "text-amber-200/35",
   };
 
   return (
@@ -905,16 +970,161 @@ function PlaceLabels() {
   );
 }
 
+// ── Real coastlines (Natural Earth land outlines on the sphere) ─
+
+function Coastlines() {
+  const geometry = useMemo(() => {
+    const R = GLOBE_RADIUS + 0.006;
+    const positions: number[] = [];
+
+    const fc = feature(
+      landTopo as unknown as Parameters<typeof feature>[0],
+      (landTopo as unknown as { objects: { land: unknown } }).objects
+        .land as Parameters<typeof feature>[1],
+    ) as FeatureCollection<Geometry>;
+
+    const addRing = (ring: Position[]) => {
+      for (let i = 0; i < ring.length - 1; i++) {
+        const a = latLonToVec3(ring[i][1], ring[i][0], R);
+        const b = latLonToVec3(ring[i + 1][1], ring[i + 1][0], R);
+        positions.push(a.x, a.y, a.z, b.x, b.y, b.z);
+      }
+    };
+
+    for (const f of fc.features) {
+      const g = f.geometry;
+      if (g.type === "Polygon") {
+        g.coordinates.forEach(addRing);
+      } else if (g.type === "MultiPolygon") {
+        g.coordinates.forEach((poly) => poly.forEach(addRing));
+      }
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute(
+      "position",
+      new THREE.Float32BufferAttribute(positions, 3),
+    );
+    return geo;
+  }, []);
+
+  return (
+    <lineSegments geometry={geometry}>
+      <lineBasicMaterial
+        color="#4bb8d6"
+        transparent
+        opacity={0.6}
+        depthWrite={false}
+      />
+    </lineSegments>
+  );
+}
+
+// ── Filled landmasses (faint tinted continents) ──────────────
+
+function LandFill() {
+  const geometry = useMemo(() => {
+    const R = GLOBE_RADIUS + 0.003;
+    const positions: number[] = [];
+
+    const fc = feature(
+      landTopo as unknown as Parameters<typeof feature>[0],
+      (landTopo as unknown as { objects: { land: unknown } }).objects
+        .land as Parameters<typeof feature>[1],
+    ) as FeatureCollection<Geometry>;
+
+    /* A flat lon/lat triangle projected to the sphere has its interior
+       sagging below the surface (chord vs arc) — large continents would
+       sink behind the ocean and vanish. Recursively subdivide each
+       triangle, re-projecting every midpoint onto radius R, so the fill
+       hugs the globe all the way across. */
+    const MAX_EDGE = 0.18; // chord length before a triangle is split
+    const project = (lon: number, lat: number) =>
+      latLonToVec3(lat, lon, R);
+
+    const emit = (a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3) => {
+      const ab = a.distanceTo(b);
+      const bc = b.distanceTo(c);
+      const ca = c.distanceTo(a);
+      if (Math.max(ab, bc, ca) <= MAX_EDGE) {
+        positions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+        return;
+      }
+      /* Split into 4 by edge midpoints, snapped back onto the sphere. */
+      const mid = (p: THREE.Vector3, q: THREE.Vector3) =>
+        p.clone().add(q).multiplyScalar(0.5).setLength(R);
+      const mAB = mid(a, b);
+      const mBC = mid(b, c);
+      const mCA = mid(c, a);
+      emit(a, mAB, mCA);
+      emit(mAB, b, mBC);
+      emit(mCA, mBC, c);
+      emit(mAB, mBC, mCA);
+    };
+
+    const addPolygon = (rings: Position[][]) => {
+      if (rings.length === 0) return;
+      const toVec2 = (ring: Position[]) =>
+        ring.slice(0, -1).map((p) => new THREE.Vector2(p[0], p[1]));
+      const contour = toVec2(rings[0]);
+      if (contour.length < 3) return;
+      const holes = rings.slice(1).map(toVec2);
+
+      const faces = THREE.ShapeUtils.triangulateShape(contour, holes);
+      const allPts = [contour, ...holes].flat();
+
+      for (const face of faces) {
+        const [p0, p1, p2] = face.map((idx) => allPts[idx]);
+        emit(
+          project(p0.x, p0.y),
+          project(p1.x, p1.y),
+          project(p2.x, p2.y),
+        );
+      }
+    };
+
+    for (const f of fc.features) {
+      const g = f.geometry;
+      if (g.type === "Polygon") {
+        addPolygon(g.coordinates);
+      } else if (g.type === "MultiPolygon") {
+        g.coordinates.forEach(addPolygon);
+      }
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute(
+      "position",
+      new THREE.Float32BufferAttribute(positions, 3),
+    );
+    return geo;
+  }, []);
+
+  return (
+    <mesh geometry={geometry}>
+      <meshBasicMaterial
+        color="#16384a"
+        transparent
+        opacity={0.55}
+        side={THREE.DoubleSide}
+        depthWrite={false}
+      />
+    </mesh>
+  );
+}
+
 // ── Scene composition ────────────────────────────────────────
 
 function GlobeScene({
   stops,
   activeIndex,
   phase,
+  hero = false,
 }: {
   stops: TourStop[];
   activeIndex: number;
   phase: "idle" | "flying" | "dwelling";
+  hero?: boolean;
 }) {
   return (
     <>
@@ -923,8 +1133,10 @@ function GlobeScene({
       <pointLight position={[-3, -2, -5]} intensity={0.3} color="#6366f1" />
       <StarField />
       <Globe />
+      <LandFill />
+      <Coastlines />
       <PlaceLabels />
-      <SightingPins stops={stops} activeIndex={activeIndex} />
+      <SightingPins stops={stops} activeIndex={activeIndex} hero={hero} />
       <CelebrationBurst
         stops={stops}
         activeIndex={activeIndex}
@@ -946,9 +1158,12 @@ function GlobeScene({
 export default function SightingGlobe({
   sightings,
   className = "",
+  hero = false,
 }: {
   sightings: GlobeSighting[];
   className?: string;
+  /** Hero variant — brighter, glowing beacon markers for a centerpiece. */
+  hero?: boolean;
 }) {
   const [activeIndex, setActiveIndex] = useState(-1);
   const [phase, setPhase] = useState<"idle" | "flying" | "dwelling">("idle");
@@ -1084,6 +1299,7 @@ export default function SightingGlobe({
           stops={stops}
           activeIndex={activeIndex}
           phase={phase}
+          hero={hero}
         />
       </Canvas>
 

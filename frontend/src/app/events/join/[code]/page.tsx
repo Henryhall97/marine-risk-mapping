@@ -119,7 +119,7 @@ export default function JoinEventPage() {
       <main className="flex min-h-screen flex-col items-center justify-center gap-4 bg-abyss-950 pt-20">
         <IconWarning className="h-12 w-12 text-red-400/50" />
         <p className="text-sm text-slate-400">{error || "Event not found."}</p>
-        <Link href="/community?tab=events" className="text-sm text-ocean-400 underline">
+        <Link href="/community/events" className="text-sm text-ocean-400 underline">
           Browse events →
         </Link>
       </main>

@@ -5,7 +5,7 @@ import { SonarPing } from "@/components/animations";
 import Image from "next/image";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Fragment, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, Suspense, useCallback, useEffect, useMemo, useState, type ComponentType } from "react";
 import {
   IconWhale,
   IconMicroscope,
@@ -538,6 +538,45 @@ function PhotoBanner({
           <p className="text-xs text-slate-300/80">{sublabel}</p>
         )}
       </div>
+    </div>
+  );
+}
+
+/** Large act divider that gives the page a clear three-part narrative. */
+function SectionHeading({
+  eyebrow,
+  title,
+  titleAccent,
+  subtitle,
+  Icon,
+  accent = "text-teal-400",
+}: {
+  eyebrow: string;
+  title: string;
+  titleAccent: string;
+  subtitle: string;
+  Icon: ComponentType<{ className?: string }>;
+  accent?: string;
+}) {
+  return (
+    <div className="mb-8 text-center">
+      <div className="mb-3 flex items-center justify-center gap-2">
+        <span className="h-px w-8 bg-ocean-800/60" />
+        <Icon className={`h-4 w-4 ${accent}`} />
+        <span className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+          {eyebrow}
+        </span>
+        <span className="h-px w-8 bg-ocean-800/60" />
+      </div>
+      <h2 className="font-display text-2xl font-extrabold tracking-tight text-white sm:text-3xl">
+        {title}{" "}
+        <span className="bg-gradient-to-r from-teal-400 to-cyan-400 bg-clip-text text-transparent">
+          {titleAccent}
+        </span>
+      </h2>
+      <p className="mx-auto mt-2 max-w-2xl text-sm leading-relaxed text-slate-400">
+        {subtitle}
+      </p>
     </div>
   );
 }
@@ -1437,8 +1476,32 @@ function SpeciesCrosswalkPageInner() {
           </div>
         )}
 
+        {/* ════ Act 1 · Identify a sighting ════ */}
+        {!loading && !error && (
+          <SectionHeading
+            eyebrow="Start here · For observers"
+            title="Identify your"
+            titleAccent="sighting"
+            subtitle="Saw something at sea? Walk through a few quick questions — or let the AI read your photo — to find the right species."
+            Icon={IconWhale}
+          />
+        )}
+
         {/* ID Helper — guided identification */}
         {!loading && !error && <IDHelper mode="navigate" />}
+
+        {/* ════ Act 2 · Browse the catalogue ════ */}
+        {!loading && !error && (
+          <div className="mt-20">
+            <SectionHeading
+              eyebrow="Reference · Full taxonomy"
+              title="Browse the"
+              titleAccent="catalogue"
+              subtitle="Explore all 138 tracked cetacean taxa, organised by the categories observers can realistically tell apart at sea."
+              Icon={IconMicroscope}
+            />
+          </div>
+        )}
 
         {/* Species group explainer */}
         <div className="mb-8 rounded-xl border border-ocean-800/30 bg-gradient-to-r from-abyss-900/60 to-ocean-950/40 p-5">
@@ -1549,8 +1612,25 @@ function SpeciesCrosswalkPageInner() {
           </div>
         )}
 
+        {/* ════ Act 3 · The science ════ */}
+        {!loading && !error && (
+          <div className="mt-20">
+            <SectionHeading
+              eyebrow="Behind the scenes · The science"
+              title="How our models"
+              titleAccent="see species"
+              subtitle="Six models, each trained on a different slice of the data. Here's how species names are bridged across sources and which species each model covers."
+              Icon={IconRobot}
+              accent="text-amber-400"
+            />
+          </div>
+        )}
+
         {/* Data-source cards */}
-        <div className="mt-16 mb-8 grid gap-4 sm:grid-cols-3">
+        <p className="mb-4 text-center text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+          Three naming systems, one crosswalk
+        </p>
+        <div className="mt-2 mb-8 grid gap-4 sm:grid-cols-3">
           {DATA_SOURCES.map((ds) => (
             <div
               key={ds.key}
@@ -1578,12 +1658,15 @@ function SpeciesCrosswalkPageInner() {
         {/* ── Model Species Coverage ── */}
         {!loading && !error && rows.length > 0 && (
           <div className="mt-16">
-            <h2 className="mb-6 text-center font-display text-2xl font-extrabold tracking-tight text-white">
+            <p className="mb-2 text-center text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+              Which species each model covers
+            </p>
+            <h3 className="mb-6 text-center font-display text-xl font-bold tracking-tight text-white">
               Model{" "}
               <span className="bg-gradient-to-r from-ocean-400 to-bioluminescent-400 bg-clip-text text-transparent">
                 Species Coverage
               </span>
-            </h2>
+            </h3>
             <p className="mx-auto mb-8 max-w-3xl text-center text-sm leading-relaxed text-slate-400">
               Different models are trained on different species subsets
               depending on available training data, the scientific

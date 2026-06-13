@@ -4,13 +4,13 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 
 /**
- * Redirect /events → /community?tab=events.
+ * Redirect /events → /community/events.
  * Keeps /events/[id] and /events/join/[code] routes intact.
  */
 export default function EventsRedirectPage() {
   const router = useRouter();
   useEffect(() => {
-    router.replace("/community?tab=events");
+    router.replace("/community/events");
   }, [router]);
   return null;
 }
