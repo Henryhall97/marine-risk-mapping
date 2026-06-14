@@ -33,6 +33,12 @@ const ScrollDownWhale = dynamic(
   { ssr: false },
 );
 
+// Small 3D humpback that dives down the left depth-gauge rail.
+const RailWhale = dynamic(
+  () => import("@/components/animations/RailWhale"),
+  { ssr: false },
+);
+
 const CoverageMap = dynamic(() => import("@/components/CoverageMap"), {
   ssr: false,
   loading: () => (
@@ -264,6 +270,9 @@ export default function Home() {
         {/* ── Depth-gauge rail ── */}
         <DepthRail />
 
+        {/* ── 3D humpback diving the rail (lg only) ── */}
+        <RailWhale />
+
         {/* ── Real 3D humpback that swims down the page with you ── */}
         <ScrollDownWhale />
 
@@ -286,7 +295,10 @@ export default function Home() {
               className="h-auto w-[260px] animate-float object-contain drop-shadow-[0_0_60px_rgba(34,211,238,0.35)] sm:w-[340px]"
             />
 
-            <p className="mb-4 mt-8 font-mono text-[11px] uppercase tracking-[0.35em] text-bioluminescent-400/70">
+            <p
+              id="depth-anchor-0"
+              className="mb-4 mt-8 font-mono text-[11px] uppercase tracking-[0.35em] text-bioluminescent-400/70"
+            >
               0 m · Sunlight Zone
             </p>
             <h1 className="font-display text-5xl font-extrabold leading-[0.95] tracking-tight text-white drop-shadow-[0_2px_10px_rgba(0,0,0,0.8)] sm:text-7xl">
@@ -330,7 +342,10 @@ export default function Home() {
           {/* This section fades its own darkness OVER the scene as you descend */}
           <div className="pointer-events-none absolute inset-0 -z-10 bg-gradient-to-b from-transparent via-abyss-950/90 to-abyss-950" />
 
-          <p className="relative z-10 mb-3 font-mono text-[11px] uppercase tracking-[0.35em] text-coral-400/80">
+          <p
+            id="depth-anchor-1"
+            className="relative z-10 mb-3 font-mono text-[11px] uppercase tracking-[0.35em] text-coral-400/80"
+          >
             200 m · Twilight Zone
           </p>
           <p className="relative z-10 mb-16 font-display text-sm font-semibold uppercase tracking-[0.2em] text-coral-400">
@@ -403,7 +418,10 @@ export default function Home() {
         {/* ── MIDNIGHT ZONE — teaser of where the map would bleed in ── */}
         {/* ── MESOPELAGIC — Species at Risk (the victims) ── */}
         <section className="relative bg-abyss-950 px-8 py-28 pl-20 sm:pl-28">
-          <p className="mb-3 font-mono text-[11px] uppercase tracking-[0.35em] text-ocean-400/70">
+          <p
+            id="depth-anchor-2"
+            className="mb-3 font-mono text-[11px] uppercase tracking-[0.35em] text-ocean-400/70"
+          >
             500 m · The Victims
           </p>
           <h2 className="max-w-2xl font-display text-3xl font-bold leading-tight text-white sm:text-4xl">
@@ -432,7 +450,10 @@ export default function Home() {
         <section className="relative bg-[#04101b] px-8 py-32 pl-20 sm:pl-28">
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_70%_40%,rgba(34,211,238,0.10),transparent_60%)]" />
           <div className="relative z-10">
-            <p className="mb-3 font-mono text-[11px] uppercase tracking-[0.35em] text-bioluminescent-400/70">
+            <p
+              id="depth-anchor-3"
+              className="mb-3 font-mono text-[11px] uppercase tracking-[0.35em] text-bioluminescent-400/70"
+            >
               1 000 m · Midnight Zone
             </p>
             <h2 className="max-w-3xl font-display text-4xl font-bold leading-[1.05] text-white sm:text-6xl">
@@ -507,7 +528,10 @@ export default function Home() {
         <section className="relative bg-abyss-950 px-8 py-32 pl-20 sm:pl-28">
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-transparent via-[#02060f] to-[#010409]" />
           <div className="relative z-10">
-            <p className="mb-3 font-mono text-[11px] uppercase tracking-[0.35em] text-abyss-300/80">
+            <p
+              id="depth-anchor-4"
+              className="mb-3 font-mono text-[11px] uppercase tracking-[0.35em] text-abyss-300/80"
+            >
               4 000 m · The Abyss
             </p>
             <h2 className="max-w-3xl font-display text-4xl font-bold leading-[1.05] text-white sm:text-5xl">
@@ -757,28 +781,88 @@ export default function Home() {
 function DepthRail() {
   const [progress, setProgress] = useState(0); // 0..1 scroll fraction
 
-  useEffect(() => {
-    const onScroll = () => {
-      const max =
-        document.documentElement.scrollHeight - window.innerHeight;
-      setProgress(max > 0 ? Math.min(1, window.scrollY / max) : 0);
-    };
-    onScroll();
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => window.removeEventListener("scroll", onScroll);
-  }, []);
-
-  // Zones positioned along the track by scroll fraction (tuned to the
-  // page's section offsets — re-anchor with IntersectionObserver later).
+  // Each zone is anchored to the real DOM position of its section's depth
+  // label (id="depth-anchor-N"), so the rail markers line up exactly with
+  // the depth titles as they scroll past — no hand-tuned fractions.
   const zones = [
-    { at: 0.0, d: "0 m", z: "Sunlight", dot: "bg-bioluminescent-400" },
-    { at: 0.18, d: "200 m", z: "Twilight", dot: "bg-coral-400" },
-    { at: 0.36, d: "500 m", z: "Mesopelagic", dot: "bg-ocean-300" },
-    { at: 0.6, d: "1 000 m", z: "Midnight", dot: "bg-ocean-400" },
-    { at: 0.92, d: "4 000 m", z: "Abyss", dot: "bg-abyss-300" },
+    { id: "depth-anchor-0", d: "0 m", z: "Sunlight", dot: "bg-bioluminescent-400" },
+    { id: "depth-anchor-1", d: "200 m", z: "Twilight", dot: "bg-coral-400" },
+    { id: "depth-anchor-2", d: "500 m", z: "The Victims", dot: "bg-ocean-300" },
+    { id: "depth-anchor-3", d: "1 000 m", z: "Midnight", dot: "bg-ocean-400" },
+    { id: "depth-anchor-4", d: "4 000 m", z: "Abyss", dot: "bg-abyss-300" },
   ];
 
-  const liveDepth = Math.round(progress * 4000);
+  const [positions, setPositions] = useState<number[]>(() =>
+    zones.map(() => 0),
+  );
+
+  useEffect(() => {
+    const measure = () => {
+      const max =
+        document.documentElement.scrollHeight - window.innerHeight;
+      const sy = window.scrollY;
+      setProgress(max > 0 ? Math.min(1, sy / max) : 0);
+      // Convert each label's document position into the same 0..1 scale the
+      // bead uses: the fraction at which the label reaches viewport centre.
+      setPositions(
+        zones.map((zone) => {
+          const el = document.getElementById(zone.id);
+          if (!el || max <= 0) return 0;
+          const absTop = el.getBoundingClientRect().top + sy;
+          return Math.min(
+            1,
+            Math.max(0, (absTop - window.innerHeight / 2) / max),
+          );
+        }),
+      );
+    };
+    measure();
+    window.addEventListener("scroll", measure, { passive: true });
+    window.addEventListener("resize", measure);
+    // Re-measure once async content (maps/images) has settled the layout.
+    const t = window.setTimeout(measure, 600);
+    return () => {
+      window.removeEventListener("scroll", measure);
+      window.removeEventListener("resize", measure);
+      window.clearTimeout(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Real depth value for each anchored marker, in metres.
+  const depthValues = [0, 200, 500, 1000, 4000];
+  // Floor the readout descends toward below the last (4 000 m) anchor, so the
+  // number keeps moving as the whale glides to the page bottom.
+  const DEEP_FLOOR = 6000;
+  // Interpolate the readout across the *measured* marker positions so the
+  // number always agrees with whichever marker the whale is at/between —
+  // the markers aren't linearly spaced in scroll, so a flat progress×4000
+  // would disagree with them.
+  const measured = positions.some((p) => p > 0);
+  let liveDepth = Math.round(progress * 4000);
+  if (measured) {
+    const last = positions.length - 1;
+    let d = depthValues[0];
+    if (progress >= positions[last]) {
+      // Past the deepest anchor (4 000 m abyss): keep descending toward the
+      // abyssal-plain floor as the whale glides to the page bottom, so the
+      // readout never freezes.
+      const span = Math.max(1e-6, 1 - positions[last]);
+      const f = Math.min(1, Math.max(0, (progress - positions[last]) / span));
+      d = depthValues[last] + f * (DEEP_FLOOR - depthValues[last]);
+    } else {
+      for (let i = 1; i < positions.length; i++) {
+        if (progress <= positions[i]) {
+          const span = Math.max(1e-6, positions[i] - positions[i - 1]);
+          const f = Math.max(0, (progress - positions[i - 1]) / span);
+          d = depthValues[i - 1] + f * (depthValues[i] - depthValues[i - 1]);
+          break;
+        }
+        d = depthValues[i];
+      }
+    }
+    liveDepth = Math.round(d);
+  }
 
   return (
     <div className="pointer-events-none fixed left-6 top-0 z-30 hidden h-screen flex-col justify-center sm:flex">
@@ -786,21 +870,22 @@ function DepthRail() {
         {/* dim full-length track */}
         <div className="absolute inset-0 w-px bg-gradient-to-b from-bioluminescent-400/20 via-slate-500/15 to-abyss-300/10" />
 
-        {/* lit portion from surface down to the bead */}
+        {/* lit portion from surface down to the whale */}
         <div
           className="absolute left-0 top-0 w-px bg-gradient-to-b from-bioluminescent-400/80 via-bioluminescent-400/50 to-coral-400/50"
           style={{ height: `${progress * 100}%` }}
         />
 
-        {/* zone markers */}
-        {zones.map((zone) => {
-          const active = progress >= zone.at - 0.02;
+        {/* zone markers — anchored to real section positions */}
+        {zones.map((zone, i) => {
+          const at = positions[i];
+          const active = progress >= at - 0.02;
           return (
             <div
-              key={zone.d}
-              className="absolute left-0 flex items-center gap-3"
+              key={zone.id}
+              className="absolute left-0 flex items-center gap-3 transition-[top] duration-150 ease-out"
               style={{
-                top: `${zone.at * 100}%`,
+                top: `${at * 100}%`,
                 transform: "translateY(-50%)",
               }}
             >
@@ -821,7 +906,9 @@ function DepthRail() {
           );
         })}
 
-        {/* travelling submersible bead + live depth readout */}
+        {/* travelling depth marker + live readout. On lg the 3D RailWhale
+           dives this same line; here we keep the glowing halo + readout and
+           a small bead fallback for sm/md where the 3D canvas is disabled. */}
         <div
           className="absolute left-0 transition-[top] duration-150 ease-out"
           style={{
@@ -829,11 +916,14 @@ function DepthRail() {
             transform: "translate(-50%, -50%)",
           }}
         >
-          <div
-            className="h-3 w-3 rounded-full bg-bioluminescent-300"
+          {/* pulsing bioluminescent halo (sits behind the 3D whale) */}
+          <span className="absolute left-1/2 top-1/2 h-9 w-9 -translate-x-1/2 -translate-y-1/2 animate-pulse rounded-full bg-bioluminescent-400/25 blur-md" />
+          {/* glowing bead — fallback for sm/md, hidden where 3D whale runs */}
+          <span
+            className="block h-3 w-3 rounded-full bg-bioluminescent-300 lg:hidden"
             style={{ animation: "proto-bead 2.4s ease-in-out infinite" }}
           />
-          <span className="absolute left-5 top-1/2 -translate-y-1/2 whitespace-nowrap font-mono text-[10px] font-semibold tracking-widest text-bioluminescent-300">
+          <span className="absolute left-9 top-1/2 -translate-y-1/2 whitespace-nowrap font-mono text-[10px] font-semibold tracking-widest text-bioluminescent-300">
             {liveDepth.toLocaleString()} m
           </span>
         </div>
