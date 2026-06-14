@@ -178,7 +178,7 @@ export default function RailWhale() {
         gl={{ alpha: true, antialias: true, powerPreference: "low-power" }}
         dpr={[1, 1.5]}
         camera={{ position: [0, 0, 10], zoom: 70 }}
-        style={{ background: "transparent" }}
+        style={{ background: "transparent", pointerEvents: "none" }}
       >
         <ambientLight intensity={0.9} color={0x88b6d8} />
         <directionalLight position={[4, 8, 10]} intensity={1.5} color={0x9cc6e6} />

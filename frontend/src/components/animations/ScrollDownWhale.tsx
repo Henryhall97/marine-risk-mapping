@@ -199,7 +199,7 @@ export default function ScrollDownWhale() {
         gl={{ alpha: true, antialias: true, powerPreference: "low-power" }}
         dpr={[1, 1.5]}
         camera={{ position: [0, 0, 42], fov: 50 }}
-        style={{ background: "transparent" }}
+        style={{ background: "transparent", pointerEvents: "none" }}
       >
         <Environment preset="sunset" background={false} />
         <ambientLight intensity={0.7} color={0x668aa8} />
