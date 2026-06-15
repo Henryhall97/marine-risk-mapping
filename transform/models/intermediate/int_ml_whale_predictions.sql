@@ -29,7 +29,16 @@ with predictions as (
         isdm_blue_whale,
         isdm_fin_whale,
         isdm_humpback_whale,
-        isdm_sperm_whale
+        isdm_sperm_whale,
+        -- Bootstrap uncertainty bands (per-cell SD of P across K refits)
+        isdm_blue_whale_sd,
+        isdm_fin_whale_sd,
+        isdm_humpback_whale_sd,
+        isdm_sperm_whale_sd,
+        -- MESS extrapolation diagnostics (shared across species)
+        isdm_mess_value,
+        isdm_extrapolated,
+        isdm_mod_variable
     from {{ source('marine_risk', 'ml_whale_predictions') }}
 
 )
@@ -43,6 +52,25 @@ select
     p.isdm_fin_whale,
     p.isdm_humpback_whale,
     p.isdm_sperm_whale,
+
+    -- Per-species bootstrap uncertainty (standard deviation of P)
+    p.isdm_blue_whale_sd,
+    p.isdm_fin_whale_sd,
+    p.isdm_humpback_whale_sd,
+    p.isdm_sperm_whale_sd,
+
+    -- Mean predictive uncertainty across the 4 species (CV-analogue band)
+    (
+        coalesce(p.isdm_blue_whale_sd, 0)
+      + coalesce(p.isdm_fin_whale_sd, 0)
+      + coalesce(p.isdm_humpback_whale_sd, 0)
+      + coalesce(p.isdm_sperm_whale_sd, 0)
+    ) / 4.0 as mean_whale_sd,
+
+    -- Extrapolation flag: is this cell outside the ISDM training envelope?
+    p.isdm_mess_value,
+    coalesce(p.isdm_extrapolated, false) as isdm_extrapolated,
+    p.isdm_mod_variable,
 
     -- Composite: maximum across species
     greatest(

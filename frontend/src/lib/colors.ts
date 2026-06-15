@@ -505,6 +505,8 @@ export function getColorForLayer(
         riskColor(
           Math.min(((d.total_strikes as number) ?? 0) / 5, 1),
         );
+    case "exposure":
+      return (d) => riskColor((d.exposure_score as number) ?? 0);
     case "traffic_density":
       return (d) =>
         trafficDensityColor(
@@ -734,6 +736,14 @@ export function getLegendStops(
         { label: "Few", color: "rgb(253,219,199)" },
         { label: "Many", color: "rgb(178,24,43)" },
       ];
+    case "exposure":
+      return [
+        { label: "Minimal", color: "rgb(33,102,172)" },
+        { label: "Low", color: "rgb(103,169,207)" },
+        { label: "Medium", color: "rgb(255,237,160)" },
+        { label: "High", color: "rgb(240,120,40)" },
+        { label: "Highest", color: "rgb(178,24,43)" },
+      ];
     case "traffic_density":
       return [
         { label: "Low", color: "rgb(50,120,200)" },
@@ -884,6 +894,8 @@ export function getHeatmapColorRange(
     case "risk":
     case "strike_density":
       return HEATMAP_RISK;
+    case "exposure":
+      return HEATMAP_RISK;
     case "risk_ml": {
       const isP = sdmTimePeriod && sdmTimePeriod !== "current";
       return isP && projectionMode === "change"
@@ -967,6 +979,8 @@ export function getMacroWeightField(
       return "total_sightings";
     case "strike_density":
       return "total_strikes";
+    case "exposure":
+      return "exposure_score";
     case "traffic_density":
       switch (trafficMetric) {
         case "speed_lethality":

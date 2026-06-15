@@ -38,6 +38,8 @@ SDM_SPECIES = {
     "sdm_sperm_whale": "sdm_sperm_whale_predictions.parquet",
     "sdm_right_whale": "sdm_right_whale_predictions.parquet",
     "sdm_minke_whale": "sdm_minke_whale_predictions.parquet",
+    "sdm_gray_whale": "sdm_gray_whale_predictions.parquet",
+    "sdm_rices_whale": "sdm_rices_whale_predictions.parquet",
 }
 
 CREATE_TABLE = """
@@ -51,9 +53,44 @@ CREATE TABLE IF NOT EXISTS ml_sdm_predictions (
     sdm_sperm_whale       DOUBLE PRECISION,
     sdm_right_whale       DOUBLE PRECISION,
     sdm_minke_whale       DOUBLE PRECISION,
+    sdm_gray_whale        DOUBLE PRECISION,
+    sdm_rices_whale       DOUBLE PRECISION,
+    sdm_any_whale_sd      DOUBLE PRECISION,
+    sdm_blue_whale_sd     DOUBLE PRECISION,
+    sdm_fin_whale_sd      DOUBLE PRECISION,
+    sdm_humpback_whale_sd DOUBLE PRECISION,
+    sdm_sperm_whale_sd    DOUBLE PRECISION,
+    sdm_right_whale_sd    DOUBLE PRECISION,
+    sdm_minke_whale_sd    DOUBLE PRECISION,
+    sdm_gray_whale_sd     DOUBLE PRECISION,
+    sdm_rices_whale_sd    DOUBLE PRECISION,
     PRIMARY KEY (h3_cell, season)
 );
 """
+
+# Backfill _sd columns for a table created before Phase 1 (uncertainty).
+ALTER_COLUMNS = [
+    f"ALTER TABLE ml_sdm_predictions "
+    f"ADD COLUMN IF NOT EXISTS {col}_sd DOUBLE PRECISION;"
+    for col in (
+        "sdm_any_whale",
+        "sdm_blue_whale",
+        "sdm_fin_whale",
+        "sdm_humpback_whale",
+        "sdm_sperm_whale",
+        "sdm_right_whale",
+        "sdm_minke_whale",
+        "sdm_gray_whale",
+        "sdm_rices_whale",
+    )
+]
+
+# Backfill base probability columns for a table created before gray/Rice's
+# whale were added to the species set (Phase 1b, item G).
+ALTER_COLUMNS += [
+    f"ALTER TABLE ml_sdm_predictions ADD COLUMN IF NOT EXISTS {col} DOUBLE PRECISION;"
+    for col in ("sdm_gray_whale", "sdm_rices_whale")
+]
 
 CREATE_INDEXES = [
     ("CREATE INDEX IF NOT EXISTS idx_sdm_pred_h3 ON ml_sdm_predictions (h3_cell);"),
@@ -78,11 +115,17 @@ def load_predictions() -> None:
         prob_col = f"{col_name}_prob"
         df = df.rename(columns={prob_col: col_name})
 
+        keep = ["h3_cell", "season", col_name]
+        # Bootstrap uncertainty band (present only after a bootstrap run).
+        sd_col = f"{col_name}_sd"
+        if sd_col in df.columns:
+            keep.append(sd_col)
+
         if merged is None:
-            merged = df[["h3_cell", "season", col_name]]
+            merged = df[keep]
         else:
             merged = merged.merge(
-                df[["h3_cell", "season", col_name]],
+                df[keep],
                 on=["h3_cell", "season"],
                 how="outer",
             )
@@ -106,8 +149,10 @@ def load_predictions() -> None:
     cur = conn.cursor()
 
     try:
-        # Create table + indexes
+        # Create table + backfill columns + indexes
         cur.execute(CREATE_TABLE)
+        for alter_sql in ALTER_COLUMNS:
+            cur.execute(alter_sql)
         for idx_sql in CREATE_INDEXES:
             cur.execute(idx_sql)
 
@@ -115,9 +160,14 @@ def load_predictions() -> None:
         cur.execute("TRUNCATE TABLE ml_sdm_predictions;")
         log.info("Truncated ml_sdm_predictions")
 
-        # Use COPY via StringIO for speed
+        # Use COPY via StringIO for speed. Build the full ordered column
+        # list, filling any absent column (e.g. no bootstrap) with NULL.
         species_cols = list(SDM_SPECIES.keys())
-        all_cols = ["h3_cell", "season"] + species_cols
+        sd_cols = [f"{c}_sd" for c in species_cols]
+        all_cols = ["h3_cell", "season"] + species_cols + sd_cols
+        for col in all_cols:
+            if col not in merged.columns:
+                merged[col] = pd.NA
 
         buf = io.StringIO()
         merged[all_cols].to_csv(

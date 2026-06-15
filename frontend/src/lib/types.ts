@@ -22,6 +22,7 @@ export type LayerType =
   | "sdm"
   | "cetacean_density"
   | "strike_density"
+  | "exposure"
   | "traffic_density";
 
 /** Season options — null = annual mean, "all" = all four. */

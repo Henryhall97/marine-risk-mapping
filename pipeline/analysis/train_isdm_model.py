@@ -34,10 +34,17 @@ from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import StratifiedKFold
 
 from pipeline.analysis.evaluate import (
+    apply_calibrator,
     compute_binary_metrics,
-    plot_calibration,
+    fit_calibrator,
+    plot_calibration_comparison,
     plot_feature_importance,
     plot_roc_pr_curves,
+)
+from pipeline.analysis.uncertainty import (
+    DEFAULT_BOOTSTRAP_K,
+    bootstrap_ensemble_predict,
+    mess_extrapolation,
 )
 from pipeline.config import (
     ML_DIR,
@@ -147,8 +154,13 @@ def train_species_model(
     species: str,
     params: dict | None = None,
     log_to_mlflow: bool = True,
-) -> tuple[xgb.XGBClassifier, dict]:
-    """Train an XGBoost SDM for one species using stratified CV."""
+) -> tuple[xgb.XGBClassifier, dict, object]:
+    """Train an XGBoost SDM for one species using stratified CV.
+
+    Returns ``(final_model, cv_metrics, calibrator)`` — the isotonic
+    calibrator is fitted on the OOF predictions (item B) and applied to
+    the grid probabilities at scoring time.
+    """
     params = params or DEFAULT_PARAMS.copy()
     feature_cols = OUR_FEATURE_COLS
     X = df[feature_cols].copy()
@@ -220,6 +232,24 @@ def train_species_model(
     cv_metrics["oof_roc_auc"] = oof_metrics["roc_auc"]
     cv_metrics["oof_avg_precision"] = oof_metrics["avg_precision"]
 
+    # ── Probability calibration (item B) ────────────────
+    # Fit an isotonic calibrator on OOF predictions; it is applied to
+    # the grid probabilities in score_grid so the saved ISDM surface is
+    # calibrated. Brier before/after quantifies the gain.
+    raw_oof = oof_preds[oof_mask].copy()
+    calibrator = fit_calibrator(raw_oof, y.values[oof_mask], method="isotonic")
+    cal_oof = apply_calibrator(calibrator, raw_oof)
+    cv_metrics["oof_brier_raw"] = oof_metrics["brier_score"]
+    cv_metrics["oof_brier_calibrated"] = float(
+        compute_binary_metrics(y.values[oof_mask], cal_oof)["brier_score"]
+    )
+    log.info(
+        "%s calibration (isotonic): Brier %.5f → %.5f",
+        species,
+        cv_metrics["oof_brier_raw"],
+        cv_metrics["oof_brier_calibrated"],
+    )
+
     log.info(
         "%s CV: AUC=%.4f±%.4f  AP=%.4f±%.4f",
         species,
@@ -268,13 +298,21 @@ def train_species_model(
         mlflow.log_artifact(str(roc_pr_path))
 
         cal_path = species_dir / "calibration.png"
-        plot_calibration(
+        plot_calibration_comparison(
             y.values[oof_mask],
-            oof_preds[oof_mask],
+            raw_oof,
+            cal_oof,
             title_prefix=f"ISDM {species} — ",
             save_path=cal_path,
         )
         mlflow.log_artifact(str(cal_path))
+
+        # Persist the fitted calibrator for reuse at scoring time.
+        import joblib
+
+        calib_path = species_dir / "calibrator.joblib"
+        joblib.dump(calibrator, calib_path)
+        mlflow.log_artifact(str(calib_path))
 
         imp_path = species_dir / "feature_importance.png"
         plot_feature_importance(
@@ -315,7 +353,7 @@ def train_species_model(
         plt.close()
         mlflow.log_artifact(str(shap_path))
 
-    return final_model, cv_metrics
+    return final_model, cv_metrics, calibrator
 
 
 # ── Grid scoring ────────────────────────────────────────────
@@ -324,11 +362,26 @@ def train_species_model(
 def score_grid(
     model: xgb.XGBClassifier,
     species: str,
+    train_df: pd.DataFrame | None = None,
+    bootstrap_k: int = DEFAULT_BOOTSTRAP_K,
+    bootstrap_sample_frac: float = 1.0,
+    seed: int = 42,
+    calibrator: object | None = None,
 ) -> pd.DataFrame:
     """Score our seasonal H3 grid with an ISDM-trained model.
 
     Reads the seasonal SDM features parquet, extracts the 7 shared
     covariates, and predicts P(species | environment) per cell-season.
+
+    When ``calibrator`` is supplied, the isotonic calibrator fitted on
+    OOF predictions (item B) is applied to the grid probabilities so the
+    saved surface is calibrated.
+
+    When ``train_df`` is supplied and ``bootstrap_k`` > 0, a bootstrap /
+    bagging ensemble is also fitted to attach an ``isdm_{species}_sd``
+    uncertainty column (per-cell standard deviation of P across the K
+    refits).  The point estimate (``isdm_{species}_prob``) is kept from
+    the single final model so existing surfaces are unchanged.
     """
     if not SDM_SEASONAL_FEATURES_FILE.exists():
         raise FileNotFoundError(
@@ -344,9 +397,10 @@ def score_grid(
     if missing:
         raise ValueError(f"Grid missing columns: {missing}")
 
-    X_grid = grid[OUR_FEATURE_COLS].copy()
+    X_grid_raw = grid[OUR_FEATURE_COLS].copy()
 
     # Predict (NaN-safe: fill missing covariates with median for scoring)
+    X_grid = X_grid_raw.copy()
     n_missing = X_grid.isna().any(axis=1).sum()
     if n_missing > 0:
         log.warning(
@@ -359,6 +413,9 @@ def score_grid(
 
     log.info("Scoring %d cell-seasons…", len(X_grid))
     probs = model.predict_proba(X_grid)[:, 1]
+    if calibrator is not None:
+        probs = apply_calibrator(calibrator, probs)
+        log.info("  Applied isotonic calibration to grid probabilities.")
 
     # Reconstruct season label from one-hot columns
     season_cols = ["season_winter", "season_spring", "season_summer", "season_fall"]
@@ -375,6 +432,26 @@ def score_grid(
 
     result[f"isdm_{species}_prob"] = probs
 
+    # ── Bootstrap uncertainty band ──────────────────────
+    if train_df is not None and bootstrap_k > 0:
+        log.info(
+            "Fitting %d-member bootstrap ensemble for %s uncertainty…",
+            bootstrap_k,
+            species,
+        )
+        X_train = train_df[OUR_FEATURE_COLS]
+        y_train = train_df[TARGET_COL]
+        _, std = bootstrap_ensemble_predict(
+            X_train,
+            y_train,
+            X_grid,
+            base_params=model.get_params(),
+            k=bootstrap_k,
+            sample_frac=bootstrap_sample_frac,
+            seed=seed,
+        )
+        result[f"isdm_{species}_sd"] = std
+
     # Save
     PREDICTIONS_DIR.mkdir(parents=True, exist_ok=True)
     out_path = PREDICTIONS_DIR / f"isdm_{species}_predictions.parquet"
@@ -384,6 +461,48 @@ def score_grid(
         species,
         out_path,
         out_path.stat().st_size / 1e6,
+    )
+    return result
+
+
+def compute_isdm_extrapolation(train_envelope: pd.DataFrame) -> pd.DataFrame:
+    """Compute a single MESS extrapolation surface for the ISDM family.
+
+    Grid covariates are identical across species, so a shared envelope
+    (the union of every species' training covariates) gives one answer to
+    "is this cell within the environmental range the ISDM models saw?".
+    Writes ``isdm_extrapolation.parquet`` with [h3_cell, season,
+    isdm_mess_value, isdm_extrapolated, isdm_mod_variable].
+    """
+    grid = pd.read_parquet(SDM_SEASONAL_FEATURES_FILE)
+    grid_cov = grid[OUR_FEATURE_COLS].copy()
+
+    log.info("Computing ISDM MESS extrapolation surface (union envelope)…")
+    mess = mess_extrapolation(train_envelope[OUR_FEATURE_COLS], grid_cov)
+
+    season_cols = ["season_winter", "season_spring", "season_summer", "season_fall"]
+    season_names = ["winter", "spring", "summer", "fall"]
+    if "season" in grid.columns:
+        result = grid[["h3_cell", "season"]].copy()
+    elif all(c in grid.columns for c in season_cols):
+        season_idx = grid[season_cols].values.argmax(axis=1)
+        result = grid[["h3_cell"]].copy()
+        result["season"] = [season_names[i] for i in season_idx]
+    else:
+        result = grid[["h3_cell"]].copy()
+        result["season"] = "unknown"
+
+    result["isdm_mess_value"] = mess["mess_value"].to_numpy()
+    result["isdm_extrapolated"] = mess["extrapolated"].to_numpy()
+    result["isdm_mod_variable"] = mess["mod_variable"].to_numpy()
+
+    PREDICTIONS_DIR.mkdir(parents=True, exist_ok=True)
+    out_path = PREDICTIONS_DIR / "isdm_extrapolation.parquet"
+    result.to_parquet(out_path, index=False)
+    log.info(
+        "Saved ISDM extrapolation surface: %s (%.1f%% extrapolated)",
+        out_path,
+        100 * result["isdm_extrapolated"].mean(),
     )
     return result
 
@@ -470,6 +589,9 @@ def main(
     tune: bool = False,
     n_trials: int = 50,
     do_score: bool = False,
+    bootstrap_k: int = DEFAULT_BOOTSTRAP_K,
+    bootstrap_sample_frac: float = 1.0,
+    seed: int = 42,
 ) -> None:
     """Train ISDM models for all (or selected) species."""
     matplotlib.use("Agg")
@@ -479,6 +601,7 @@ def main(
 
     species_list = species_list or list(NISI_ISDM_FILES.keys())
     all_metrics = {}
+    train_envelopes = []
 
     for species in species_list:
         log.info("=" * 60)
@@ -486,6 +609,7 @@ def main(
         log.info("=" * 60)
 
         df = load_isdm_data(species)
+        train_envelopes.append(df[OUR_FEATURE_COLS])
 
         with mlflow.start_run(run_name=f"isdm_{species}"):
             mlflow.set_tag("model_type", "xgboost")
@@ -500,7 +624,7 @@ def main(
                 best_params = None
                 mlflow.set_tag("tuned", "false")
 
-            model, metrics = train_species_model(
+            model, metrics, calibrator = train_species_model(
                 df,
                 species,
                 params=best_params,
@@ -509,7 +633,20 @@ def main(
             all_metrics[species] = metrics
 
             if do_score:
-                score_grid(model, species)
+                score_grid(
+                    model,
+                    species,
+                    train_df=df,
+                    bootstrap_k=bootstrap_k,
+                    bootstrap_sample_frac=bootstrap_sample_frac,
+                    seed=seed,
+                    calibrator=calibrator,
+                )
+
+    # ── Shared extrapolation surface (after all species trained) ──
+    if do_score and train_envelopes:
+        union_envelope = pd.concat(train_envelopes, ignore_index=True)
+        compute_isdm_extrapolation(union_envelope)
 
     # ── Summary ─────────────────────────────────────────
     log.info("=" * 60)
@@ -550,6 +687,20 @@ if __name__ == "__main__":
         action="store_true",
         help="Score our H3 grid after training",
     )
+    parser.add_argument(
+        "--bootstrap-k",
+        type=int,
+        default=DEFAULT_BOOTSTRAP_K,
+        help="Bootstrap ensemble size for the _sd uncertainty band "
+        "(default: 50; 0 disables). Only used with --score-grid.",
+    )
+    parser.add_argument(
+        "--bootstrap-sample-frac",
+        type=float,
+        default=1.0,
+        help="Row fraction per bootstrap resample (default: 1.0 = classic "
+        "bootstrap; <1.0 = sub-bagging).",
+    )
     args = parser.parse_args()
 
     species_list = [args.species] if args.species else None
@@ -558,4 +709,6 @@ if __name__ == "__main__":
         tune=args.tune,
         n_trials=args.n_trials,
         do_score=args.score_grid,
+        bootstrap_k=args.bootstrap_k,
+        bootstrap_sample_frac=args.bootstrap_sample_frac,
     )

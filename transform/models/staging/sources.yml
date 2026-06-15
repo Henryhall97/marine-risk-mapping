@@ -201,6 +201,50 @@ sources:
           - name: geom
             description: "PostGIS POLYGON geometry (SRID 4326)"
 
+      - name: whale_critical_habitat
+        description: >
+          NMFS ESA-designated and proposed whale critical habitat
+          polygons (31 rows). Final-designated units are strong,
+          enforceable spatial protection; one Proposed unit
+          (is_proposed = true) is excluded from protection scoring.
+          Used by the protection-gap sub-score (Phase 1b item H).
+        columns:
+          - name: id
+            description: "Auto-generated primary key"
+          - name: species_label
+            description: "Internal species label (e.g. right_whale)"
+          - name: sci_name
+            description: "Scientific name"
+          - name: cmn_name
+            description: "Common name"
+          - name: ch_status
+            description: "Critical-habitat status (Final / Proposed)"
+          - name: is_proposed
+            description: "True if proposed (not yet enforceable)"
+          - name: geom
+            description: "PostGIS geometry (SRID 4326)"
+
+      - name: right_whale_slow_zones
+        description: >
+          Active NOAA Fisheries right whale Dynamic Management Areas
+          / slow zones (6 rows). Voluntary 10-knot speed restrictions
+          triggered by acoustic/visual NARW detections. Comparable in
+          enforceability to voluntary SMAs. Used by the protection-gap
+          sub-score (Phase 1b item H).
+        columns:
+          - name: id
+            description: "Auto-generated primary key"
+          - name: zone_name
+            description: "DMA / slow zone name"
+          - name: zone_type
+            description: "Trigger type (acoustic / visual / DMA)"
+          - name: voluntary
+            description: "True for voluntary advisories (all current DMAs)"
+          - name: speed_limit_kn
+            description: "Recommended speed limit in knots (10)"
+          - name: geom
+            description: "PostGIS POLYGON geometry (SRID 4326)"
+
       - name: nisi_risk_grid
         description: >
           Nisi et al. (2024) global whale–ship collision risk grid.
@@ -296,6 +340,22 @@ sources:
             description: "Predicted P(humpback whale present) from ISDM model (0–1)"
           - name: isdm_sperm_whale
             description: "Predicted P(sperm whale present) from ISDM model (0–1)"
+          - name: isdm_blue_whale_sd
+            description: "Bootstrap SD of P(blue whale) across K refits"
+          - name: isdm_fin_whale_sd
+            description: "Bootstrap SD of P(fin whale) across K refits"
+          - name: isdm_humpback_whale_sd
+            description: "Bootstrap SD of P(humpback whale) across K refits"
+          - name: isdm_sperm_whale_sd
+            description: "Bootstrap SD of P(sperm whale) across K refits"
+          - name: isdm_mess_value
+            description: >
+              MESS similarity (%); < 0 means the cell's environment is
+              outside the ISDM training envelope (extrapolation).
+          - name: isdm_extrapolated
+            description: "True when isdm_mess_value < 0 (extrapolated prediction)"
+          - name: isdm_mod_variable
+            description: "Most-dissimilar covariate (MoD) driving the MESS value"
 
       - name: ml_sdm_predictions
         description: >
@@ -323,6 +383,20 @@ sources:
             description: "Predicted P(right whale present) from OBIS SDM (0–1)"
           - name: sdm_minke_whale
             description: "Predicted P(minke whale present) from OBIS SDM (0–1)"
+          - name: sdm_any_whale_sd
+            description: "Bootstrap SD of P(any whale) across K refits"
+          - name: sdm_blue_whale_sd
+            description: "Bootstrap SD of P(blue whale) across K refits"
+          - name: sdm_fin_whale_sd
+            description: "Bootstrap SD of P(fin whale) across K refits"
+          - name: sdm_humpback_whale_sd
+            description: "Bootstrap SD of P(humpback whale) across K refits"
+          - name: sdm_sperm_whale_sd
+            description: "Bootstrap SD of P(sperm whale) across K refits"
+          - name: sdm_right_whale_sd
+            description: "Bootstrap SD of P(right whale) across K refits"
+          - name: sdm_minke_whale_sd
+            description: "Bootstrap SD of P(minke whale) across K refits"
 
       - name: whale_isdm_projections
         description: >

@@ -13,6 +13,7 @@ const LAYER_LABELS: Record<LayerType, string> = {
   sdm: "Whale Habitat (Observed)",
   cetacean_density: "Sighting Records",
   strike_density: "Strike History",
+  exposure: "Whale × Ship Exposure",
   traffic_density: "Ship Traffic",
 };
 

@@ -38,13 +38,22 @@ import xgboost as xgb
 from sklearn.metrics import roc_auc_score
 
 from pipeline.analysis.evaluate import (
+    apply_calibrator,
     compute_binary_metrics,
-    plot_calibration,
+    fit_calibrator,
+    plot_calibration_comparison,
     plot_feature_importance,
     plot_roc_pr_curves,
     spatial_cv_split,
+    spatial_residual_diagnostics,
 )
-from pipeline.analysis.extract_features import extract_sdm_seasonal_features
+from pipeline.analysis.extract_features import (
+    build_training_mask,
+    extract_sdm_seasonal_features,
+)
+from pipeline.analysis.uncertainty import (
+    bootstrap_ensemble_predict,
+)
 from pipeline.config import (
     ML_DIR,
     MLFLOW_TRACKING_URI,
@@ -74,6 +83,8 @@ VALID_TARGETS = [
     "blue_whale_present",
     "sperm_whale_present",
     "minke_whale_present",
+    "gray_whale_present",
+    "rices_whale_present",
 ]
 
 # Columns to EXCLUDE from features
@@ -96,6 +107,8 @@ NON_FEATURE_COLS = {
     "blue_whale_present",
     "sperm_whale_present",
     "minke_whale_present",
+    "gray_whale_present",
+    "rices_whale_present",
     # Sighting counts — these directly encode the target
     "total_sightings",
     "unique_species",
@@ -224,14 +237,32 @@ def train_single_model(
     log.info("Features: %d columns", len(feature_cols))
     log.info("Samples: %d pos / %d neg (weight=%.2f)", n_pos, n_neg, scale_pos_weight)
 
+    # ── Sampling-bias correction (item C) ───────────────
+    # Restrict *fitting* rows to target-group background + spatially
+    # thinned presences. Validation still predicts every row, so the
+    # out-of-fold grid stays fully covered for downstream scoring.
+    fit_mask = build_training_mask(df, target_col)
+    log.info(
+        "Training-row mask (TGB + thinning): %d of %d rows eligible for fitting",
+        int(fit_mask.sum()),
+        len(df),
+    )
+
     # ── Spatial block CV ────────────────────────────────
     fold_metrics = []
     oof_preds = np.full(len(df), np.nan)
     best_iterations = []
 
     for fold_idx, (train_idx, val_idx) in enumerate(spatial_cv_split(df)):
-        X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
-        y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
+        # Keep only mask-eligible rows for fitting; predict all val rows.
+        fit_idx = np.asarray(train_idx)[fit_mask[np.asarray(train_idx)]]
+        # Defensive: if the mask collapses a fold's fitting set to a single
+        # class (e.g. a fold with no eligible background rows), fall back to
+        # the unmasked training rows so XGBoost always sees both classes.
+        if len(fit_idx) == 0 or y.iloc[fit_idx].nunique() < 2:
+            fit_idx = np.asarray(train_idx)
+        X_train, X_val = X.iloc[fit_idx], X.iloc[val_idx]
+        y_train, y_val = y.iloc[fit_idx], y.iloc[val_idx]
 
         model = xgb.XGBClassifier(
             **params,
@@ -281,6 +312,26 @@ def train_single_model(
     cv_metrics["oof_roc_auc"] = oof_metrics["roc_auc"]
     cv_metrics["oof_avg_precision"] = oof_metrics["avg_precision"]
 
+    # ── Probability calibration (item B) ────────────────
+    # Fit an isotonic calibrator on the honest OOF predictions and
+    # apply it to the saved OOF probabilities so the values that feed
+    # the marts (P(whale) × traffic, ensembling) are calibrated, not
+    # just well-ranked. Brier before/after quantifies the gain.
+    raw_oof = oof_preds[oof_mask].copy()
+    calibrator = fit_calibrator(raw_oof, y.values[oof_mask], method="isotonic")
+    cal_oof = apply_calibrator(calibrator, raw_oof)
+    cv_metrics["oof_brier_raw"] = oof_metrics["brier_score"]
+    cv_metrics["oof_brier_calibrated"] = float(
+        compute_binary_metrics(y.values[oof_mask], cal_oof)["brier_score"]
+    )
+    # Replace saved OOF predictions with calibrated values.
+    oof_preds[oof_mask] = cal_oof
+    log.info(
+        "  Calibration (isotonic): Brier %.5f → %.5f",
+        cv_metrics["oof_brier_raw"],
+        cv_metrics["oof_brier_calibrated"],
+    )
+
     # OOF per-season AUC
     season_auc = _per_season_auc(
         df[oof_mask],
@@ -300,12 +351,43 @@ def train_single_model(
     for season, auc in season_auc.items():
         log.info("  %s AUC: %.4f", season, auc)
 
+    # ── Spatial residual diagnostics (Moran's I + variogram) ──
+    # Out-of-fold residuals should be spatially unstructured once the
+    # SDM has captured the spatial signal; leftover autocorrelation
+    # warns of a missing covariate or block-CV leakage.
+    spatial_metrics: dict[str, float] = {}
+    if {"cell_lat", "cell_lon"}.issubset(df.columns):
+        target_short = target_col.replace("_present", "")
+        diag_dir = ARTIFACTS_DIR / target_short
+        diag_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            spatial_metrics = spatial_residual_diagnostics(
+                y.values[oof_mask],
+                oof_preds[oof_mask],
+                df["cell_lat"].values[oof_mask],
+                df["cell_lon"].values[oof_mask],
+                title_prefix=f"Seasonal SDM ({target_short}) — ",
+                save_path=diag_dir / "residual_spatial_diagnostics.png",
+            )
+            log.info(
+                "  Residual Moran's I: %.4f (≈0 ⇒ spatially random)",
+                spatial_metrics.get("residual_morans_i", float("nan")),
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Spatial residual diagnostics failed: %s", exc)
+
     # ── Final model on all data ─────────────────────────
     avg_iters = max(int(np.mean(best_iterations)), 100)
     final_params = {k: v for k, v in params.items() if k != "early_stopping_rounds"}
     final_params["n_estimators"] = avg_iters
     final_model = xgb.XGBClassifier(**final_params)
-    final_model.fit(X, y, verbose=False)
+    # Fit on the TGB + thinned rows (item C) so the persisted model used for
+    # projections and fast scoring reflects the same sampling-bias correction
+    # as the OOF folds. Fall back to all rows if the mask is single-class.
+    final_fit_idx = np.where(fit_mask)[0]
+    if len(final_fit_idx) == 0 or y.iloc[final_fit_idx].nunique() < 2:
+        final_fit_idx = np.arange(len(df))
+    final_model.fit(X.iloc[final_fit_idx], y.iloc[final_fit_idx], verbose=False)
 
     # ── Feature importance ──────────────────────────────
     importance = pd.Series(
@@ -329,6 +411,13 @@ def train_single_model(
         mlflow.log_param("cv_method", "spatial_block")
         mlflow.log_param("final_n_estimators", avg_iters)
         mlflow.log_metrics(cv_metrics)
+        if spatial_metrics:
+            mlflow.log_metrics({k: v for k, v in spatial_metrics.items() if v == v})
+            diag_path = (
+                ARTIFACTS_DIR / target_short / ("residual_spatial_diagnostics.png")
+            )
+            if diag_path.exists():
+                mlflow.log_artifact(str(diag_path))
 
         # Feature list for reproducibility
         feat_list_path = art_dir / "feature_columns.txt"
@@ -345,15 +434,23 @@ def train_single_model(
         )
         mlflow.log_artifact(str(roc_path))
 
-        # Calibration
+        # Calibration (raw vs isotonic-calibrated reliability)
         cal_path = art_dir / "calibration.png"
-        plot_calibration(
+        plot_calibration_comparison(
             y.values[oof_mask],
+            raw_oof,
             oof_preds[oof_mask],
             title_prefix=f"Seasonal SDM ({target_short}) — ",
             save_path=cal_path,
         )
         mlflow.log_artifact(str(cal_path))
+
+        # Persist the fitted calibrator for reproducibility / reuse.
+        import joblib
+
+        calib_path = art_dir / "calibrator.joblib"
+        joblib.dump(calibrator, calib_path)
+        mlflow.log_artifact(str(calib_path))
 
         # Feature importance
         imp_path = art_dir / "feature_importance.png"
@@ -416,6 +513,8 @@ SCORE_TARGETS = {
     "sperm_whale_present": "sdm_sperm_whale",
     "right_whale_present": "sdm_right_whale",
     "minke_whale_present": "sdm_minke_whale",
+    "gray_whale_present": "sdm_gray_whale",
+    "rices_whale_present": "sdm_rices_whale",
 }
 
 
@@ -443,12 +542,17 @@ def save_oof_predictions(
     df: pd.DataFrame,
     oof_preds: np.ndarray,
     target_col: str,
+    sd: np.ndarray | None = None,
 ) -> None:
     """Save out-of-fold predictions to parquet.
 
     OOF predictions give each cell a probability from a model
     that never saw it during training — honest and comparable
     to the ISDM's genuinely out-of-sample grid scores.
+
+    When ``sd`` is supplied (per-row bootstrap standard deviation),
+    a ``{col_name}_sd`` uncertainty column is written alongside the
+    point estimate.
     """
     col_name = SCORE_TARGETS.get(target_col)
     if col_name is None:
@@ -458,13 +562,14 @@ def save_oof_predictions(
         )
         return
 
-    result = pd.DataFrame(
-        {
-            "h3_cell": df["h3_cell"].values,
-            "season": _recover_season_col(df).values,
-            f"{col_name}_prob": oof_preds,
-        }
-    )
+    data = {
+        "h3_cell": df["h3_cell"].values,
+        "season": _recover_season_col(df).values,
+        f"{col_name}_prob": oof_preds,
+    }
+    if sd is not None:
+        data[f"{col_name}_sd"] = sd
+    result = pd.DataFrame(data)
 
     # Drop rows with NaN predictions (shouldn't happen with
     # 5 complete folds, but defensive)
@@ -490,6 +595,10 @@ def save_oof_predictions(
 def score_all_targets(
     df: pd.DataFrame,
     params: dict | None = None,
+    bootstrap_k: int = 0,
+    bootstrap_sample_frac: float = 0.3,
+    bootstrap_n_estimators: int | None = 200,
+    seed: int = 42,
 ) -> None:
     """Train + save OOF predictions for all SDM-comparable targets.
 
@@ -498,6 +607,12 @@ def score_all_targets(
     predictions for every cell-season.  Each species gets its own
     MLflow run to avoid parameter-key collisions (different
     scale_pos_weight per species).
+
+    When ``bootstrap_k`` > 0, a bootstrap / bagging ensemble is fitted
+    per target to attach a ``{col_name}_sd`` uncertainty band.  Because
+    the seasonal grid is 7.3M rows, the bootstrap defaults to sub-bagging
+    (``sample_frac`` < 1) with a reduced per-member tree count to keep
+    runtime tractable; production runs can raise ``bootstrap_k`` to 50.
     """
     for target_col, col_name in SCORE_TARGETS.items():
         if target_col not in df.columns:
@@ -534,7 +649,41 @@ def score_all_targets(
                 params=params,
                 log_to_mlflow=True,
             )
-        save_oof_predictions(df, oof_preds, target_col)
+
+            sd = None
+            if bootstrap_k > 0:
+                log.info(
+                    "Fitting %d-member bootstrap ensemble for %s "
+                    "uncertainty (sample_frac=%.2f, n_estimators=%s)…",
+                    bootstrap_k,
+                    col_name,
+                    bootstrap_sample_frac,
+                    bootstrap_n_estimators,
+                )
+                feature_cols = _get_feature_cols(df)
+                X = df[feature_cols]
+                y = df[target_col].astype(float)
+                # Resample bootstrap members from the same TGB + thinned
+                # rows used to fit the point model (item C) so the _sd band
+                # describes the corrected fit; score every grid row.
+                fit_mask = build_training_mask(df, target_col)
+                fit_idx = np.where(fit_mask)[0]
+                if len(fit_idx) == 0 or y.iloc[fit_idx].nunique() < 2:
+                    fit_idx = np.arange(len(df))
+                _, sd = bootstrap_ensemble_predict(
+                    X.iloc[fit_idx],
+                    y.iloc[fit_idx],
+                    X,
+                    base_params=model.get_params(),
+                    k=bootstrap_k,
+                    sample_frac=bootstrap_sample_frac,
+                    n_estimators=bootstrap_n_estimators,
+                    seed=seed,
+                )
+                mlflow.log_metric("bootstrap_sd_mean", float(np.mean(sd)))
+                mlflow.log_param("bootstrap_k", bootstrap_k)
+
+        save_oof_predictions(df, oof_preds, target_col, sd=sd)
 
         log.info(
             "  %s: AUC=%.4f±%.4f",
@@ -798,6 +947,9 @@ def main(
     n_trials: int = 50,
     do_score: bool = False,
     do_score_fast: bool = False,
+    bootstrap_k: int = 0,
+    bootstrap_sample_frac: float = 0.3,
+    bootstrap_n_estimators: int | None = 200,
 ) -> None:
     """Load data, optionally tune, train, evaluate, log."""
     matplotlib.use("Agg")
@@ -824,7 +976,13 @@ def main(
     if do_score:
         mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
         mlflow.set_experiment(EXPERIMENT_NAME)
-        score_all_targets(df, params=None)
+        score_all_targets(
+            df,
+            params=None,
+            bootstrap_k=bootstrap_k,
+            bootstrap_sample_frac=bootstrap_sample_frac,
+            bootstrap_n_estimators=bootstrap_n_estimators,
+        )
         return
 
     # Validate target
@@ -927,6 +1085,33 @@ if __name__ == "__main__":
             "(no retraining — uses final models)"
         ),
     )
+    parser.add_argument(
+        "--bootstrap-k",
+        type=int,
+        default=0,
+        help=(
+            "Bootstrap ensemble size for the _sd uncertainty band "
+            "(default: 0 = off). Used with --score-grid. Production: 50."
+        ),
+    )
+    parser.add_argument(
+        "--bootstrap-sample-frac",
+        type=float,
+        default=0.3,
+        help=(
+            "Row fraction per bootstrap resample for the 7.3M-row grid "
+            "(default: 0.3 = sub-bagging)."
+        ),
+    )
+    parser.add_argument(
+        "--bootstrap-n-estimators",
+        type=int,
+        default=200,
+        help=(
+            "Per-member tree count for bootstrap members "
+            "(default: 200; lower = faster spread estimate)."
+        ),
+    )
     args = parser.parse_args()
     main(
         target_col=args.target,
@@ -934,4 +1119,7 @@ if __name__ == "__main__":
         n_trials=args.n_trials,
         do_score=args.score_grid,
         do_score_fast=args.score_fast,
+        bootstrap_k=args.bootstrap_k,
+        bootstrap_sample_frac=args.bootstrap_sample_frac,
+        bootstrap_n_estimators=args.bootstrap_n_estimators,
     )

@@ -25,6 +25,7 @@ const LAYER_ENDPOINTS: Record<LayerType, string> = {
   sdm: "/api/v1/layers/sdm-predictions",
   cetacean_density: "/api/v1/layers/cetacean-density",
   strike_density: "/api/v1/layers/strike-density",
+  exposure: "/api/v1/layers/exposure",
   traffic_density: "/api/v1/layers/traffic-density",
 };
 
@@ -36,6 +37,7 @@ const SEASON_LAYERS = new Set<LayerType>([
   "whale_predictions",
   "sdm",
   "cetacean_density",
+  "exposure",
   "traffic_density",
 ]);
 

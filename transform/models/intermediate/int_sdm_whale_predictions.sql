@@ -33,7 +33,19 @@ with predictions as (
         sdm_humpback_whale,
         sdm_sperm_whale,
         sdm_right_whale,
-        sdm_minke_whale
+        sdm_minke_whale,
+        sdm_gray_whale,
+        sdm_rices_whale,
+        -- Bootstrap uncertainty bands (per-cell SD of P across K refits)
+        sdm_any_whale_sd,
+        sdm_blue_whale_sd,
+        sdm_fin_whale_sd,
+        sdm_humpback_whale_sd,
+        sdm_sperm_whale_sd,
+        sdm_right_whale_sd,
+        sdm_minke_whale_sd,
+        sdm_gray_whale_sd,
+        sdm_rices_whale_sd
     from {{ source('marine_risk', 'ml_sdm_predictions') }}
 
 )
@@ -52,18 +64,45 @@ select
     p.sdm_sperm_whale,
     p.sdm_right_whale,
     p.sdm_minke_whale,
+    p.sdm_gray_whale,
+    p.sdm_rices_whale,
 
-    -- Composite: maximum across the 6 per-species models
+    -- Bootstrap uncertainty (standard deviation of P) per model
+    p.sdm_any_whale_sd,
+    p.sdm_blue_whale_sd,
+    p.sdm_fin_whale_sd,
+    p.sdm_humpback_whale_sd,
+    p.sdm_sperm_whale_sd,
+    p.sdm_right_whale_sd,
+    p.sdm_minke_whale_sd,
+    p.sdm_gray_whale_sd,
+    p.sdm_rices_whale_sd,
+
+    -- Mean predictive uncertainty across the 8 per-species models
+    (
+        coalesce(p.sdm_blue_whale_sd, 0)
+      + coalesce(p.sdm_fin_whale_sd, 0)
+      + coalesce(p.sdm_humpback_whale_sd, 0)
+      + coalesce(p.sdm_sperm_whale_sd, 0)
+      + coalesce(p.sdm_right_whale_sd, 0)
+      + coalesce(p.sdm_minke_whale_sd, 0)
+      + coalesce(p.sdm_gray_whale_sd, 0)
+      + coalesce(p.sdm_rices_whale_sd, 0)
+    ) / 8.0 as mean_whale_sd,
+
+    -- Composite: maximum across the 8 per-species models
     greatest(
         p.sdm_blue_whale,
         p.sdm_fin_whale,
         p.sdm_humpback_whale,
         p.sdm_sperm_whale,
         p.sdm_right_whale,
-        p.sdm_minke_whale
+        p.sdm_minke_whale,
+        p.sdm_gray_whale,
+        p.sdm_rices_whale
     ) as max_whale_prob,
 
-    -- Composite: mean across the 6 per-species models
+    -- Composite: mean across the 8 per-species models
     (
         coalesce(p.sdm_blue_whale, 0)
       + coalesce(p.sdm_fin_whale, 0)
@@ -71,7 +110,9 @@ select
       + coalesce(p.sdm_sperm_whale, 0)
       + coalesce(p.sdm_right_whale, 0)
       + coalesce(p.sdm_minke_whale, 0)
-    ) / 6.0 as mean_whale_prob,
+      + coalesce(p.sdm_gray_whale, 0)
+      + coalesce(p.sdm_rices_whale, 0)
+    ) / 8.0 as mean_whale_prob,
 
     -- Composite: P(any whale) = 1 - ∏(1 - P_i) via independence
     -- Compare this with sdm_any_whale (directly trained) to see
@@ -83,6 +124,8 @@ select
       * (1.0 - coalesce(p.sdm_sperm_whale, 0))
       * (1.0 - coalesce(p.sdm_right_whale, 0))
       * (1.0 - coalesce(p.sdm_minke_whale, 0))
+      * (1.0 - coalesce(p.sdm_gray_whale, 0))
+      * (1.0 - coalesce(p.sdm_rices_whale, 0))
     ) as any_whale_prob_joint
 
 from predictions p

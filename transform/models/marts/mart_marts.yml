@@ -866,6 +866,25 @@ models:
       - name: mean_whale_prob
         description: "Average P(present) across 6 ensembled species"
 
+      - name: whale_prob_sd
+        description: >
+          Mean bootstrap standard deviation of the whale probability
+          across the ISDM + SDM model families. Wide bands flag
+          low-confidence cells (Phase 1 uncertainty layer).
+
+      - name: isdm_mess_value
+        description: >
+          MESS similarity (%) of the cell's environment to the ISDM
+          training envelope; < 0 indicates extrapolation.
+
+      - name: isdm_extrapolated
+        description: >
+          True when the cell lies outside the ISDM training envelope
+          (MESS < 0) — whale predictions there are extrapolations.
+
+      - name: isdm_mod_variable
+        description: "Most-dissimilar covariate driving the MESS value"
+
       - name: isdm_blue_whale
         description: "Raw ISDM predicted P(blue whale present) — diagnostic"
 
@@ -925,6 +944,74 @@ models:
 
       - name: has_nisi_reference
         description: "True if Nisi reference risk data exists for this cell"
+
+    tests:
+      - unique:
+          column_name: "h3_cell || '-' || season"
+
+  - name: fct_whale_vessel_exposure
+    description: >
+      Whale × vessel exposure (co-occurrence base layer). IWC Phase 1
+      "exposure-first" reporting: the RAW co-occurrence of whales and
+      vessels per cell BEFORE any speed-lethality weighting
+      (exposure_raw = P(any whale) × vessel volume), with a
+      lethality-weighted variant as an optional overlay
+      (exposure_speed_weighted = P(any whale) × V&T speed lethality).
+      Whale probability is the ISDM + SDM ensemble. Grain:
+      one row per (h3_cell, season). ~7.3M rows.
+    config:
+      indexes:
+        - columns: ['h3_cell', 'season']
+    columns:
+      - name: h3_cell
+        description: "H3 cell index (resolution 7)"
+        tests:
+          - not_null
+
+      - name: season
+        description: "Season name: winter, spring, summer, fall"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['winter', 'spring', 'summer', 'fall']
+
+      - name: any_whale_prob
+        description: "Ensemble P(any whale present) across 6 species (0–1)"
+
+      - name: whale_prob_sd
+        description: "Mean bootstrap SD of whale probability (uncertainty band)"
+
+      - name: vessel_volume
+        description: "Avg monthly unique vessels (raw traffic volume)"
+
+      - name: speed_lethality
+        description: "Avg V&T speed-lethality index (overlay weighting)"
+
+      - name: exposure_raw
+        description: >
+          BASE layer: P(any whale) × vessel volume — raw co-occurrence
+          before any speed-lethality weighting.
+
+      - name: exposure_score
+        description: "Season-relative percentile rank of exposure_raw (0–1)"
+
+      - name: exposure_speed_weighted
+        description: >
+          OPTIONAL overlay: P(any whale) × speed lethality —
+          lethality-weighted co-occurrence.
+
+      - name: exposure_speed_score
+        description: "Season-relative percentile rank of exposure_speed_weighted"
+
+      - name: isdm_extrapolated
+        description: "True when the cell is outside the ISDM training envelope"
+
+      - name: has_traffic
+        description: "True if seasonal vessel traffic data exists for this cell"
+
+      - name: has_ml_predictions
+        description: "True if ISDM or SDM predictions exist for this cell"
 
     tests:
       - unique:

@@ -1230,6 +1230,75 @@ def count_traffic_density(
     return fetch_scalar(query, params) or 0
 
 
+# ── Whale × vessel exposure (co-occurrence base layer) ─────
+
+
+def get_exposure(
+    lat_min: float,
+    lat_max: float,
+    lon_min: float,
+    lon_max: float,
+    season: str | None = None,
+    min_exposure: float | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    """Query whale × vessel exposure from fct_whale_vessel_exposure.
+
+    Returns the RAW co-occurrence base layer (exposure_raw /
+    exposure_score) plus the optional speed-lethality-weighted overlay
+    (exposure_speed_weighted / exposure_speed_score) and uncertainty.
+    """
+    where_parts = [_BBOX_WHERE_DIRECT, "has_ml_predictions"]
+    params = _bbox_params(lat_min, lat_max, lon_min, lon_max)
+
+    if season:
+        where_parts.append("season = %(season)s")
+        params["season"] = season
+    if min_exposure is not None:
+        where_parts.append("exposure_score >= %(min_exposure)s")
+        params["min_exposure"] = min_exposure
+
+    where = " AND ".join(where_parts)
+    params["limit"] = limit
+    params["offset"] = offset
+
+    query = (
+        "SELECT h3_cell, cell_lat, cell_lon, season, "
+        "  any_whale_prob, whale_prob_sd, vessel_volume, "
+        "  speed_lethality, exposure_raw, exposure_score, "
+        "  exposure_speed_weighted, exposure_speed_score, "
+        "  isdm_extrapolated, has_traffic "
+        "FROM fct_whale_vessel_exposure "
+        f"WHERE {where} "
+        "ORDER BY exposure_score DESC NULLS LAST "
+        f"LIMIT %(limit)s OFFSET %(offset)s"
+    )
+    return fetch_all(query, params)
+
+
+def count_exposure(
+    lat_min: float,
+    lat_max: float,
+    lon_min: float,
+    lon_max: float,
+    season: str | None = None,
+    min_exposure: float | None = None,
+) -> int:
+    """Count exposure rows in bbox."""
+    where_parts = [_BBOX_WHERE_DIRECT, "has_ml_predictions"]
+    params = _bbox_params(lat_min, lat_max, lon_min, lon_max)
+    if season:
+        where_parts.append("season = %(season)s")
+        params["season"] = season
+    if min_exposure is not None:
+        where_parts.append("exposure_score >= %(min_exposure)s")
+        params["min_exposure"] = min_exposure
+    where = " AND ".join(where_parts)
+    query = f"SELECT count(*) FROM fct_whale_vessel_exposure WHERE {where}"
+    return fetch_scalar(query, params) or 0
+
+
 # ── Cell context (species + habitat) ───────────────────────
 
 

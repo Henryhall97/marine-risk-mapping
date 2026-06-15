@@ -331,6 +331,54 @@ models:
         tests:
           - not_null
 
+  # ── Critical habitat coverage (Phase 1b item H) ────────
+  - name: int_critical_habitat_coverage
+    description: >
+      NMFS ESA-designated whale critical-habitat overlap per H3 cell
+      (Final designations only — proposed units excluded). One row per
+      overlapping cell. Feeds the protection-gap sub-score as strong,
+      enforceable spatial protection.
+    columns:
+      - name: h3_cell
+        description: "H3 cell index (resolution 7)"
+        tests:
+          - unique
+          - not_null
+      - name: critical_habitat_count
+        description: "Number of distinct critical-habitat units overlapping this cell"
+        tests:
+          - not_null
+      - name: critical_habitat_species
+        description: "Semicolon-separated common names of overlapping habitat species"
+      - name: in_critical_habitat
+        description: "True if the cell overlaps any Final critical-habitat unit"
+        tests:
+          - not_null
+
+  # ── Slow-zone coverage (Phase 1b item H) ───────────────
+  - name: int_slow_zone_coverage
+    description: >
+      Active NOAA Fisheries right whale Dynamic Management Area (DMA)
+      / slow-zone overlap per H3 cell. One row per overlapping cell.
+      Voluntary 10-knot advisories — feed the protection-gap sub-score
+      as a small voluntary bonus comparable to SMAs.
+    columns:
+      - name: h3_cell
+        description: "H3 cell index (resolution 7)"
+        tests:
+          - unique
+          - not_null
+      - name: slow_zone_count
+        description: "Number of distinct slow zones overlapping this cell"
+        tests:
+          - not_null
+      - name: slow_zone_names
+        description: "Semicolon-separated names of overlapping slow zones"
+      - name: in_slow_zone
+        description: "True if the cell overlaps any active slow zone / DMA"
+        tests:
+          - not_null
+
   # ── Bathymetry ─────────────────────────────────────────
   - name: int_bathymetry
     description: >
@@ -949,6 +997,30 @@ models:
       - name: isdm_sperm_whale
         description: "Predicted P(sperm whale present) from ISDM model (0–1)"
 
+      - name: isdm_blue_whale_sd
+        description: "Bootstrap SD of P(blue whale) across K refits"
+
+      - name: isdm_fin_whale_sd
+        description: "Bootstrap SD of P(fin whale) across K refits"
+
+      - name: isdm_humpback_whale_sd
+        description: "Bootstrap SD of P(humpback whale) across K refits"
+
+      - name: isdm_sperm_whale_sd
+        description: "Bootstrap SD of P(sperm whale) across K refits"
+
+      - name: mean_whale_sd
+        description: "Mean bootstrap SD across the 4 species (CV-analogue band)"
+
+      - name: isdm_mess_value
+        description: "MESS similarity (%); < 0 means extrapolation"
+
+      - name: isdm_extrapolated
+        description: "True when the cell is outside the ISDM training envelope"
+
+      - name: isdm_mod_variable
+        description: "Most-dissimilar covariate driving the MESS value"
+
       - name: max_whale_prob
         description: "Highest P(present) across all 4 species"
 
@@ -1009,6 +1081,30 @@ models:
 
       - name: sdm_minke_whale
         description: "Predicted P(minke whale present) from OBIS SDM (0–1)"
+
+      - name: sdm_any_whale_sd
+        description: "Bootstrap SD of P(any whale) across K refits"
+
+      - name: sdm_blue_whale_sd
+        description: "Bootstrap SD of P(blue whale) across K refits"
+
+      - name: sdm_fin_whale_sd
+        description: "Bootstrap SD of P(fin whale) across K refits"
+
+      - name: sdm_humpback_whale_sd
+        description: "Bootstrap SD of P(humpback whale) across K refits"
+
+      - name: sdm_sperm_whale_sd
+        description: "Bootstrap SD of P(sperm whale) across K refits"
+
+      - name: sdm_right_whale_sd
+        description: "Bootstrap SD of P(right whale) across K refits"
+
+      - name: sdm_minke_whale_sd
+        description: "Bootstrap SD of P(minke whale) across K refits"
+
+      - name: mean_whale_sd
+        description: "Mean bootstrap SD across the 6 per-species models"
 
       - name: max_whale_prob
         description: "Highest P(present) across 6 per-species SDM models"

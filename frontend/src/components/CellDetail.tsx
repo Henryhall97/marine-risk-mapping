@@ -192,6 +192,11 @@ const LAYER_EXPLANATIONS: Record<LayerType, string> = {
   strike_density:
     "NOAA ship strike records (261 total, 67 geocoded). " +
     "Extremely sparse — most cells have zero strikes.",
+  exposure:
+    "Raw whale × vessel co-occurrence (exposure-first): P(any whale) × " +
+    "vessel volume, BEFORE any speed-lethality weighting. The base layer " +
+    "for the IWC strike-risk reporting standard. A speed-lethality-weighted " +
+    "variant is available as an optional overlay.",
   traffic_density:
     "Seasonal vessel traffic from AIS data. 8 danger components: " +
     "speed lethality, high-speed fraction, vessel volume, large vessels, " +

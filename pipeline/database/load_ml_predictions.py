@@ -38,9 +38,34 @@ CREATE TABLE IF NOT EXISTS ml_whale_predictions (
     isdm_fin_whale      DOUBLE PRECISION,
     isdm_humpback_whale DOUBLE PRECISION,
     isdm_sperm_whale    DOUBLE PRECISION,
+    isdm_blue_whale_sd     DOUBLE PRECISION,
+    isdm_fin_whale_sd      DOUBLE PRECISION,
+    isdm_humpback_whale_sd DOUBLE PRECISION,
+    isdm_sperm_whale_sd    DOUBLE PRECISION,
+    isdm_mess_value     DOUBLE PRECISION,
+    isdm_extrapolated   BOOLEAN,
+    isdm_mod_variable   VARCHAR(32),
     PRIMARY KEY (h3_cell, season)
 );
 """
+
+# Backfill columns for an existing table created before Phase 1 (uncertainty).
+ALTER_COLUMNS = [
+    "ALTER TABLE ml_whale_predictions "
+    "ADD COLUMN IF NOT EXISTS isdm_blue_whale_sd DOUBLE PRECISION;",
+    "ALTER TABLE ml_whale_predictions "
+    "ADD COLUMN IF NOT EXISTS isdm_fin_whale_sd DOUBLE PRECISION;",
+    "ALTER TABLE ml_whale_predictions "
+    "ADD COLUMN IF NOT EXISTS isdm_humpback_whale_sd DOUBLE PRECISION;",
+    "ALTER TABLE ml_whale_predictions "
+    "ADD COLUMN IF NOT EXISTS isdm_sperm_whale_sd DOUBLE PRECISION;",
+    "ALTER TABLE ml_whale_predictions "
+    "ADD COLUMN IF NOT EXISTS isdm_mess_value DOUBLE PRECISION;",
+    "ALTER TABLE ml_whale_predictions "
+    "ADD COLUMN IF NOT EXISTS isdm_extrapolated BOOLEAN;",
+    "ALTER TABLE ml_whale_predictions "
+    "ADD COLUMN IF NOT EXISTS isdm_mod_variable VARCHAR(32);",
+]
 
 CREATE_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_ml_pred_h3 ON ml_whale_predictions (h3_cell);",
@@ -62,18 +87,40 @@ def load_predictions() -> None:
         prob_col = f"isdm_{species}_prob"
         df = df.rename(columns={prob_col: f"isdm_{species}"})
 
+        keep = ["h3_cell", "season", f"isdm_{species}"]
+        # Bootstrap uncertainty band (optional — present only after
+        # --score-grid was run with --bootstrap-k > 0).
+        sd_col = f"isdm_{species}_sd"
+        if sd_col in df.columns:
+            keep.append(sd_col)
+
         if merged is None:
-            merged = df[["h3_cell", "season", f"isdm_{species}"]]
+            merged = df[keep]
         else:
-            merged = merged.merge(
-                df[["h3_cell", "season", f"isdm_{species}"]],
-                on=["h3_cell", "season"],
-                how="outer",
-            )
+            merged = merged.merge(df[keep], on=["h3_cell", "season"], how="outer")
 
     if merged is None:
         log.error("No prediction files found in %s", PREDICTIONS_DIR)
         return
+
+    # ── Merge shared extrapolation (MESS) surface ───────────
+    mess_path = PREDICTIONS_DIR / "isdm_extrapolation.parquet"
+    if mess_path.exists():
+        mess = pd.read_parquet(mess_path)
+        mess_cols = ["h3_cell", "season"] + [
+            c
+            for c in ("isdm_mess_value", "isdm_extrapolated", "isdm_mod_variable")
+            if c in mess.columns
+        ]
+        merged = merged.merge(mess[mess_cols], on=["h3_cell", "season"], how="left")
+        log.info(
+            "Merged MESS extrapolation surface (%.1f%% extrapolated)",
+            100 * mess["isdm_extrapolated"].mean()
+            if "isdm_extrapolated" in mess.columns
+            else float("nan"),
+        )
+    else:
+        log.warning("No extrapolation surface at %s — MESS cols left NULL", mess_path)
 
     log.info(
         "Merged predictions: %d rows, %d columns",
@@ -87,8 +134,10 @@ def load_predictions() -> None:
     cur = conn.cursor()
 
     try:
-        # Create table + indexes
+        # Create table + backfill columns + indexes
         cur.execute(CREATE_TABLE)
+        for alter_sql in ALTER_COLUMNS:
+            cur.execute(alter_sql)
         for idx_sql in CREATE_INDEXES:
             cur.execute(idx_sql)
 
@@ -96,9 +145,16 @@ def load_predictions() -> None:
         cur.execute("TRUNCATE TABLE ml_whale_predictions;")
         log.info("Truncated ml_whale_predictions")
 
-        # Use COPY via StringIO for speed (50× faster than execute_values)
+        # Use COPY via StringIO for speed (50× faster than execute_values).
+        # Build the full ordered column list, filling any column absent from
+        # the merged frame (e.g. no bootstrap run) with NULL.
         species_cols = [f"isdm_{s}" for s in ISDM_SPECIES]
-        all_cols = ["h3_cell", "season"] + species_cols
+        sd_cols = [f"isdm_{s}_sd" for s in ISDM_SPECIES]
+        mess_cols = ["isdm_mess_value", "isdm_extrapolated", "isdm_mod_variable"]
+        all_cols = ["h3_cell", "season"] + species_cols + sd_cols + mess_cols
+        for col in all_cols:
+            if col not in merged.columns:
+                merged[col] = pd.NA
 
         buf = io.StringIO()
         merged[all_cols].to_csv(buf, index=False, header=False, sep="\t", na_rep="\\N")
