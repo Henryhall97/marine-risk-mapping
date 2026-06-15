@@ -37,6 +37,8 @@ SDM_SPECIES_COLS = [
     "sdm_sperm_whale",
     "sdm_right_whale",
     "sdm_minke_whale",
+    "sdm_gray_whale",
+    "sdm_rices_whale",
 ]
 
 CREATE_TABLE = """
@@ -52,9 +54,17 @@ CREATE TABLE IF NOT EXISTS whale_sdm_projections (
     sdm_sperm_whale       DOUBLE PRECISION,
     sdm_right_whale       DOUBLE PRECISION,
     sdm_minke_whale       DOUBLE PRECISION,
+    sdm_gray_whale        DOUBLE PRECISION,
+    sdm_rices_whale       DOUBLE PRECISION,
     PRIMARY KEY (h3_cell, season, scenario, decade)
 );
 """
+
+ALTER_COLUMNS = [
+    "ALTER TABLE whale_sdm_projections "
+    f"ADD COLUMN IF NOT EXISTS {col} DOUBLE PRECISION;"
+    for col in ("sdm_gray_whale", "sdm_rices_whale")
+]
 
 CREATE_INDEXES = [
     ("CREATE INDEX IF NOT EXISTS idx_sdm_proj_h3 ON whale_sdm_projections (h3_cell);"),
@@ -195,6 +205,8 @@ def load_projections() -> None:
     try:
         # Create table + indexes
         cur.execute(CREATE_TABLE)
+        for alter_sql in ALTER_COLUMNS:
+            cur.execute(alter_sql)
         for idx_sql in CREATE_INDEXES:
             cur.execute(idx_sql)
 

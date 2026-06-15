@@ -99,6 +99,10 @@ features as (
         m.has_strict_protection,
         m.has_no_take_zone,
 
+        -- ── Static: critical habitat + slow zone (item H) ──
+        coalesce(ch.in_critical_habitat, false) as in_critical_habitat,
+        coalesce(slz.in_slow_zone, false)       as in_slow_zone,
+
         -- ── Static: proximity ──────────────────────────
         p.dist_to_nearest_whale_km,
         p.dist_to_nearest_ship_km,
@@ -152,6 +156,10 @@ features as (
         on gs.h3_cell = b.h3_cell
     left join {{ ref('int_mpa_coverage') }} m
         on gs.h3_cell = m.h3_cell
+    left join {{ ref('int_critical_habitat_coverage') }} ch
+        on gs.h3_cell = ch.h3_cell
+    left join {{ ref('int_slow_zone_coverage') }} slz
+        on gs.h3_cell = slz.h3_cell
     left join {{ ref('int_proximity') }} p
         on gs.h3_cell = p.h3_cell
     left join {{ ref('int_ship_strike_density') }} ss
@@ -280,6 +288,8 @@ select
     in_speed_zone,
     in_current_sma,
     in_proposed_zone,
+    in_critical_habitat,
+    in_slow_zone,
     has_nisi_reference
 
 from risk_computed

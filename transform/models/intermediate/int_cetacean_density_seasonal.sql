@@ -24,6 +24,8 @@ with sighting_cells as (
         s.taxonomic_family,
         s.observation_year,
         s.event_date,
+        s.latitude,
+        s.longitude,
         -- Extract month from ISO date string (first 10 chars → date)
         extract(month from left(s.event_date, 10)::date)::int as obs_month
     from {{ source('marine_risk', 'cetacean_sighting_h3') }} m
@@ -91,6 +93,21 @@ cell_season_sightings as (
         count(*) filter (
             where scientific_name = 'Balaenoptera acutorostrata'
         )                                     as minke_whale_sightings,
+
+        -- Gray whale (Eschrichtius robustus) — coastal, often struck
+        count(*) filter (
+            where scientific_name = 'Eschrichtius robustus'
+        )                                     as gray_whale_sightings,
+        -- Rice's whale: critically endangered Gulf of Mexico endemic,
+        -- split from the Bryde's complex in 2021. OBIS still files these
+        -- under Balaenoptera edeni/ricei, so restrict to the GoM bbox.
+        count(*) filter (
+            where scientific_name in (
+                    'Balaenoptera ricei', 'Balaenoptera edeni'
+                )
+                and longitude between -98.0 and -80.5
+                and latitude between 24.0 and 31.0
+        )                                     as rices_whale_sightings,
 
         -- Temporal span
         min(observation_year)                 as earliest_year,

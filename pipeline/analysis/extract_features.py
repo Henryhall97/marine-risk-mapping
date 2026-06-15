@@ -14,9 +14,15 @@ import argparse
 import logging
 
 import h3
+import numpy as np
 import pandas as pd
 import psycopg2
 
+from pipeline.analysis.evaluate import (
+    empirical_variogram,
+    h3_resolution_for_range_km,
+    variogram_range_km,
+)
 from pipeline.config import (
     DB_CONFIG,
     H3_CV_RESOLUTION,
@@ -24,6 +30,8 @@ from pipeline.config import (
     N_CV_FOLDS,
     SDM_FEATURES_FILE,
     SDM_SEASONAL_FEATURES_FILE,
+    SDM_TARGET_GROUP_BACKGROUND,
+    SDM_THINNING_DIST_KM,
     STRIKE_FEATURES_FILE,
 )
 
@@ -37,27 +45,179 @@ log = logging.getLogger(__name__)
 def _assign_spatial_blocks(
     df: pd.DataFrame,
     h3_col: str = "h3_cell",
+    cv_resolution: int | None = None,
 ) -> pd.DataFrame:
     """Assign each row to a spatial block and a CV fold.
 
-    Uses H3 parent cells at CV resolution (res-2, ~158 km edge)
-    to group nearby cells. All features stay at res-7 — the parent
-    cell is only used as a block identifier for fold assignment.
+    Uses H3 parent cells at the CV block resolution to group nearby
+    cells. All features stay at res-7 — the parent cell is only used as
+    a block identifier for fold assignment. When ``cv_resolution`` is
+    None the configured default (``H3_CV_RESOLUTION``, res-2 ~158 km)
+    is used; pass a variogram-driven resolution to size blocks to the
+    data's spatial autocorrelation range (item E).
 
     For seasonal data, all 4 seasons for a given cell land in the
     same fold, preventing spatial leakage across the train/test
     boundary (since block assignment is purely spatial).
     """
+    res = H3_CV_RESOLUTION if cv_resolution is None else cv_resolution
     df = df.copy()
     # h3_cell is stored as BIGINT; h3 v4 cell_to_parent expects hex strings.
     df["spatial_block"] = df[h3_col].apply(
-        lambda c: h3.cell_to_parent(h3.int_to_str(int(c)), H3_CV_RESOLUTION)
+        lambda c: h3.cell_to_parent(h3.int_to_str(int(c)), res)
     )
     # Deterministic fold assignment: sorted block IDs mod N_CV_FOLDS
     unique_blocks = sorted(df["spatial_block"].unique())
     block_to_fold = {b: i % N_CV_FOLDS for i, b in enumerate(unique_blocks)}
     df["cv_fold"] = df["spatial_block"].map(block_to_fold)
     return df
+
+
+def _estimate_cv_resolution(
+    df: pd.DataFrame,
+    target_col: str,
+    lat_col: str = "cell_lat",
+    lon_col: str = "cell_lon",
+) -> int | None:
+    """Pick a CV block resolution from the target's spatial autocorrelation.
+
+    Computes the empirical variogram of the binary target across space,
+    estimates the practical autocorrelation range, and maps it to the
+    finest H3 resolution whose blocks are still ≥ that range (item E).
+    Falls back to the configured default if the variogram does not
+    plateau. Logs the decision for traceability.
+    """
+    if not {target_col, lat_col, lon_col}.issubset(df.columns):
+        return None
+    sub = df[[target_col, lat_col, lon_col]].dropna()
+    if len(sub) < 100:
+        return None
+    centres, gamma, _ = empirical_variogram(
+        sub[target_col].to_numpy(dtype=float),
+        sub[lat_col].to_numpy(dtype=float),
+        sub[lon_col].to_numpy(dtype=float),
+    )
+    range_km = variogram_range_km(centres, gamma)
+    res = h3_resolution_for_range_km(range_km)
+    if res is None:
+        log.info(
+            "Variogram for %s did not plateau (range=%.1f km) — "
+            "using default CV res-%d.",
+            target_col,
+            range_km,
+            H3_CV_RESOLUTION,
+        )
+        return None
+    edge = h3.average_hexagon_edge_length(res, unit="km")
+    log.info(
+        "Variogram-driven CV block: %s range=%.1f km → H3 res-%d (~%.0f km edge).",
+        target_col,
+        range_km,
+        res,
+        edge,
+    )
+    return res
+
+
+# ── Sampling-bias correction (item C) ───────────────────────
+
+
+def _equirect_km(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
+    """Equirectangular lat/lon → local planar km (short-range OK)."""
+    lat0 = float(np.mean(lat)) if len(lat) else 0.0
+    x = np.radians(lon) * 6371.0 * np.cos(np.radians(lat0))
+    y = np.radians(lat) * 6371.0
+    return np.column_stack([x, y])
+
+
+def apply_spatial_thinning(
+    lat: np.ndarray,
+    lon: np.ndarray,
+    min_dist_km: float,
+    seed: int = 42,
+) -> np.ndarray:
+    """Greedy spatial thinning of presence points (Aiello-Lammens 2015).
+
+    Returns a boolean mask selecting a subset such that no two retained
+    points lie within ``min_dist_km`` of each other, reducing the weight
+    of spatially oversampled survey areas. Random visit order (seeded).
+    """
+    n = len(lat)
+    if min_dist_km <= 0 or n == 0:
+        return np.ones(n, dtype=bool)
+    coords = _equirect_km(np.asarray(lat, float), np.asarray(lon, float))
+    rng = np.random.RandomState(seed)
+    order = rng.permutation(n)
+    keep = np.zeros(n, dtype=bool)
+    kept_coords: list[np.ndarray] = []
+    min_sq = min_dist_km * min_dist_km
+    for i in order:
+        c = coords[i]
+        ok = True
+        for kc in kept_coords:
+            dx = c[0] - kc[0]
+            dy = c[1] - kc[1]
+            if dx * dx + dy * dy < min_sq:
+                ok = False
+                break
+        if ok:
+            keep[i] = True
+            kept_coords.append(c)
+    return keep
+
+
+def build_training_mask(
+    df: pd.DataFrame,
+    focal_col: str,
+    group_col: str = "total_sightings",
+    lat_col: str = "cell_lat",
+    lon_col: str = "cell_lon",
+    thinning_dist_km: float = SDM_THINNING_DIST_KM,
+    target_group_background: bool = SDM_TARGET_GROUP_BACKGROUND,
+    seed: int = 42,
+) -> np.ndarray:
+    """Build a per-species training-row mask (item C).
+
+    Combines target-group background and spatial thinning:
+      * Target-group background (Phillips 2009): background/absence rows
+        are restricted to cells where the target group (any cetacean,
+        ``group_col`` > 0) was observed — i.e. where there was survey
+        effort. Cells with no cetacean observation are excluded from
+        *fitting* (they are still scored by the final model downstream).
+      * Spatial thinning (Aiello-Lammens 2015): presence rows closer than
+        ``thinning_dist_km`` to a retained presence are dropped.
+
+    Returns a boolean mask aligned to ``df`` rows; non-selected rows are
+    excluded from model fitting only.
+    """
+    presence = df[focal_col].to_numpy() > 0
+    mask = np.ones(len(df), dtype=bool)
+
+    if target_group_background and group_col in df.columns:
+        surveyed = df[group_col].to_numpy() > 0
+        # Target-group background only applies when the focal species is a
+        # strict subset of the surveyed target group — i.e. there exist
+        # surveyed cells that are NOT focal presences (genuine absences).
+        # For the aggregate any-whale target, presence == surveyed, leaving
+        # zero background; restricting there would drop every negative and
+        # leave a single-class fit. Skip TGB in that degenerate case.
+        background = surveyed & ~presence
+        if background.any():
+            # Eligible = presences OR surveyed (target-group) background.
+            mask = presence | surveyed
+
+    if thinning_dist_km and thinning_dist_km > 0 and presence.any():
+        retain = apply_spatial_thinning(
+            df.loc[presence, lat_col].to_numpy(),
+            df.loc[presence, lon_col].to_numpy(),
+            thinning_dist_km,
+            seed=seed,
+        )
+        thin_mask = np.ones(len(df), dtype=bool)
+        thin_mask[np.where(presence)[0]] = retain
+        mask = mask & thin_mask
+
+    return mask
 
 
 # ── Feature lists ───────────────────────────────────────────
@@ -203,6 +363,8 @@ SELECT
     blue_whale_present,
     sperm_whale_present,
     minke_whale_present,
+    gray_whale_present,
+    rices_whale_present,
     -- Ocean covariates (seasonal)
     sst,
     sst_sd,
@@ -334,7 +496,8 @@ def _check_fold_balance(
 def extract_strike_features() -> pd.DataFrame:
     """Extract and prepare strike risk training features."""
     df = _extract_table(STRIKE_QUERY, "fct_strike_risk_training")
-    df = _assign_spatial_blocks(df)
+    cv_res = _estimate_cv_resolution(df, "has_strike")
+    df = _assign_spatial_blocks(df, cv_resolution=cv_res)
     df = _encode_categoricals(df)
     df = _prepare_dtypes(df)
     _check_fold_balance(df, "has_strike", "Strike")
@@ -351,7 +514,8 @@ def extract_strike_features() -> pd.DataFrame:
 def extract_sdm_features() -> pd.DataFrame:
     """Extract and prepare whale SDM training features."""
     df = _extract_table(SDM_QUERY, "fct_whale_sdm_training")
-    df = _assign_spatial_blocks(df)
+    cv_res = _estimate_cv_resolution(df, "whale_present")
+    df = _assign_spatial_blocks(df, cv_resolution=cv_res)
     df = _encode_categoricals(df)
     df = _prepare_dtypes(df)
     _check_fold_balance(df, "whale_present", "SDM")
@@ -382,8 +546,10 @@ def extract_sdm_seasonal_features() -> pd.DataFrame:
     """Extract and prepare seasonal whale SDM training features."""
     df = _extract_table(SDM_SEASONAL_QUERY, "fct_whale_sdm_seasonal")
 
-    # Spatial block CV — same cell → same fold across all 4 seasons
-    df = _assign_spatial_blocks(df)
+    # Spatial block CV — same cell → same fold across all 4 seasons.
+    # Block size driven by the target's spatial autocorrelation range.
+    cv_res = _estimate_cv_resolution(df, "whale_present")
+    df = _assign_spatial_blocks(df, cv_resolution=cv_res)
     df = _encode_categoricals(df)
     df = _encode_season(df)
     df = _prepare_dtypes(df)

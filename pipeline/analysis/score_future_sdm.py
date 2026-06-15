@@ -41,15 +41,25 @@ import numpy as np
 import pandas as pd
 import xgboost as xgb
 
+from pipeline.analysis.evaluate import apply_calibrator
 from pipeline.config import (
     CMIP6_DECADES,
     CMIP6_PROJECTIONS_FILE,
     CMIP6_SCENARIOS,
-    MLRUNS_DIR,
+    ML_DIR,
+    MLFLOW_TRACKING_URI,
     SDM_PROJECTIONS_DIR,
     SDM_SEASONAL_FEATURES_FILE,
     SEASON_ORDER,
 )
+
+# Local artifact root where train_sdm_seasonal.py persists the
+# per-species isotonic calibrator (calibrator.joblib).
+ARTIFACTS_DIR = ML_DIR / "artifacts" / "sdm_seasonal"
+
+# MLflow experiment that holds the seasonal SDM models (must match
+# train_sdm_seasonal.EXPERIMENT_NAME).
+SDM_EXPERIMENT_NAME = "whale_sdm_seasonal"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -66,6 +76,8 @@ SCORE_TARGETS = {
     "sperm_whale_present": "sdm_sperm_whale",
     "right_whale_present": "sdm_right_whale",
     "minke_whale_present": "sdm_minke_whale",
+    "gray_whale_present": "sdm_gray_whale",
+    "rices_whale_present": "sdm_rices_whale",
 }
 
 # Static features that do NOT change with climate projections.
@@ -96,116 +108,117 @@ OCEAN_FEATURE_COLS = [
 ]
 
 
-def _load_trained_models() -> dict[str, tuple[xgb.XGBClassifier, float]]:
-    """Load trained XGBoost models from the MLflow file store.
+def _load_trained_models() -> dict[str, tuple[xgb.XGBClassifier, float, object | None]]:
+    """Load the latest item B+C seasonal SDM model per target.
 
-    Scans the ``mlruns/691897149364591822/`` directory (the
-    ``whale_sdm_seasonal`` experiment) for the best model per
-    target column.  Checks both regular run directories and
-    registered-model directories (``models/m-*/``).
+    Queries the MLflow tracking store (SQLite backend,
+    ``whale_sdm_seasonal`` experiment) via the MLflow API and picks the
+    MOST RECENT finished run for each target column.  This deliberately
+    mirrors how the current out-of-fold predictions in
+    ``ml_sdm_predictions`` were produced (the last ``--score-grid`` run),
+    so the projected − current delta reflects climate signal rather than a
+    model-version mismatch (copilot-instructions §7).
+
+    NOTE: an earlier version scanned the file store
+    ``mlruns/691897149364591822/`` directly, but that directory only holds
+    the *March* pre-item-C models.  Today's item B+C runs live under the
+    SQLite-backed experiment (id 4), which has no file-based ``params/``
+    entries — so the directory scan silently fell back to stale models.
 
     Returns:
-        Dict mapping target_col → (model, auc).
+        Dict mapping target_col → (model, auc, calibrator).
     """
-    exp_dir = MLRUNS_DIR / "691897149364591822"
-    if not exp_dir.exists():
+    import mlflow
+    import mlflow.xgboost
+
+    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+    exp = mlflow.get_experiment_by_name(SDM_EXPERIMENT_NAME)
+    if exp is None:
         raise RuntimeError(
-            f"MLflow experiment not found: {exp_dir}. "
-            "Train seasonal SDMs first: "
-            "uv run python pipeline/analysis/"
-            "train_sdm_seasonal.py"
+            f"MLflow experiment '{SDM_EXPERIMENT_NAME}' not found at "
+            f"{MLFLOW_TRACKING_URI}. Train seasonal SDMs first: "
+            "uv run python pipeline/analysis/train_sdm_seasonal.py "
+            "--score-grid"
         )
 
-    run_map: dict[str, tuple[str, str, float]] = {}
+    runs = mlflow.search_runs(
+        experiment_ids=[exp.experiment_id],
+        filter_string="attributes.status = 'FINISHED'",
+        order_by=["attributes.start_time DESC"],
+    )
 
-    # ── Search regular run directories ──────────────────────
-    for run_dir in exp_dir.iterdir():
-        if not run_dir.is_dir() or run_dir.name == "models":
+    models: dict[str, tuple[xgb.XGBClassifier, float, object | None]] = {}
+    wanted = set(SCORE_TARGETS)
+    for _, row in runs.iterrows():
+        target = row.get("params.target_col")
+        if not isinstance(target, str) or target not in wanted:
             continue
-        param_file = run_dir / "params" / "target_col"
-        if not param_file.exists():
-            continue
-        target = param_file.read_text().strip()
+        if target in models:
+            continue  # already have the most-recent run for this target
 
-        # Find model.ubj in artifacts/model/
-        model_path = None
-        ubj = run_dir / "artifacts" / "model" / "model.ubj"
-        if ubj.exists():
-            model_path = str(ubj)
-        # Also check artifacts/model.ubj (flat layout)
-        ubj_flat = run_dir / "artifacts" / "model.ubj"
-        if model_path is None and ubj_flat.exists():
-            model_path = str(ubj_flat)
-
-        if model_path is None:
+        run_id = row["run_id"]
+        try:
+            model = mlflow.xgboost.load_model(f"runs:/{run_id}/model")
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "Run %s for %s has no loadable model: %s",
+                run_id[:8],
+                target,
+                exc,
+            )
             continue
 
-        # Read AUC metric
-        auc_file = run_dir / "metrics" / "cv_roc_auc_mean"
-        auc = 0.0
-        if auc_file.exists():
-            try:
-                parts = auc_file.read_text().strip().split()
-                auc = float(parts[1]) if len(parts) >= 2 else 0.0
-            except (ValueError, IndexError):
-                pass
-
-        if target not in run_map or auc > run_map[target][2]:
-            run_map[target] = (run_dir.name, model_path, auc)
-
-    # ── Search registered model directories (models/m-*/) ──
-    models_dir = exp_dir / "models"
-    if models_dir.is_dir():
-        for model_dir in models_dir.iterdir():
-            if not model_dir.is_dir():
-                continue
-            param_file = model_dir / "params" / "target_col"
-            if not param_file.exists():
-                continue
-            target = param_file.read_text().strip()
-
-            # model.ubj lives directly in artifacts/
-            model_path = None
-            ubj = model_dir / "artifacts" / "model.ubj"
-            if ubj.exists():
-                model_path = str(ubj)
-            ubj_sub = model_dir / "artifacts" / "model" / "model.ubj"
-            if model_path is None and ubj_sub.exists():
-                model_path = str(ubj_sub)
-
-            if model_path is None:
-                continue
-
-            # Read AUC metric from metrics/
-            auc_file = model_dir / "metrics" / "cv_roc_auc_mean"
-            auc = 0.0
-            if auc_file.exists():
-                try:
-                    parts = auc_file.read_text().strip().split()
-                    auc = float(parts[1]) if len(parts) >= 2 else 0.0
-                except (ValueError, IndexError):
-                    pass
-
-            if target not in run_map or auc > run_map[target][2]:
-                run_map[target] = (
-                    model_dir.name,
-                    model_path,
-                    auc,
-                )
-
-    models: dict[str, tuple[xgb.XGBClassifier, float]] = {}
-    for target_col, (run_id, model_path, auc) in run_map.items():
-        m = xgb.XGBClassifier()
-        m.load_model(model_path)
-        models[target_col] = (m, auc)
+        auc = row.get("metrics.cv_roc_auc_mean")
+        auc = float(auc) if auc is not None and not pd.isna(auc) else float("nan")
+        cal = _load_calibrator(target)
+        models[target] = (model, auc, cal)
         log.info(
-            "Loaded model: %s (run=%s, AUC=%.4f)",
-            target_col,
+            "Loaded model: %s (run=%s, AUC=%.4f, calibrated=%s)",
+            target,
             run_id[:8],
             auc,
+            cal is not None,
+        )
+
+    missing = wanted - set(models)
+    if missing:
+        log.warning(
+            "No FINISHED MLflow run found for: %s — these species will be "
+            "skipped in projections.",
+            ", ".join(sorted(missing)),
         )
 
     return models
+
+
+def _load_calibrator(target_col: str):
+    """Load the per-species isotonic calibrator (item B).
+
+    The calibrator is fit on honest OOF predictions during training and
+    persisted in the local ``artifacts/sdm_seasonal/<species>/`` directory
+    (written alongside every score-grid run).  Applying it here keeps
+    projected probabilities on the SAME calibrated scale as the current OOF
+    predictions in ``ml_sdm_predictions`` — without this, the projected −
+    current delta conflates the calibration gap with the climate signal
+    (copilot-instructions §7).
+
+    Returns the fitted calibrator, or ``None`` if not found.
+    """
+    import joblib
+
+    target_short = target_col.replace("_present", "")
+    path = ARTIFACTS_DIR / target_short / "calibrator.joblib"
+    if path.exists():
+        try:
+            return joblib.load(path)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Failed to load calibrator %s: %s", path, exc)
+    log.warning(
+        "No calibrator found for %s — projections will be UNCALIBRATED "
+        "and inconsistent with current OOF scale.",
+        target_col,
+    )
+    return None
 
 
 def _load_static_features() -> pd.DataFrame:
@@ -460,7 +473,7 @@ def score_projections(
                     saved.append(out_path)
                     continue
 
-                model, auc = models[target_col]
+                model, auc, calibrator = models[target_col]
 
                 # Align features to trained model
                 trained_feats = model.get_booster().feature_names
@@ -473,8 +486,12 @@ def score_projections(
                     fill_value=0,
                 )
 
-                # Predict
+                # Predict (raw), then apply the item B isotonic calibrator
+                # so projected probabilities match the calibrated current
+                # OOF scale (consistent methodology — §7).
                 probs = model.predict_proba(X)[:, 1]
+                if calibrator is not None:
+                    probs = apply_calibrator(calibrator, probs)
 
                 result = pd.DataFrame(
                     {

@@ -73,6 +73,10 @@ base as (
             as sperm_whale_present,
         case when coalesce(c.minke_whale_sightings, 0) > 0 then 1 else 0 end
             as minke_whale_present,
+        case when coalesce(c.gray_whale_sightings, 0) > 0 then 1 else 0 end
+            as gray_whale_present,
+        case when coalesce(c.rices_whale_sightings, 0) > 0 then 1 else 0 end
+            as rices_whale_present,
 
         -- ── Ocean environment (seasonal) ─────────────
         oc.sst,
@@ -157,6 +161,8 @@ select
     blue_whale_present,
     sperm_whale_present,
     minke_whale_present,
+    gray_whale_present,
+    rices_whale_present,
     sst,
     sst_sd,
     mld,

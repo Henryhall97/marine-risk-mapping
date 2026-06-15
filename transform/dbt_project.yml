@@ -118,6 +118,47 @@ vars:
   whale_ml_w_max: 0.30
   whale_ml_w_mean: 0.20
 
+  # ── ISDM + SDM ensemble weights (Phase 1b item D) ──────────────
+  # Per-species skill weights for combining the ISDM and SDM whale
+  # predictions when BOTH models cover a cell.  Each pair sums to 1.0
+  # and is consumed by the ensemble_prob() macro.  Weights are
+  # proportional to per-species spatial-CV skill (AUC − 0.5):
+  #   skill_isdm / (skill_isdm + skill_sdm).
+  # Right whale + minke are SDM-only (no ISDM model) and never use
+  # these vars.  Defaults below derive from the Phase 1b retrain CV
+  # AUCs; editing them runs a one-line ensemble sensitivity test.
+  ensemble_w_isdm_blue: 0.50
+  ensemble_w_sdm_blue: 0.50
+  ensemble_w_isdm_fin: 0.50
+  ensemble_w_sdm_fin: 0.50
+  ensemble_w_isdm_humpback: 0.50
+  ensemble_w_sdm_humpback: 0.50
+  ensemble_w_isdm_sperm: 0.50
+  ensemble_w_sdm_sperm: 0.50
+
+  # ── Per-species strike vulnerability weights (Phase 1b item G) ──
+  # Relative vulnerability of each species to a lethal vessel strike,
+  # used to build a strike-weighted whale exposure = Σ Pᵢ × vulnᵢ that
+  # feeds the whale×traffic interaction sub-score INSTEAD of the
+  # species-agnostic any_whale_prob.  Surface-active, slow, coastal
+  # baleen whales (right, fin, humpback) are most strike-prone;
+  # deep-diving sperm whales and small fast minke are less so.
+  # Rationale: NARW + fin + humpback dominate observed strike records
+  # (Rockwood 2017/2021; IWC strike database).  any_whale_prob is
+  # retained as a diagnostic column.
+  strike_vuln_right: 1.00
+  strike_vuln_fin: 0.90
+  strike_vuln_humpback: 0.80
+  strike_vuln_blue: 0.70
+  strike_vuln_sperm: 0.35
+  strike_vuln_minke: 0.40
+  # Gray whale: coastal migratory, surface-active → frequently struck
+  # (humpback-like vulnerability).  Rice's whale: critically endangered
+  # GoM endemic (~50 animals) for which ship strike is the primary
+  # existential threat → near right-whale tier.
+  strike_vuln_gray: 0.75
+  strike_vuln_rices: 0.95
+
   # Strike history (3 components)
   strike_w_total: 0.40
   strike_w_fatal: 0.35
@@ -146,13 +187,19 @@ vars:
 
   # Protection gap tiered scores (lower = better protected)
   # Proposed speed zones removed — they are not enforceable protection.
-  # SMAs are voluntary speed advisories with limited enforcement,
-  # so they provide a small bonus on top of MPA tiers but rank
-  # far below real spatial exclusions when standing alone.
+  # "Voluntary advisory" = current SMA OR active right-whale slow zone
+  # (DMA); both are voluntary 10-knot speed advisories with limited
+  # enforcement, so they provide a small bonus on top of MPA tiers but
+  # rank far below real spatial exclusions when standing alone.
+  # Phase 1b item H added two critical-habitat tiers: NMFS ESA critical
+  # habitat (Final only) is strong, enforceable spatial protection
+  # ranked just below strict IUCN MPAs and above generic MPAs.
   protection_notake_and_sma: 0.10
   protection_notake_only: 0.15
   protection_strict_and_sma: 0.25
+  protection_critical_and_sma: 0.30
   protection_strict_mpa: 0.35
+  protection_critical_only: 0.40
   protection_mpa_and_sma: 0.50
   protection_any_mpa: 0.60
   protection_sma_only: 0.80

@@ -251,26 +251,40 @@
 -- Including them inverted the signal: corridors deemed
 -- dangerous enough to warrant a proposal scored as "protected".
 --
--- SMAs are voluntary speed advisories (limited enforcement),
--- so they provide only a small bonus on top of real spatial
--- protection (MPAs / no-take zones).  Standing alone, an SMA
--- is scored only marginally better than no protection at all.
+-- "Voluntary advisory" combines current SMAs and active right
+-- whale slow zones (DMAs) — both are voluntary 10-knot speed
+-- advisories with limited enforcement, so they provide only a
+-- small bonus on top of real spatial protection (MPAs / no-take
+-- zones / critical habitat).
+--
+-- Phase 1b item (H): NMFS ESA-designated critical habitat (Final
+-- only — proposed units excluded upstream) is added as strong,
+-- enforceable spatial protection.  It ranks just below strict IUCN
+-- MPAs and above generic MPAs.  Biologically Important Areas (BIAs)
+-- are deliberately NOT included — a BIA flags whale importance, not
+-- a protective regulation, so it does not reduce the protection gap.
 
 {% macro protection_gap_score() %}
+{# Voluntary advisory = SMA or active slow zone (DMA) #}
+{%- set voluntary = "(coalesce(in_current_sma, false) or coalesce(in_slow_zone, false))" -%}
 case
-    when coalesce(has_no_take_zone, false) and coalesce(in_current_sma, false)
+    when coalesce(has_no_take_zone, false) and {{ voluntary }}
         then {{ var('protection_notake_and_sma') }}
     when coalesce(has_no_take_zone, false)
         then {{ var('protection_notake_only') }}
-    when coalesce(has_strict_protection, false) and coalesce(in_current_sma, false)
+    when coalesce(has_strict_protection, false) and {{ voluntary }}
         then {{ var('protection_strict_and_sma') }}
+    when coalesce(in_critical_habitat, false) and {{ voluntary }}
+        then {{ var('protection_critical_and_sma') }}
     when coalesce(has_strict_protection, false)
         then {{ var('protection_strict_mpa') }}
-    when in_mpa and coalesce(in_current_sma, false)
+    when coalesce(in_critical_habitat, false)
+        then {{ var('protection_critical_only') }}
+    when in_mpa and {{ voluntary }}
         then {{ var('protection_mpa_and_sma') }}
     when in_mpa
         then {{ var('protection_any_mpa') }}
-    when coalesce(in_current_sma, false)
+    when {{ voluntary }}
         then {{ var('protection_sma_only') }}
     else {{ var('protection_none') }}
 end
