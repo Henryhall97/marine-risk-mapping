@@ -17,8 +17,8 @@ from fpdf import FPDF
 # ── Paths ────────────────────────────────────────────────────
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-OUTPUT_DIR = ROOT / "docs" / "pdfs"
-OUTPUT_DIR.mkdir(exist_ok=True)
+OUTPUT_DIR = ROOT / "docs" / "pdfs" / "modelling"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_FILE = OUTPUT_DIR / "audio_classification.pdf"
 
 ARTIFACT_DIR = ROOT / "data" / "processed" / "ml" / "artifacts" / "audio_classifier"

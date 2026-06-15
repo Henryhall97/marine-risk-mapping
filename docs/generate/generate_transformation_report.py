@@ -1375,7 +1375,7 @@ def build_report():
         pdf.decision_card(i, title, desc)
 
     # ── Save ────────────────────────────────────────
-    output_path = "docs/pdfs/transformation_and_risk_model.pdf"
+    output_path = "docs/pdfs/modelling/transformation_and_risk_model.pdf"
     pdf.output(output_path)
     print(f"Report saved to {output_path}")
     print(f"  Pages: {pdf.page_no()}")

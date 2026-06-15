@@ -23,8 +23,8 @@ from pathlib import Path
 
 from fpdf import FPDF
 
-OUTPUT_DIR = Path(__file__).resolve().parent.parent / "pdfs"
-OUTPUT_DIR.mkdir(exist_ok=True)
+OUTPUT_DIR = Path(__file__).resolve().parent.parent / "pdfs" / "modelling"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_FILE = OUTPUT_DIR / "iwc_sdm_alignment.pdf"
 
 

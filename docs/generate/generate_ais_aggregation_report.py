@@ -1034,7 +1034,7 @@ def build_report():
     )
 
     # Save
-    output_path = "docs/ais_aggregation_design.pdf"
+    output_path = "docs/pdfs/modelling/ais_aggregation_design.pdf"
     pdf.output(output_path)
     print(f"Report saved to {output_path}")
 
