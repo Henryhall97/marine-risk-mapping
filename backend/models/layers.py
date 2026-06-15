@@ -70,7 +70,14 @@ class OceanCovariateListResponse(BaseModel):
 
 
 class WhalePredictionCell(BaseModel):
-    """ISDM whale prediction for a single (h3_cell, season)."""
+    """ISDM whale prediction for a single (h3_cell, season).
+
+    Values are RELATIVE occurrence probability / habitat suitability
+    (0-1), NOT density or abundance (IWC SDM guidance, Miller & Kelly
+    2023). They rank where a species is more or less likely to occur;
+    they are not animals-per-km2. Absolute density comes from the
+    distance-sampling DSM layer (whale_density_dsm), not the SDM.
+    """
 
     h3_cell: int
     cell_lat: float
@@ -98,7 +105,13 @@ class WhalePredictionListResponse(BaseModel):
 
 
 class SdmPredictionCell(BaseModel):
-    """SDM (OBIS) whale prediction for a single (h3_cell, season)."""
+    """SDM (OBIS) whale prediction for a single (h3_cell, season).
+
+    Values are RELATIVE occurrence probability / habitat suitability
+    (0-1), NOT density or abundance (IWC SDM guidance, Miller & Kelly
+    2023). Trained on OBIS presence-background data; output is a
+    relative suitability ranking, not an animal count.
+    """
 
     h3_cell: int
     cell_lat: float
@@ -584,11 +597,83 @@ class TrafficDensityListResponse(BaseModel):
     data: list[TrafficDensityCell]
 
 
+# ── Whale × vessel exposure (co-occurrence base layer) ─────
+
+
+class ExposureCell(BaseModel):
+    """Whale × vessel co-occurrence for a single H3 cell.
+
+    IWC Phase 1 "exposure-first" reporting (Leaper): the RAW
+    co-occurrence base layer (exposure_raw = P(any whale) × vessel
+    volume) is reported BEFORE any speed-lethality weighting, with the
+    lethality-weighted variant as an optional overlay.
+    """
+
+    h3_cell: int
+    cell_lat: float
+    cell_lon: float
+    season: str | None = None
+    any_whale_prob: float | None = Field(
+        None,
+        description="Ensemble P(any whale present) across 6 species",
+    )
+    whale_prob_sd: float | None = Field(
+        None,
+        description="Mean bootstrap SD of whale probability (uncertainty)",
+    )
+    vessel_volume: float | None = Field(
+        None,
+        description="Avg monthly unique vessels (raw traffic volume)",
+    )
+    speed_lethality: float | None = Field(
+        None,
+        description="Avg V&T speed-lethality index (overlay weighting)",
+    )
+    # BASE layer — raw co-occurrence, no lethality weighting
+    exposure_raw: float | None = Field(
+        None,
+        description="P(any whale) × vessel volume (base layer)",
+    )
+    exposure_score: float | None = Field(
+        None,
+        description="Season-relative percentile rank of exposure_raw",
+    )
+    # Optional speed-lethality-weighted overlay
+    exposure_speed_weighted: float | None = Field(
+        None,
+        description="P(any whale) × speed lethality (overlay)",
+    )
+    exposure_speed_score: float | None = Field(
+        None,
+        description="Season-relative percentile rank of speed-weighted",
+    )
+    isdm_extrapolated: bool | None = Field(
+        None,
+        description="True when outside the ISDM training envelope",
+    )
+    has_traffic: bool | None = None
+
+
+class ExposureListResponse(BaseModel):
+    """Paginated whale × vessel exposure layer."""
+
+    total: int
+    offset: int
+    limit: int
+    data: list[ExposureCell]
+
+
 # ── SDM projections (CMIP6 climate) ────────────────────────
 
 
 class SdmProjectionCell(BaseModel):
-    """Projected whale habitat probability for one (cell, season, scenario, decade)."""
+    """Projected whale habitat probability for one (cell, season, scenario, decade).
+
+    Values are RELATIVE occurrence probability / habitat suitability
+    (0-1), NOT density or abundance (IWC SDM guidance, Miller & Kelly
+    2023). Projected onto CMIP6 bias-corrected covariates; future
+    cells outside the training envelope are extrapolation.
+    """
 
     h3_cell: int
     cell_lat: float
@@ -645,7 +730,12 @@ class ProjectionSummaryResponse(BaseModel):
 
 
 class IsdmProjectionCell(BaseModel):
-    """Projected ISDM whale habitat probability."""
+    """Projected ISDM whale habitat probability.
+
+    Values are RELATIVE occurrence probability / habitat suitability
+    (0-1), NOT density or abundance (IWC SDM guidance, Miller & Kelly
+    2023).
+    """
 
     h3_cell: int
     cell_lat: float

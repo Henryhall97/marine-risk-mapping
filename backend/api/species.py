@@ -17,6 +17,8 @@ from backend.models.layers import (
 from backend.models.species import (
     CrosswalkEntry,
     CrosswalkResponse,
+    IwcCrosswalkEntry,
+    IwcCrosswalkResponse,
     SpeciesInfo,
     SpeciesListResponse,
     SpeciesRiskCell,
@@ -53,6 +55,20 @@ def get_crosswalk():
     rows = species_svc.list_crosswalk()
     data = [CrosswalkEntry(**r) for r in rows]
     return CrosswalkResponse(total=len(data), data=data)
+
+
+@router.get("/iwc-crosswalk", response_model=IwcCrosswalkResponse)
+def get_iwc_crosswalk():
+    """Return the IWC terminology crosswalk.
+
+    Maps the platform's internal terms / field names to the
+    standardised vocabulary of the IWC strike-risk reporting
+    standard (Leaper et al. 2026) and the model-based abundance /
+    SDM guidance (Miller & Kelly 2023).
+    """
+    rows = species_svc.list_iwc_crosswalk()
+    data = [IwcCrosswalkEntry(**r) for r in rows]
+    return IwcCrosswalkResponse(total=len(data), data=data)
 
 
 @router.get("/risk", response_model=SpeciesRiskListResponse)

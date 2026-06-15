@@ -24,6 +24,7 @@ from pipeline.config import (
     AIS_H3_PARQUET,
     AIS_H3_TEST_PARQUET,
     AIS_RAW_DIR,
+    AIS_REQUIRED_LENGTH_M,
     AIS_YEARS,
     DB_CONFIG,
     DEEP_DRAFT_M,
@@ -390,6 +391,22 @@ def build_aggregation_query(*, test_mode: bool = False) -> str:
         -- ── Traffic volume ──────────────────────────────
         sum(vessel_ping_count)                as ping_count,
         count(*)                              as unique_vessels,
+
+        -- ── AIS-required traffic (IWC standard scoping) ──
+        -- Vessels LEGALLY mandated to broadcast AIS (SOLAS Class-A
+        -- proxy): length ≥ AIS_REQUIRED_LENGTH_M OR any passenger
+        -- vessel type regardless of length. Emitted ALONGSIDE the
+        -- all-traffic counts so non-AIS small craft are an explicit,
+        -- documented blind spot (Rockwood convention) rather than a
+        -- silent omission. See pipeline/config.py AIS_REQUIRED_LENGTH_M.
+        count(*) filter (
+            where vessel_length >= {AIS_REQUIRED_LENGTH_M}
+               or vessel_type in ({passenger})
+        )                                     as ais_required_vessels,
+        sum(vessel_ping_count) filter (
+            where vessel_length >= {AIS_REQUIRED_LENGTH_M}
+               or vessel_type in ({passenger})
+        )                                     as ais_required_pings,
 
         -- ── Ping-weighted speed (exposure measure) ──────
         -- A vessel lingering for hours DOES create more

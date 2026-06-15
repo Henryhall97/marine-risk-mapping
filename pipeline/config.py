@@ -60,9 +60,23 @@ NAV_STATUS_RESTRICTED: tuple[int, ...] = (2, 3)  # Not under command / restricte
 
 # ── Speed & size thresholds ──────────────────────────────────
 HIGH_SPEED_KNOTS = 10  # NOAA lethal strike threshold
-LARGE_VESSEL_LENGTH_M = 100  # Ocean-going commercial
-WIDE_VESSEL_WIDTH_M = 20  # Wide-beam commercial
-DEEP_DRAFT_M = 8  # Deep-draft vessel
+LARGE_VESSEL_LENGTH_M = 100  # Ocean-going commercial (RISK-FLAGGING threshold)
+WIDE_VESSEL_WIDTH_M = 20  # Wide-beam commercial (RISK-FLAGGING threshold)
+DEEP_DRAFT_M = 8  # Deep-draft vessel (RISK-FLAGGING threshold)
+
+# ── AIS carriage requirement (SOLAS Class-A proxy) ───────────
+# IWC strike-risk standard distinguishes "AIS-required" vessels —
+# those LEGALLY mandated to broadcast AIS — from voluntarily-equipped
+# small craft. SOLAS mandates AIS for ≥300 GT international / ≥500 GT
+# all tonnage / ALL passenger ships. AIS feeds lack reliable gross
+# tonnage, so we proxy the mandate with vessel length (~20 m / 65 ft)
+# PLUS all passenger vessel types regardless of length.
+# This is NOT a risk-flagging threshold (cf. LARGE_VESSEL_LENGTH_M);
+# it scopes traffic to Rockwood's "AIS-required large commercial"
+# convention so non-AIS small craft become an explicit, documented
+# blind spot rather than a silent omission. See aggregate_ais.py
+# (ais_required_vessels / ais_required_pings).
+AIS_REQUIRED_LENGTH_M = 20  # SOLAS Class-A practical length proxy
 
 # ── Vanderlaan & Taggart (2007) speed-lethality logistic ─────
 # P(lethal | speed) = 1 / (1 + exp(-(β₀ + β₁ × speed_knots)))
@@ -163,6 +177,33 @@ NISI_ISDM_FILES = {
 OCEAN_DIR = RAW_DIR / "ocean"
 OCEAN_COVARIATES_FILE = OCEAN_DIR / "ocean_covariates.parquet"
 
+# ── Survey line-transect data (Phase 3 DSM density engine) ──
+# Harmonised tidy tables produced by pipeline/ingestion/download_survey_*.py.
+# Python does download + tidy ONLY; all statistics (detection function,
+# segmentation, DSM GAM) live in the R density/ toolchain.
+SURVEY_DIR = RAW_DIR / "surveys"
+GOMMAPPS_DIR = SURVEY_DIR / "gommapps"
+GOMMAPPS_CACHE_DIR = GOMMAPPS_DIR / "ncei_csv"
+GOMMAPPS_SEGMENTS_FILE = GOMMAPPS_DIR / "survey_segments.parquet"
+GOMMAPPS_SIGHTINGS_FILE = GOMMAPPS_DIR / "survey_sightings.parquet"
+GOMMAPPS_COVARIATES_FILE = GOMMAPPS_DIR / "survey_detection_covariates.parquet"
+
+# NCEI archive accessions holding GoMMAPPS visual line-transect data
+# (vessel: Gordon Gunter + Pisces; aerial: Twin Otter).  Turtle/seabird/CTD
+# accessions in the same programme lack VisualSightingData CSVs and are
+# skipped automatically by the downloader.
+GOMMAPPS_ACCESSIONS: list[str] = [
+    "0241032",
+    "0242273",
+    "0243468",
+    "0243469",
+    "0243654",
+    "0244002",
+    "0247205",
+    "0247206",
+    "0256800",
+]
+
 # ── CMIP6 climate projections ──────────────────────────────
 CMIP6_DIR = RAW_DIR / "cmip6"
 CMIP6_PROJECTIONS_FILE = CMIP6_DIR / "cmip6_projections.parquet"
@@ -219,6 +260,19 @@ SEASON_ORDER: list[str] = ["winter", "spring", "summer", "fall"]
 # ── Spatial cross-validation ────────────────────────────────
 H3_CV_RESOLUTION = 2  # ~158 km edge — parent cells for CV fold grouping
 N_CV_FOLDS = 5
+
+# ── SDM sampling-bias correction (IWC Phase 1b item C) ──────
+# Target-group background (Phillips et al. 2009): restrict SDM training
+# background/absence to cells where the target group (any cetacean) was
+# observed, so the background reflects survey effort rather than raw
+# environmental availability. Cells with no cetacean observation at all
+# are treated as "unsurveyed" and excluded from model fitting (they are
+# still scored by the final model for grid coverage).
+SDM_TARGET_GROUP_BACKGROUND = True
+# Spatial thinning (Aiello-Lammens et al. 2015, spThin): drop presence
+# records closer than this distance to a retained presence, reducing the
+# influence of spatially oversampled survey areas. 0 disables thinning.
+SDM_THINNING_DIST_KM = 10.0
 
 # ── Collision risk sub-score weights (from dbt vars) ────────
 # dbt_project.yml is the single source of truth.

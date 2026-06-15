@@ -100,20 +100,23 @@ const LAYER_GUIDE: Record<LayerType, { title: string; body: string }> = {
     title: "Whale Habitat (Expert)",
     body:
       "Trained on expert-curated risk data (Nisi et al. 2024) combined " +
-      "with 7 environmental covariates. Shows predicted whale presence " +
-      "probability per cell per season. Select a species or view the " +
-      "combined any-whale probability. Choose a future decade + climate " +
-      "scenario to project habitat shifts under CMIP6 ocean warming.",
+      "with 7 environmental covariates. Shows relative occurrence " +
+      "probability / habitat suitability per cell per season \u2014 a " +
+      "relative ranking of where whales are more likely to occur, NOT " +
+      "density or abundance (animals per km\u00b2). Select a species or " +
+      "view the combined any-whale probability. Choose a future decade + " +
+      "climate scenario to project habitat shifts under CMIP6 ocean warming.",
   },
   sdm: {
     title: "Whale Habitat (Observed)",
     body:
       "Trained on 1 million real-world OBIS whale sightings with spatial " +
-      "cross-validation. View current predicted habitat, or switch to a " +
-      "future decade to see how habitat may shift under climate change " +
-      "(SSP2-4.5 moderate / SSP5-8.5 high emissions) through the 2080s. " +
-      "Use 'Change from Today' to see habitat gains (blue) and losses (red) " +
-      "relative to the current baseline.",
+      "cross-validation. Shows relative occurrence probability / habitat " +
+      "suitability \u2014 NOT density or abundance. View current predicted " +
+      "habitat, or switch to a future decade to see how habitat may shift " +
+      "under climate change (SSP2-4.5 moderate / SSP5-8.5 high emissions) " +
+      "through the 2080s. Use 'Change from Today' to see habitat gains " +
+      "(blue) and losses (red) relative to the current baseline.",
   },
   cetacean_density: {
     title: "Sighting Records",
@@ -129,6 +132,16 @@ const LAYER_GUIDE: Record<LayerType, { title: string; body: string }> = {
       "Known whale–ship collision records from NOAA (261 total, 67 geocoded). " +
       "Very sparse — most cells show zero. A non-zero value is highly " +
       "informative but absence doesn't mean safe.",
+  },
+  exposure: {
+    title: "Whale × Ship Exposure",
+    body:
+      "Raw whale–vessel co-occurrence (exposure-first, per the IWC " +
+      "strike-risk reporting standard): predicted P(any whale) × vessel " +
+      "volume, BEFORE any speed-lethality weighting. This is the base " +
+      "layer showing simply where whales and ships overlap. Higher = " +
+      "more co-occurrence. The speed-lethality-weighted variant is " +
+      "available as an optional overlay in the cell detail panel.",
   },
 };
 
@@ -272,6 +285,7 @@ const LAYER_CATEGORIES: {
     HeadingIcon: IconShip,
     layers: [
       { id: "traffic_density", label: "Ship Traffic", Icon: IconShip },
+      { id: "exposure", label: "Whale × Ship Exposure", Icon: IconSkull },
     ],
   },
   {

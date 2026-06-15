@@ -335,6 +335,31 @@ class TestSpecies:
         assert body["total"] == 2
         assert body["data"][0]["species_group"] == "right_whale"
 
+    def test_iwc_crosswalk(self, client: TestClient):
+        mock_rows = [
+            {
+                "term_id": "whale_occurrence",
+                "category": "whale",
+                "standard": "sdm",
+                "our_term": "whale occurrence probability",
+                "our_field": "occurrence_prob",
+                "iwc_term": "relative occurrence probability",
+                "iwc_reference": "Miller & Kelly 2023",
+                "definition": "Relative likelihood of presence (0-1).",
+                "notes": "Not density or abundance.",
+            },
+        ]
+        with patch(
+            "backend.services.species.list_iwc_crosswalk",
+            return_value=mock_rows,
+        ):
+            r = client.get("/api/v1/species/iwc-crosswalk")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["total"] == 1
+        assert body["data"][0]["term_id"] == "whale_occurrence"
+        assert body["data"][0]["standard"] == "sdm"
+
     def test_species_risk(self, client: TestClient):
         mock_row = {
             "h3_cell": 607252735839895551,

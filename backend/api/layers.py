@@ -19,6 +19,8 @@ from backend.models.layers import (
     BathymetryListResponse,
     CetaceanDensityCell,
     CetaceanDensityListResponse,
+    ExposureCell,
+    ExposureListResponse,
     IsdmProjectionCell,
     IsdmProjectionListResponse,
     MPACell,
@@ -364,6 +366,10 @@ def list_whale_predictions(
     """ISDM whale predictions — per-species and aggregate probs.
 
     Filter by season, species, and/or minimum probability.
+
+    Values are RELATIVE occurrence probability / habitat suitability
+    (0-1), NOT density or abundance (IWC SDM guidance, Miller & Kelly
+    2023).
     """
     _validate_bbox(lat_min, lat_max, lon_min, lon_max)
     if season and season not in _VALID_SEASONS:
@@ -437,6 +443,10 @@ def list_sdm_predictions(
     Comparable to ISDM predictions but trained on OBIS
     opportunistic sighting data instead of expert-curated
     Nisi et al. presence/absence.
+
+    Values are RELATIVE occurrence probability / habitat suitability
+    (0-1), NOT density or abundance (IWC SDM guidance, Miller & Kelly
+    2023).
     """
     _validate_bbox(lat_min, lat_max, lon_min, lon_max)
     if season and season not in _VALID_SEASONS:
@@ -471,6 +481,65 @@ def list_sdm_predictions(
     )
     data = [SdmPredictionCell(**r) for r in rows]
     return SdmPredictionListResponse(total=total, offset=offset, limit=limit, data=data)
+
+
+# ── Whale × vessel exposure (co-occurrence base layer) ─────
+
+
+@router.get(
+    "/exposure",
+    response_model=ExposureListResponse,
+)
+def list_exposure(
+    lat_min: float = Query(..., ge=-90, le=90),
+    lat_max: float = Query(..., ge=-90, le=90),
+    lon_min: float = Query(..., ge=-180, le=180),
+    lon_max: float = Query(..., ge=-180, le=180),
+    season: str | None = Query(None),
+    min_exposure: float | None = Query(
+        None,
+        ge=0,
+        le=1,
+        description="Minimum exposure_score (percentile) threshold",
+    ),
+    limit: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+    offset: int = Query(0, ge=0),
+):
+    """Whale × vessel co-occurrence — exposure-first base layer.
+
+    Reports the RAW co-occurrence (exposure_raw = P(any whale) ×
+    vessel volume) BEFORE any speed-lethality weighting, per the IWC
+    strike-risk reporting standard (Leaper). The speed-lethality-
+    weighted variant (exposure_speed_weighted) is included as an
+    optional overlay so users can separate "where whales and ships
+    overlap" from "where overlap is most likely to be lethal".
+    """
+    _validate_bbox(lat_min, lat_max, lon_min, lon_max)
+    if season and season not in _VALID_SEASONS:
+        raise HTTPException(
+            400,
+            f"Invalid season. Must be one of: {sorted(_VALID_SEASONS)}",
+        )
+    total = layer_svc.count_exposure(
+        lat_min,
+        lat_max,
+        lon_min,
+        lon_max,
+        season=season,
+        min_exposure=min_exposure,
+    )
+    rows = layer_svc.get_exposure(
+        lat_min,
+        lat_max,
+        lon_min,
+        lon_max,
+        season=season,
+        min_exposure=min_exposure,
+        limit=limit,
+        offset=offset,
+    )
+    data = [ExposureCell(**r) for r in rows]
+    return ExposureListResponse(total=total, offset=offset, limit=limit, data=data)
 
 
 # ── MPA coverage ────────────────────────────────────────────

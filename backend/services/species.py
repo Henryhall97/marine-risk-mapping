@@ -46,6 +46,24 @@ def list_crosswalk() -> list[dict[str, Any]]:
     return fetch_all(query)
 
 
+def list_iwc_crosswalk() -> list[dict[str, Any]]:
+    """Return the IWC terminology crosswalk seed (all rows).
+
+    Maps the platform's internal terms / field names to the
+    standardised vocabulary of the IWC strike-risk reporting
+    standard (Leaper et al. 2026) and the model-based abundance /
+    SDM guidance (Miller & Kelly 2023). Reviewers use this to
+    align our outputs with the standard Table-1 terms.
+    """
+    query = (
+        "SELECT term_id, category, standard, our_term, our_field, "
+        "  iwc_term, iwc_reference, definition, notes "
+        "FROM iwc_crosswalk "
+        "ORDER BY category, term_id"
+    )
+    return fetch_all(query)
+
+
 def resolve_species(
     species_key: str,
 ) -> dict[str, Any] | None:

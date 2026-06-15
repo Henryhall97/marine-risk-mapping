@@ -36,6 +36,27 @@ class CrosswalkResponse(BaseModel):
     data: list[CrosswalkEntry]
 
 
+class IwcCrosswalkEntry(BaseModel):
+    """One IWC terminology crosswalk row — our term → standard term."""
+
+    term_id: str
+    category: str
+    standard: str
+    our_term: str
+    our_field: str
+    iwc_term: str
+    iwc_reference: str
+    definition: str
+    notes: str | None = None
+
+
+class IwcCrosswalkResponse(BaseModel):
+    """IWC terminology crosswalk mapping our terms to standard terms."""
+
+    total: int
+    data: list[IwcCrosswalkEntry]
+
+
 class SpeciesRiskCell(BaseModel):
     """Per-species risk for a single H3 cell."""
 

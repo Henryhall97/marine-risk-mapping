@@ -95,3 +95,80 @@ seeds:
         tests:
           - unique
           - not_null
+
+  - name: iwc_crosswalk
+    description: >
+      Machine-readable terminology crosswalk mapping the platform's
+      internal terms / field names to the standardised vocabulary of
+      the two IWC Scientific Committee guidance papers:
+        1. Strike-risk reporting standard (Leaper et al. 2026,
+           SC/70/HIM/13) — exposure, encounter rate (R), interactions
+           (N), mortality (I), Pleth, Pstrikedepth, avoidance, VTD.
+        2. Model-based abundance / SDM guidance (Miller & Kelly 2023,
+           SC/69A/ASI/20) — relative occurrence probability vs density
+           vs abundance, detectability g(0), uncertainty, extrapolation.
+
+      Each row records our_term, our_field (representative DB/API
+      field), the corresponding IWC term, a reference, a definition,
+      and notes flagging delivery status (which migration phase ships
+      the quantitative version). Served verbatim by
+      GET /api/v1/species/iwc-crosswalk for reviewers.
+    columns:
+      - name: term_id
+        description: "Stable slug identifier for the crosswalk entry (join key)"
+        tests:
+          - unique
+          - not_null
+
+      - name: category
+        description: >
+          Grouping for the term: whale, vessel, exposure, encounter,
+          mortality, output, or uncertainty.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - whale
+                  - vessel
+                  - exposure
+                  - encounter
+                  - mortality
+                  - output
+                  - uncertainty
+
+      - name: standard
+        description: "Which IWC standard the mapping targets: strike or sdm"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["strike", "sdm"]
+
+      - name: our_term
+        description: "Human-readable platform concept name"
+        tests:
+          - not_null
+
+      - name: our_field
+        description: "Representative DB/API field(s) for this concept (may be planned)"
+        tests:
+          - not_null
+
+      - name: iwc_term
+        description: "Standardised IWC term this concept maps to"
+        tests:
+          - not_null
+
+      - name: iwc_reference
+        description: "Source guidance paper / table reference"
+        tests:
+          - not_null
+
+      - name: definition
+        description: "Short definition of the term"
+        tests:
+          - not_null
+
+      - name: notes
+        description: "Caveats and delivery status (which migration phase ships it)"

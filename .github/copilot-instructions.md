@@ -1,6 +1,6 @@
 # Copilot Project Instructions — Marine Risk Mapping
 
-> **Last updated:** 2026-06-13 (CMIP6 delta-method bias correction via apply_cmip6_delta.py)
+> **Last updated:** 2026-06-14 (IWC alignment PDFs: strike-risk standard + SDM/abundance guidance, with R. Leaper feedback)
 > **Update trigger:** See [§ Keeping This File Current](#keeping-this-file-current) at the bottom.
 
 ---
@@ -920,6 +920,8 @@ Generator scripts go in `docs/generate/`, output PDFs in `docs/pdfs/`.
 | `generate_validation_report.py` | `scoring_validation.pdf` | 8-check scoring validation |
 | `generate_scalability_report.py` | `scalability_assessment.pdf` | 4-layer scalability audit (DB, API, frontend, infra) |
 | `generate_competitive_analysis_report.py` | `competitive_analysis.pdf` | Citizen science platform competitive landscape (iNaturalist, Happywhale, Zooniverse, OBIS) |
+| `generate_iwc_alignment_report.py` | `iwc_strike_risk_alignment.pdf` | Alignment of our strike-risk model with the IWC reporting standard (Leaper et al. 2026, SC/70/HIM/13); incorporates R. Leaper email feedback (exposure-before-V&T weighting, Garrison et al. 2025 Pleth upgrade, speed-risk > lethality, IWC strike DB is a small US sample) |
+| `generate_sdm_alignment_report.py` | `iwc_sdm_alignment.pdf` | Alignment of our SDM/abundance approach with IWC model-based estimation guidance (Miller & Kelly 2023, SC/69A/ASI/20); companion to the strike-risk alignment report |
 | `generate_project_journey.py` | `project_journey.pdf` | Full project overview |
 | `generate_progress_report.py` | `marine_risk_progress_report.pdf` | Early snapshot (superseded) |
 
@@ -935,6 +937,8 @@ update the generator script or regenerate the PDF:
 - **ML model retrained or architecture changed** → `phase7_report`, `audio_report`
 - **API endpoints added/removed** → `phase8_report`
 - **Scoring validation updated** → `validation_report`
+- **Strike-risk model or V&T/Garrison Pleth changes** → `iwc_alignment_report`
+- **SDM/ISDM architecture, CV, or ensemble changes** → `sdm_alignment_report`
 - **New phase completed** → create a new `generate_phase<N>_report.py`
 
 To regenerate all PDFs at once:

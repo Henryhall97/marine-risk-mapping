@@ -43,6 +43,20 @@ cleaned as (
        or sla is not null
        or pp_upper_200m is not null
 
+),
+
+-- Dedupe: a few CMIP6 model grid cells round to the same 0.5-degree
+-- (lat, lon) within a (scenario, decade, season), which would otherwise
+-- multiply rows in the downstream equi-join on (lat, lon) and break the
+-- (h3_cell, season, scenario, decade) uniqueness of
+-- int_ocean_covariates_projected. Keep one row per coordinate.
+deduped as (
+
+    select distinct on (scenario, decade, season, lat, lon)
+        *
+    from cleaned
+    order by scenario, decade, season, lat, lon, id
+
 )
 
-select * from cleaned
+select * from deduped
