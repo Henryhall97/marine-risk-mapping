@@ -884,6 +884,21 @@ def build_report():  # noqa: C901 PLR0915
         "the speed_lethality term is a lower bound on the value of slowing."
     )
 
+    pdf.ln(2)
+    pdf.callout_box(
+        "Implementation status (2026): Phases 1b + 2 are LIVE",
+        "True VTD (track-km/km^2) is now computed in aggregate_ais.py via "
+        "great-circle segment apportionment (11.58M joint strata), and the "
+        "speed-lethality term has been upgraded from V&T (2007) to Garrison "
+        "et al. (2025) using the real Table 3 coefficients (generic B1 = "
+        "0.129/kn; humpback B1 = 0.026/kn). The traffic score is rebased on "
+        "VTD exposure + Garrison lethality percentiles; V&T is retained as a "
+        "diagnostic. Jensen bias is negligible (rho = 0.9975, mean |bias| = "
+        "0.0027 over 11.58M cell-months). See the Tranche 1 Phase 2 "
+        "migration report for the full treatment.",
+        ReportPDF.ACCENT_GREEN,
+    )
+
     pdf.subsection_title("Phase 3 -- A real encounter-rate module (higher)")
     pdf.bullet(
         "Add an optional R = Dw x VTD x w output for a chosen study area "

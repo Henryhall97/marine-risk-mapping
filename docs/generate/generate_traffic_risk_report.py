@@ -235,15 +235,15 @@ def build_report():  # noqa: C901 PLR0915
     pdf.cell(
         0, 8, "Marine Risk Mapping Project", align="C", new_x="LMARGIN", new_y="NEXT"
     )
-    pdf.cell(0, 8, "March 2026", align="C", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 8, "June 2026", align="C", new_x="LMARGIN", new_y="NEXT")
     pdf.ln(20)
 
     # Stat boxes on title page
     pdf.stat_boxes(
         [
-            ("8", "Traffic components"),
-            ("3", "Key papers"),
-            ("9.7M", "Cell-months"),
+            ("4", "Key papers"),
+            ("11.6M", "VTD cell-months"),
+            ("0.129", "Garrison B1 / kn"),
             ("9/9", "Validation checks PASS"),
         ]
     )
@@ -295,6 +295,106 @@ def build_report():  # noqa: C901 PLR0915
         "This document outlines the three key papers that informed our "
         "improved methodology, and describes exactly how their findings "
         "are implemented in our pipeline."
+    )
+
+    # ── 1A. 2026 Update: IWC Product-A Rebase ─────────────────────
+    pdf.add_page()
+    pdf.section_title("1A. 2026 Update: IWC Product-A Rebase (VTD + Garrison)")
+
+    pdf.body_text(
+        "In 2026 the traffic threat metric was rebased onto the IWC "
+        "ship-strike reporting standard (Leaper et al. 2026, "
+        "SC/70/HIM/13).  Two of the eight traffic components now derive "
+        "from IWC-aligned quantities, while the original Vanderlaan & "
+        "Taggart (V&T) formulation is retained as a diagnostic surface.  "
+        "The V&T literature in Sections 2 onward documents the design "
+        "lineage; the live scoring inputs are described here."
+    )
+
+    pdf.subsection_title("What changed")
+    pdf.bullet(
+        "Exposure volume: the vessel-count percentile is replaced by "
+        "vessel transit density (VTD) -- track-km swept per km^2.  Raw "
+        "AIS ping counts conflate broadcast rate (Class A >> Class B) "
+        "and dwell time with actual transit; VTD apportions each "
+        "great-circle segment's length across the H3 cells it crosses, "
+        "conserving track-km and giving an unbiased exposure surface."
+    )
+    pdf.bullet(
+        "Speed lethality: the V&T logistic is replaced by the Garrison "
+        "et al. (2025) speed-lethality logistic, evaluated per joint "
+        "stratum (vessel_type x size_class x speed_bin) and track-km-"
+        "weighted up to the cell-month (int_vtd.garrison_leth_generic)."
+    )
+    pdf.bullet(
+        "Both replacements feed the composite as percentile ranks "
+        "(pctl_vessels on avg VTD, pctl_speed_lethality on avg Garrison "
+        "lethality).  The remaining six V&T components are retained "
+        "unchanged as diagnostics."
+    )
+
+    pdf.subsection_title("Garrison et al. (2025) speed-lethality logistic")
+    pdf.small_text(
+        "Garrison, L.P. et al. (2025). Vessel speed and the lethality "
+        "of large whale ship strikes. Frontiers in Marine Science, "
+        "11:1467387.  Open access (CC-BY).  n = 192 strike events "
+        "(79 lethal / 113 non-lethal), pseudo-R^2 = 0.291."
+    )
+    pdf.ln(1)
+    pdf.equation_box(
+        "Garrison et al. (2025) -- Table 3 best logit model",
+        "logit(P) = -1.744 + 0.129*v + size_offset"
+        " - 0.139*HB - 0.103*v*HB",
+        "v = speed (kn); HB = 1 for humpback, else 0.  Size offsets "
+        "(added to intercept): Small 0, Medium +0.113, Large +0.617, "
+        "XL +2.498.  Speed effect (B1 = 0.129/kn) is far gentler than "
+        "V&T (0.41/kn) and probabilities are higher at low speed.",
+    )
+
+    pdf.body_text(
+        "We use the taxon-agnostic ('other'/generic, B1 = 0.129) curve "
+        "for the traffic screen; the humpback curve (B1 = 0.026) and the "
+        "full taxon x size grid are reserved for the Phase 4 mortality "
+        "module.  The seed stores reconstructed (B0, B1) pairs validated "
+        "exactly against Garrison Table 4 at 5/10/15/20/25/30 kn."
+    )
+
+    pdf.subsection_title("Size-class mapping")
+    pdf.body_text(
+        "Garrison's size bins are defined on vessel length with its only "
+        "material edge at 108 m (Small <12.1 m, Medium 12.2-19.7, Large "
+        "19.8-108, XL >=108).  Because AIS transponder carriage begins "
+        "around 20 m, virtually all vessels in our data fall in Garrison "
+        "Large or XL.  Our VTD length bins (small <50 m, medium 50-100, "
+        "large 100-200, vlarge >=200) therefore map onto that 108 m seam: "
+        "small/medium -> Garrison Large coefficients, large/vlarge -> "
+        "Garrison XL.  The sole approximation is vessels in the narrow "
+        "100-108 m band receiving the XL curve -- negligible traffic."
+    )
+
+    pdf.subsection_title("Jensen-correct by construction")
+    pdf.body_text(
+        "Because P(lethal | speed) is nonlinear, averaging speed before "
+        "applying the logistic biases the estimate (Jensen's inequality, "
+        "Section 6).  The joint strata are already binned by narrow speed "
+        "bins (<=10 / 10-12 / 12-15 / >15 kn), so the Garrison logistic "
+        "is applied per bin and the residual within-bin spread is tiny.  "
+        "Validation confirms this: comparing the binned estimate against "
+        "a speed-collapsed counterfactual over 11.58M cell-months gives a "
+        "Spearman rank correlation of 0.9975 and a mean absolute "
+        "lethality difference of just 0.0027."
+    )
+
+    pdf.ln(2)
+    pdf.callout_box(
+        "Why retain V&T as a diagnostic?",
+        "The V&T per-vessel lethality columns (vw_avg_lethality, etc.) "
+        "remain in ais_h3_summary and int_vessel_traffic for continuity "
+        "and cross-checking, but no longer drive the composite.  The "
+        "live traffic score is rebased on VTD exposure and Garrison "
+        "lethality, both of which align with the IWC reporting standard "
+        "and travel cleanly into the Phase 4 mortality estimator.",
+        ReportPDF.ACCENT_GREEN,
     )
 
     # ── 2. Literature Review ──────────────────────────────────────
@@ -702,6 +802,20 @@ def build_report():  # noqa: C901 PLR0915
         "the AIS data predates the per-vessel computation)."
     )
 
+    pdf.ln(2)
+    pdf.callout_box(
+        "2026 update -- Garrison VTD strata",
+        "The same Jensen logic now governs the live traffic score "
+        "(Section 1A): the Garrison logistic is applied per narrow "
+        "speed bin inside int_vtd, then track-km-weighted to the "
+        "cell-month.  Validated over 11.58M cell-months, the binned "
+        "estimate tracks a speed-collapsed counterfactual at Spearman "
+        "rho = 0.9975 with mean |bias| = 0.0027 -- the binning keeps the "
+        "lethality estimate essentially unbiased while preserving the "
+        "relative cell ranking the percentile score consumes.",
+        ReportPDF.ACCENT_AMBER,
+    )
+
     # ── 7. Composite Risk Integration ─────────────────────────────
     pdf.add_page()
     pdf.section_title("7. Composite Risk Integration")
@@ -717,7 +831,7 @@ def build_report():  # noqa: C901 PLR0915
     pdf.metric_table(
         ["Sub-score", "Weight", "Changes in this update"],
         [
-            ["Traffic threat", "25%", "8-component V&T formula (was 6)"],
+            ["Traffic threat", "25%", "VTD exposure + Garrison lethality"],
             ["Cetacean exposure", "25%", "Unchanged"],
             ["Proximity blend", "15%", "Unchanged"],
             ["Strike history", "10%", "Unchanged"],

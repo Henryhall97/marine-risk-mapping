@@ -81,8 +81,148 @@ AIS_REQUIRED_LENGTH_M = 20  # SOLAS Class-A practical length proxy
 # ── Vanderlaan & Taggart (2007) speed-lethality logistic ─────
 # P(lethal | speed) = 1 / (1 + exp(-(β₀ + β₁ × speed_knots)))
 # Fitted to 40 observed whale-vessel collisions with known outcomes.
+# Retained as the back-compat / V&T-vs-Garrison sensitivity baseline.
 VT_LETHALITY_BETA0: float = _DBT_VARS["vt_lethality_beta0"]
 VT_LETHALITY_BETA1: float = _DBT_VARS["vt_lethality_beta1"]
+
+# ── Phase 2: True vessel-traffic-density (VTD) segment build ──
+# VTD = track distance travelled per km² per cell (km⁻¹), built from
+# consecutive AIS positions per MMSI track (Rockwood 2017 Track Builder
+# + EMODnet vessel-density method) rather than ping/vessel counts.
+#
+# Gap threshold: split a track wherever the inter-ping gap exceeds this
+# many hours (default 6 h — leans LONG because many offshore cells have
+# sparse AIS; a short cap would artificially empty them).
+VTD_MAX_GAP_HOURS: float = 6.0
+
+# Teleport / outlier filter — PER VESSEL CLASS. Drop any segment whose
+# implied speed (haversine_km / Δt) exceeds the class ceiling: such a
+# jump is a GPS error or MMSI collision, not real travel. MarineCadastre
+# is pre-cleaned by USCG, so this only catches residual spikes.
+VTD_MAX_IMPLIED_SPEED_KN: dict[str, float] = {
+    "cargo": 30.0,
+    "tanker": 28.0,
+    "passenger": 45.0,  # fast ferries / high-speed craft
+    "fishing": 25.0,
+    "tug": 20.0,
+    "pleasure": 50.0,
+    "military": 50.0,
+    "other": 40.0,
+}
+
+# Segment-to-cell apportionment: above this H3 grid-distance (cells)
+# the exact ST_Intersection clip is skipped and the (rare) long
+# post-gap leg is credited wholly to its origin cell. Bounds geometry
+# cost; ~1.2 km/cell ⇒ 150 cells ≈ 180 km corridor.
+VTD_GRID_PATH_MAX_CELLS: int = 150
+
+# Speed-bin upper edges (knots) for the joint strata grain. Binned on
+# each SEGMENT's own implied speed (not the vessel median): one
+# decelerating ship deposits track-km into 2+ bins of the same stratum.
+VTD_SPEED_BIN_EDGES: tuple[float, ...] = (10.0, 12.0, 15.0)
+VTD_SPEED_BIN_LABELS: tuple[str, ...] = ("le10", "10_12", "12_15", "gt15")
+
+# Vessel size-class upper edges (length m) — the IWC standard's 4 size
+# classes. Length < 50 → small, 50–100 → medium, 100–200 → large,
+# ≥ 200 → vlarge; unknown length → 'unknown'.
+VTD_SIZE_CLASS_EDGES: tuple[float, ...] = (50.0, 100.0, 200.0)
+VTD_SIZE_CLASS_LABELS: tuple[str, ...] = (
+    "small",
+    "medium",
+    "large",
+    "vlarge",
+)
+
+# ── Garrison et al. (2025) speed-lethality (IWC-recommended upgrade) ──
+# Logistic on vessel speed × size class × whale taxon. Replaces V&T at
+# TWO touchpoints: (A) Phase 2 traffic screening uses the taxon-agnostic
+# 'generic' curve per size class; (B) Phase 4 mortality uses the full
+# speed × size × taxon parameterisation.
+#
+# The authoritative coefficients live in the dbt seed
+# transform/seeds/garrison_lethality_coeffs.csv (read by the
+# garrison_lethality() macro). The dict below MIRRORS the seed's
+# touchpoint-A 'generic' rows so the DuckDB VTD aggregation can evaluate
+# the same curve in-pipeline without a DB round-trip. Keep in sync.
+#
+# REAL coefficients from Garrison et al. (2025) Front. Mar. Sci.
+# 11:1467387, Table 3 (logit-scale best model: Speed + VesselSize +
+# Humpback + Speed*Humpback; n=192, R2=0.291). Non-humpback ("other")
+# slope beta1=0.129/kn. Garrison's four size classes are defined on
+# vessel LENGTH (Small <12.1m, Medium 12.2-19.7m, Large 19.8-108m,
+# XL >=108m). AIS carriage starts ~20m, so essentially all our vessels
+# fall in Garrison Large or XL — the only edge that matters is 108m.
+# We map our length bins (50/100/200m) onto that split: small/medium
+# -> Garrison Large (beta0=-1.127), large/vlarge -> Garrison XL
+# (beta0=+0.754). The only approximation is the narrow 100-108m band
+# (our 100m edge ~ Garrison's 108m). XL is lethal at any realistic
+# speed (P>=0.5 even at 0 kn), matching the paper's Table 4.
+GARRISON_GENERIC_BETA: dict[str, tuple[float, float]] = {
+    # size_class: (beta0, beta1)  →  P = 1/(1+exp(-(β0 + β1·speed_kn)))
+    "small": (-1.127, 0.129),  # → Garrison Large (19.8-108m)
+    "medium": (-1.127, 0.129),  # → Garrison Large
+    "large": (0.754, 0.129),  # → Garrison XL (>=108m)
+    "vlarge": (0.754, 0.129),  # → Garrison XL
+    "unknown": (-1.127, 0.129),  # fall back to Large (modal AIS class)
+}
+
+# ── Mayette & Brillant (2026) vessel-mass-from-length regression ─────
+# mass_t ≈ MASS_A × length_m^MASS_B  (allometric displacement scaling).
+# Three Phase-2 uses: (i) draft imputation via the displacement relation
+# mass ≈ ρ·L·B·T·Cb → solve T when AIS draft is null; (ii) a mass
+# covariate for Garrison size stratification; (iii) cross-check vs OLS.
+# PROVISIONAL coefficients (geometric L³ scaling, calibrated so a 100 m
+# vessel ≈ 7,000 t) pending the published regression table.
+MAYETTE_MASS_A: float = 0.007
+MAYETTE_MASS_B: float = 3.0
+
+# Seawater density (t/m³) for the displacement relation.
+SEAWATER_DENSITY_T_PER_M3: float = 1.025
+
+# Per-category block coefficient Cb (fraction of the L×B×T box the hull
+# fills) for the displacement draft solve. Fuller hulls (tankers) → high.
+VESSEL_BLOCK_COEFFICIENT: dict[str, float] = {
+    "cargo": 0.70,
+    "tanker": 0.82,
+    "passenger": 0.62,
+    "fishing": 0.55,
+    "tug": 0.55,
+    "pleasure": 0.45,
+    "military": 0.50,
+    "other": 0.65,
+}
+
+
+def vessel_mass_from_length(length_m: float) -> float:
+    """Estimate vessel displacement (tonnes) from length (Mayette 2026).
+
+    mass_t = MASS_A × length_m^MASS_B. Returns 0.0 for non-positive
+    length so callers can treat it as "unknown".
+    """
+    if length_m is None or length_m <= 0:
+        return 0.0
+    return MAYETTE_MASS_A * (length_m**MAYETTE_MASS_B)
+
+
+def draft_from_displacement(
+    length_m: float,
+    beam_m: float,
+    vessel_category: str,
+) -> float | None:
+    """Solve draft T (m) from the displacement relation mass ≈ ρ·L·B·T·Cb.
+
+    Uses the Mayette mass estimate and a per-category block coefficient.
+    Returns None when length or beam are missing (cannot solve).
+    """
+    if not length_m or not beam_m or length_m <= 0 or beam_m <= 0:
+        return None
+    cb = VESSEL_BLOCK_COEFFICIENT.get(vessel_category, 0.65)
+    mass_t = vessel_mass_from_length(length_m)
+    denom = SEAWATER_DENSITY_T_PER_M3 * length_m * beam_m * cb
+    if denom <= 0:
+        return None
+    return mass_t / denom
+
 
 # ── Day/night boundaries (local solar hour) ──────────────────
 NIGHT_START_HOUR = 20  # 8 PM local
@@ -230,6 +370,11 @@ BATHYMETRY_RASTER = RAW_DIR / "bathymetry" / "gebco_2025_n52.0_s-2.0_w-180.0_e-5
 AIS_H3_DIR = PROCESSED_DIR / "ais"
 AIS_H3_PARQUET = AIS_H3_DIR / "ais_h3_res7.parquet"
 AIS_H3_TEST_PARQUET = AIS_H3_DIR / "ais_h3_res7_test.parquet"
+
+# Phase 2 — true vessel-traffic-density (VTD) strata output.
+# Grain: (h3_cell, month, vessel_type, size_class, speed_bin).
+AIS_VTD_PARQUET = AIS_H3_DIR / "ais_vtd_strata_res7.parquet"
+AIS_VTD_TEST_PARQUET = AIS_H3_DIR / "ais_vtd_strata_res7_test.parquet"
 
 # ── DuckDB ──────────────────────────────────────────────────
 DUCKDB_PATH = DATA_DIR / "marine_risk.duckdb"

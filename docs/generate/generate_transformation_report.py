@@ -832,9 +832,9 @@ def build_report():
         "0.05 Reference",
         "All sub-scores are on a 0-1 scale via percentile ranking.  "
         "Weights are expert-elicited from the literature (Vanderlaan & "
-        "Taggart 2007, Rockwood et al. 2021, Nisi et al. 2024), not "
-        "data-fitted.  All weight values are defined as dbt vars in "
-        "dbt_project.yml and read by macros at build time.",
+        "Taggart 2007, Garrison et al. 2025, Rockwood et al. 2021, Nisi "
+        "et al. 2024), not data-fitted.  All weight values are defined as "
+        "dbt vars in dbt_project.yml and read by macros at build time.",
         ReportPDF.TEAL,
     )
 
@@ -857,21 +857,24 @@ def build_report():
 
     pdf.body_text(
         "Captures vessel activity threat using 8 component features, each "
-        "percentile-ranked.  The V&T lethality model (Vanderlaan & Taggart "
-        "2007) provides the speed-lethality component, replacing the simpler "
-        "high-speed vessel count from earlier versions."
+        "percentile-ranked.  Following the 2026 IWC Product-A rebase, two "
+        "components are IWC-aligned: the speed-lethality component now uses "
+        "the Garrison et al. (2025) per-stratum logistic, and the exposure "
+        "component now uses vessel transit density (VTD, track-km/km^2) "
+        "instead of raw vessel counts.  The V&T logistic (Vanderlaan & "
+        "Taggart 2007) is retained as a diagnostic surface."
     )
 
     pdf.simple_table(
         ["Feature", "Weight", "Rationale"],
         [
             (
-                "vt_lethality_pctl",
+                "speed_lethality_pctl",
                 "20%",
-                "V&T logistic lethality from speed distribution",
+                "Garrison (2025) per-stratum lethality percentile",
             ),
             ("high_speed_fraction_pctl", "10%", "Fraction of vessels exceeding 10 kn"),
-            ("vessel_count_pctl", "20%", "Monthly vessel volume (exposure)"),
+            ("vessels_pctl (VTD)", "20%", "Vessel transit density, track-km/km^2"),
             ("large_vessel_pctl", "10%", "Vessels > threshold LOA (high inertia)"),
             ("draft_risk_pctl", "10%", "Mean draft risk score (keel depth hazard)"),
             ("draft_risk_fraction_pctl", "5%", "Fraction of deep-draft vessels"),

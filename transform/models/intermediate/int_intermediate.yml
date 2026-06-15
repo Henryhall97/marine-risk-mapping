@@ -238,6 +238,60 @@ models:
       - unique:
           column_name: "h3_cell || '-' || month"
 
+  # ── Vessel Transit Density (VTD) ────────────────────────
+  - name: int_vtd
+    description: >
+      Vessel transit density per H3 cell per month, rolled up from
+      the ais_vtd_strata joint strata. Implements the IWC strike-risk
+      exposure metric (Leaper et al. 2026): track-km swept per unit
+      area, replacing raw ping counts. Attaches the Garrison et al.
+      (2025) taxon-agnostic ("generic") speed-lethality probability,
+      applied per narrow speed bin (Jensen-correct) and track-km-
+      weighted up to the cell-month. Grain: (h3_cell, month).
+    config:
+      indexes:
+        - columns: ['h3_cell']
+        - columns: ['h3_cell', 'month']
+    columns:
+      - name: h3_cell
+        description: "H3 cell index (resolution 7)"
+        tests:
+          - not_null
+      - name: month
+        description: "First day of the month (DATE)"
+        tests:
+          - not_null
+      - name: total_track_km
+        description: "Total vessel track-km swept through the cell this month"
+        tests:
+          - not_null
+      - name: n_segments
+        description: "Count of contributing track segments"
+      - name: cell_area_km2
+        description: "H3 cell area (km², gnomonic)"
+      - name: vtd_km_per_km2
+        description: >
+          Vessel transit density: total_track_km / cell_area_km2.
+          The IWC exposure surface; replaces raw ping counts in the
+          traffic sub-score (pctl_vessels).
+        tests:
+          - not_null
+      - name: garrison_leth_generic
+        description: >
+          Track-km-weighted Garrison (2025) generic speed-lethality
+          probability for the cell-month (touchpoint A). Replaces the
+          Vanderlaan & Taggart (2007) curve in the traffic sub-score
+          (pctl_speed_lethality).
+        tests:
+          - not_null
+      - name: mean_vessel_mass_t
+        description: "Track-km-weighted vessel mass (tonnes, Mayette length law)"
+      - name: mean_implied_speed_kn
+        description: "Track-km-weighted segment-implied speed (knots)"
+    tests:
+      - unique:
+          column_name: "h3_cell || '-' || month"
+
   # ── Cetacean Density ────────────────────────────────────
   - name: int_cetacean_density
     description: >

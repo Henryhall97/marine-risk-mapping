@@ -196,6 +196,26 @@ models:
       - name: avg_passenger_vessels
         description: "Average passenger vessels per month"
 
+      # ── Vessel transit density (VTD — IWC exposure, Product-A) ──
+      - name: avg_vtd_km_per_km2
+        description: >
+          Mean monthly vessel transit density (track-km / km²). The IWC
+          exposure metric (Leaper et al. 2026); drives the rebased
+          pctl_vessels.
+      - name: peak_vtd_km_per_km2
+        description: "Peak monthly vessel transit density (track-km / km²)"
+      - name: total_track_km
+        description: "Total vessel track-km swept through the cell (all months)"
+      - name: avg_garrison_lethality
+        description: >
+          Track-km-weighted Garrison (2025) generic speed-lethality
+          probability. Drives the rebased pctl_speed_lethality (replaces
+          Vanderlaan & Taggart 2007).
+      - name: avg_vessel_mass_t
+        description: "Track-km-weighted vessel mass (tonnes, Mayette length law)"
+      - name: has_vtd
+        description: "True if the cell has any vessel transit density data"
+
       # ── Cetacean features ──────────────────────────
       - name: total_sightings
         description: "Total cetacean sightings in this cell (all years)"
@@ -593,6 +613,12 @@ models:
 
       - name: has_traffic
         description: "True if vessel traffic exists in this cell-season"
+
+      - name: has_vtd
+        description: >
+          True if vessel transit density (VTD) data exists for this
+          cell-season. Drives the rebased seasonal pctl_vessels /
+          pctl_speed_lethality.
 
       - name: has_whale_sightings
         description: "True if cetacean sightings exist in this cell-season"

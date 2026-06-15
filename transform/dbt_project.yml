@@ -211,3 +211,12 @@ seeds:
       +column_types:
         is_baleen: boolean
         aphia_id: integer
+    garrison_lethality_coeffs:
+      +column_types:
+        midpoint_kn: double precision
+        beta0: double precision
+        beta1: double precision
+        beta0_lo: double precision
+        beta0_hi: double precision
+        beta1_lo: double precision
+        beta1_hi: double precision

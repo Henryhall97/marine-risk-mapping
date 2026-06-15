@@ -16,7 +16,7 @@
 --   5. Final score = weighted sum of sub-scores
 --
 -- Sub-score weights (expert-elicited — see notes below):
---   - Traffic threat      25%  (V&T lethality, draft, volume, vessel type)
+--   - Traffic threat      25%  (VTD exposure, Garrison lethality, draft, type)
 --   - Cetacean exposure   25%  (sighting density, baleen, recency)
 --   - Proximity           15%  (co-location gradients: whale×ship, strike, protection)
 --   - Strike history      10%  (sparse historical hotspot indicator)
@@ -48,6 +48,17 @@
 --   Nisi et al. (2024), and NOAA strike reduction strategy.  The
 --   ML-enhanced mart (fct_collision_risk_ml) provides an independent
 --   data-driven comparison via XGBoost feature importance.
+--
+-- IMPORTANT — Product-A rebase (IWC alignment, Tranche 1 Phase 2):
+--   The traffic sub-score now ranks on vessel transit density
+--   (track-km / km², the IWC exposure metric — Leaper et al. 2026)
+--   instead of raw vessel counts, and on the Garrison et al. (2025)
+--   "generic" speed-lethality logistic instead of Vanderlaan &
+--   Taggart (2007).  Only the two percentile *inputs* change; the
+--   sub-score weights are unchanged (percentile ranks are invariant
+--   to monotone re-scaling, so no re-elicitation is required).  The
+--   pre-rebase V&T metrics are retained as pctl_*_vt diagnostics for
+--   the sensitivity diff.
 --
 -- Land cells are excluded. Cells with no data for a domain
 -- get zero/null for those features and rank at the bottom.
@@ -118,6 +129,41 @@ with traffic_agg as (
 
 ),
 
+vtd_agg as (
+
+    -- Collapse monthly vessel transit density to per-cell annual
+    -- summaries (IWC exposure metric — Leaper et al. 2026).  Product-A
+    -- rebase: avg_vtd_km_per_km2 replaces raw vessel counts for the
+    -- traffic-volume percentile, and the track-km-weighted Garrison
+    -- (2025) generic lethality replaces the V&T speed-lethality
+    -- percentile.  The V&T metrics above are retained as diagnostics.
+    select
+        h3_cell,
+
+        -- Exposure: mean monthly vessel transit density (km / km²)
+        avg(vtd_km_per_km2)                        as avg_vtd_km_per_km2,
+        max(vtd_km_per_km2)                        as peak_vtd_km_per_km2,
+        sum(total_track_km)                        as total_track_km,
+
+        -- Garrison generic lethality, track-km-weighted across months
+        sum(total_track_km * garrison_leth_generic)
+            / nullif(sum(total_track_km), 0)       as avg_garrison_lethality,
+
+        -- Diagnostic: track-km-weighted vessel mass (tonnes)
+        sum(total_track_km * mean_vessel_mass_t)
+            / nullif(
+                sum(
+                    case when mean_vessel_mass_t is not null
+                    then total_track_km end
+                ),
+                0
+            )                                       as avg_vessel_mass_t
+
+    from {{ ref('int_vtd') }}
+    group by h3_cell
+
+),
+
 features as (
 
     -- Join all domains onto the hex grid (spine)
@@ -150,6 +196,17 @@ features as (
         t.avg_commercial_vessels,
         t.avg_fishing_vessels,
         t.avg_passenger_vessels,
+
+        -- Vessel transit density features (IWC exposure — Product-A
+        -- rebase).  These drive pctl_vessels (avg_vtd_km_per_km2) and
+        -- pctl_speed_lethality (avg_garrison_lethality) below.  The V&T
+        -- avg_speed_lethality / avg_monthly_vessels above are retained
+        -- as diagnostics for the V&T-vs-Garrison sensitivity diff.
+        vtd.avg_vtd_km_per_km2,
+        vtd.peak_vtd_km_per_km2,
+        vtd.total_track_km,
+        vtd.avg_garrison_lethality,
+        vtd.avg_vessel_mass_t,
 
         -- Cetacean features (null = no sightings in this cell)
         c.total_sightings,
@@ -219,6 +276,7 @@ features as (
 
         -- Convenience booleans
         t.h3_cell is not null      as has_traffic,
+        vtd.h3_cell is not null    as has_vtd,
         c.h3_cell is not null      as has_whale_sightings,
         m.h3_cell is not null      as in_mpa,
         ss.h3_cell is not null     as has_strike_history,
@@ -227,6 +285,8 @@ features as (
     from {{ ref('int_hex_grid') }} g
     left join traffic_agg t
         on g.h3_cell = t.h3_cell
+    left join vtd_agg vtd
+        on g.h3_cell = vtd.h3_cell
     left join {{ ref('int_cetacean_density') }} c
         on g.h3_cell = c.h3_cell
     left join {{ ref('int_bathymetry') }} b
@@ -262,9 +322,13 @@ ranked as (
         *,
 
         -- Traffic percentiles
-        percent_rank() over (order by coalesce(avg_monthly_vessels, 0))
+        -- Product-A rebase: pctl_vessels ranks on vessel transit density
+        -- (IWC exposure metric) instead of raw vessel counts; the V&T
+        -- speed-lethality ranking is replaced by the Garrison (2025)
+        -- generic logistic.  Sub-score weights are unchanged.
+        percent_rank() over (order by coalesce(avg_vtd_km_per_km2, 0))
             as pctl_vessels,
-        percent_rank() over (order by coalesce(avg_speed_lethality, 0))
+        percent_rank() over (order by coalesce(avg_garrison_lethality, 0))
             as pctl_speed_lethality,
         percent_rank() over (order by coalesce(avg_large_vessels, 0))
             as pctl_large_vessels,
@@ -278,6 +342,15 @@ ranked as (
             as pctl_commercial,
         percent_rank() over (order by coalesce(avg_night_vessels, 0))
             as pctl_night_traffic,
+
+        -- Diagnostic V&T percentiles (NOT scored) — retained so the
+        -- V&T-vs-Garrison sensitivity diff is queryable directly from
+        -- the mart.  pctl_vessels_vt = pre-rebase volume ranking,
+        -- pctl_speed_lethality_vt = pre-rebase V&T speed-lethality.
+        percent_rank() over (order by coalesce(avg_monthly_vessels, 0))
+            as pctl_vessels_vt,
+        percent_rank() over (order by coalesce(avg_speed_lethality, 0))
+            as pctl_speed_lethality_vt,
 
         -- Cetacean percentiles
         percent_rank() over (order by coalesce(total_sightings, 0))

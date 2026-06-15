@@ -57,6 +57,41 @@ sources:
           - name: cell_lon
             description: "Centroid longitude of the H3 cell"
 
+      - name: ais_vtd_strata
+        description: >
+          Vessel transit density (VTD) joint strata. Track-km swept
+          through each H3 res-7 cell, apportioned along great-circle
+          segments (hybrid same-cell fast-path + ST_Intersection clip
+          with per-segment renormalisation so track-km is conserved).
+          Grain: (h3_cell, month, vessel_type, size_class, speed_bin).
+          Produced by aggregate_ais.py --vtd. Implements the IWC VTD
+          exposure metric (Leaper et al. 2026) replacing raw ping
+          counts. mean_implied_speed_kn is the segment-implied SOG used
+          by the Garrison speed-lethality logistic.
+        columns:
+          - name: h3_cell
+            description: "H3 cell index (resolution 7, BIGINT)"
+          - name: month
+            description: "First day of the month (DATE)"
+          - name: vessel_type
+            description: "Vessel category (cargo, tanker, passenger, etc.)"
+          - name: size_class
+            description: "Length-derived size class (small/medium/large/vlarge)"
+          - name: speed_bin
+            description: "Segment-implied speed bin (le10/10_12/12_15/gt15)"
+          - name: track_km
+            description: "Track-km swept through the cell by this stratum"
+          - name: n_segments
+            description: "Count of contributing track segments"
+          - name: mean_implied_speed_kn
+            description: "Track-km-weighted segment-implied speed (knots)"
+          - name: mean_vessel_mass_t
+            description: "Track-km-weighted vessel mass (tonnes, Mayette length law)"
+          - name: cell_area_km2
+            description: "H3 cell area (km², gnomonic)"
+          - name: vtd_km_per_km2
+            description: "track_km / cell_area_km2 — vessel transit density"
+
       - name: cetacean_sighting_h3
         description: >
           Mapping of cetacean sightings to H3 resolution-7 cells.

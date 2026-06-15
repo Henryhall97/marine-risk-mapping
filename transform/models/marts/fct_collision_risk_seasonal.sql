@@ -47,6 +47,32 @@ grid_seasons as (
 
 ),
 
+vtd_seasonal as (
+
+    -- Roll up monthly vessel transit density to (h3_cell, season).
+    -- Product-A rebase: drives the seasonal pctl_vessels (VTD) and
+    -- pctl_speed_lethality (Garrison generic).  month → season via
+    -- the season_from_month macro.
+    select
+        h3_cell,
+        {{ season_from_month('extract(month from month)::int') }} as season,
+        avg(vtd_km_per_km2)                        as avg_vtd_km_per_km2,
+        sum(total_track_km)                        as total_track_km,
+        sum(total_track_km * garrison_leth_generic)
+            / nullif(sum(total_track_km), 0)       as avg_garrison_lethality,
+        sum(total_track_km * mean_vessel_mass_t)
+            / nullif(
+                sum(
+                    case when mean_vessel_mass_t is not null
+                    then total_track_km end
+                ),
+                0
+            )                                       as avg_vessel_mass_t
+    from {{ ref('int_vtd') }}
+    group by h3_cell, {{ season_from_month('extract(month from month)::int') }}
+
+),
+
 features as (
 
     select
@@ -79,6 +105,12 @@ features as (
         t.avg_commercial_vessels,
         t.avg_fishing_vessels,
         t.avg_passenger_vessels,
+
+        -- ── Seasonal VTD (IWC exposure — Product-A rebase) ──
+        vtd.avg_vtd_km_per_km2,
+        vtd.total_track_km,
+        vtd.avg_garrison_lethality,
+        vtd.avg_vessel_mass_t,
 
         -- ── Seasonal cetacean ──────────────────────────
         c.total_sightings,
@@ -142,6 +174,7 @@ features as (
 
         -- Convenience booleans
         t.h3_cell is not null      as has_traffic,
+        vtd.h3_cell is not null    as has_vtd,
         c.h3_cell is not null      as has_whale_sightings,
         m.h3_cell is not null      as in_mpa,
         ss.h3_cell is not null     as has_strike_history,
@@ -150,6 +183,8 @@ features as (
     from grid_seasons gs
     left join {{ ref('int_vessel_traffic_seasonal') }} t
         on gs.h3_cell = t.h3_cell and gs.season = t.season
+    left join vtd_seasonal vtd
+        on gs.h3_cell = vtd.h3_cell and gs.season = vtd.season
     left join {{ ref('int_cetacean_density_seasonal') }} c
         on gs.h3_cell = c.h3_cell and gs.season = c.season
     left join {{ ref('int_bathymetry') }} b
@@ -183,9 +218,11 @@ ranked as (
         *,
 
         -- Traffic percentiles
-        percent_rank() over (partition by season order by coalesce(avg_monthly_vessels, 0))
+        -- Product-A rebase: VTD exposure + Garrison generic lethality
+        -- (ranked within season).  Sub-score weights unchanged.
+        percent_rank() over (partition by season order by coalesce(avg_vtd_km_per_km2, 0))
             as pctl_vessels,
-        percent_rank() over (partition by season order by coalesce(avg_speed_lethality, 0))
+        percent_rank() over (partition by season order by coalesce(avg_garrison_lethality, 0))
             as pctl_speed_lethality,
         percent_rank() over (partition by season order by coalesce(avg_large_vessels, 0))
             as pctl_large_vessels,
@@ -199,6 +236,13 @@ ranked as (
             as pctl_commercial,
         percent_rank() over (partition by season order by coalesce(avg_night_vessels, 0))
             as pctl_night_traffic,
+
+        -- Diagnostic V&T percentiles (NOT scored) — pre-rebase volume +
+        -- V&T speed-lethality, for the V&T-vs-Garrison sensitivity diff.
+        percent_rank() over (partition by season order by coalesce(avg_monthly_vessels, 0))
+            as pctl_vessels_vt,
+        percent_rank() over (partition by season order by coalesce(avg_speed_lethality, 0))
+            as pctl_speed_lethality_vt,
 
         -- Cetacean percentiles
         percent_rank() over (partition by season order by coalesce(total_sightings, 0))

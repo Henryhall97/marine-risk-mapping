@@ -3,12 +3,12 @@
 Runs three categories of validation check described in the
 traffic risk methodology document (docs/pdfs/traffic_risk_methodology.pdf):
 
-  1. Internal consistency — Jensen's inequality, draft imputation
-     coverage, weight-sum verification
+  1. Internal consistency — Garrison speed-binning (Jensen)
+     correctness, draft imputation coverage, weight-sum verification
   2. External benchmarks — Nisi correlation, strike-site overlap,
      SMA overlap
-  3. Sensitivity analysis — weight perturbation, Jensen's bias
-     spatial distribution
+  3. Sensitivity analysis — weight perturbation, Garrison Jensen
+     bias spatial distribution
 
 Usage:
     uv run python pipeline/analysis/validate_traffic_risk.py
@@ -40,8 +40,6 @@ from pipeline.config import (
     PROXIMITY_SCORE_WEIGHTS,
     STRIKE_SCORE_WEIGHTS,
     TRAFFIC_SCORE_WEIGHTS,
-    VT_LETHALITY_BETA0,
-    VT_LETHALITY_BETA1,
     WHALE_ML_SCORE_WEIGHTS,
 )
 
@@ -133,58 +131,122 @@ def check_weight_sums() -> bool:
 
 
 def check_jensens_inequality() -> bool:
-    """Compare per-vessel lethality vs cell-average approximation.
+    """Validate the Garrison speed-binning correction (Jensen's).
 
-    Per-vessel lethality (vw_avg_lethality) is computed inside
-    aggregate_ais.py by applying V&T to each vessel's speed,
-    then averaging. The cell-average fallback applies V&T to
-    the cell-mean speed. Jensen's inequality says the cell-average
-    will systematically underestimate because V&T is convex.
+    int_vtd applies the Garrison (2025) logistic *per narrow speed
+    bin* (le10 / 10_12 / 12_15 / gt15) on each stratum's track-km-
+    weighted mean speed, then track-km-weights the resulting
+    probabilities up to the cell-month (garrison_leth_generic).
+    Because P(lethal | speed) is non-linear, a naive pipeline that
+    collapsed the speed bins first — applying Garrison once to the
+    cell's mean speed — would incur Jensen's-inequality bias.
+
+    This check reconstructs the speed-collapsed estimate from
+    ais_vtd_strata (holding the size-class structure, and therefore
+    the β₀/β₁ coefficients, fixed) and compares it against the
+    binned estimate the pipeline actually uses.  It isolates the
+    bias attributable purely to speed resolution.
 
     We check:
-      1. Both columns are populated (AIS re-run completed)
-      2. Rank correlation > 0.95 (orderings preserved)
-      3. Per-vessel >= cell-average (Jensen's direction)
-      4. Magnitude and spatial distribution of the bias
+      1. Strata data is populated (VTD aggregation completed)
+      2. Rank correlation > 0.90 (orderings preserved → the
+         binning does not reshuffle the relative traffic ranking)
+      3. Bias magnitude (descriptive) — how much the speed binning
+         moves the lethality estimate
     """
     log.info("=" * 60)
-    log.info("CHECK: Jensen's inequality — per-vessel vs cell-average lethality")
+    log.info("CHECK: Garrison speed-binning (Jensen) — binned vs collapsed")
     log.info("=" * 60)
 
-    # Query cells with per-vessel lethality populated
+    # Per (h3_cell, month): the binned Garrison lethality the pipeline
+    # uses, vs a speed-collapsed estimate (size structure held fixed).
     sql = """
+        with strata as (
+            select
+                s.h3_cell,
+                s.month,
+                s.size_class,
+                s.track_km,
+                s.mean_implied_speed_kn,
+                g.beta0,
+                g.beta1
+            from ais_vtd_strata s
+            join (
+                select size_class, beta0, beta1
+                from garrison_lethality_coeffs
+                where whale_taxon = 'generic'
+            ) g on s.size_class = g.size_class
+            where s.track_km > 0
+        ),
+        binned as (
+            -- Garrison applied per narrow speed bin (Jensen-correct)
+            select
+                h3_cell,
+                month,
+                sum(track_km) as track_km,
+                sum(
+                    track_km
+                    / (1.0 + exp(-(beta0 + beta1
+                        * coalesce(mean_implied_speed_kn, 0))))
+                ) / nullif(sum(track_km), 0) as leth_binned,
+                sum(track_km * mean_implied_speed_kn)
+                    / nullif(sum(track_km), 0) as mean_speed
+            from strata
+            group by h3_cell, month
+        ),
+        size_collapsed as (
+            -- Collapse all speed bins within each size class to a
+            -- single track-km-weighted mean speed
+            select
+                h3_cell,
+                month,
+                size_class,
+                beta0,
+                beta1,
+                sum(track_km) as size_track_km,
+                sum(track_km * mean_implied_speed_kn)
+                    / nullif(sum(track_km), 0) as size_mean_speed
+            from strata
+            group by h3_cell, month, size_class, beta0, beta1
+        ),
+        collapsed as (
+            -- Garrison applied once per size class on the collapsed
+            -- mean speed, then weighted across size classes
+            select
+                h3_cell,
+                month,
+                sum(
+                    size_track_km
+                    / (1.0 + exp(-(beta0 + beta1
+                        * coalesce(size_mean_speed, 0))))
+                ) / nullif(sum(size_track_km), 0) as leth_collapsed
+            from size_collapsed
+            group by h3_cell, month
+        )
         select
-            h3_cell,
-            cell_lat,
-            cell_lon,
-            vw_avg_speed_knots,
-            vw_avg_lethality,
-            high_speed_fraction,
-            unique_vessels
-        from ais_h3_summary
-        where vw_avg_lethality is not null
-          and vw_avg_speed_knots is not null
+            b.h3_cell,
+            b.month,
+            b.track_km,
+            b.mean_speed,
+            b.leth_binned,
+            c.leth_collapsed
+        from binned b
+        join collapsed c using (h3_cell, month)
     """
     df = query_df(sql)
 
     if df.empty:
         log.warning(
-            "  No rows with vw_avg_lethality populated — AIS re-run "
-            "may not have completed yet. SKIPPING."
+            "  No rows in ais_vtd_strata — VTD aggregation may not "
+            "have completed yet. SKIPPING."
         )
         return True  # Not a failure, just not ready
 
     n = len(df)
-    log.info("  Cells with per-vessel lethality: %s", f"{n:,}")
+    log.info("  Cell-months with VTD strata: %s", f"{n:,}")
 
-    # Compute cell-average V&T approximation
-    df["cell_avg_lethality"] = 1.0 / (
-        1.0
-        + np.exp(-(VT_LETHALITY_BETA0 + VT_LETHALITY_BETA1 * df["vw_avg_speed_knots"]))
-    )
-
-    # -- Rank correlation --
-    rho, p_value = stats.spearmanr(df["vw_avg_lethality"], df["cell_avg_lethality"])
+    # -- Rank correlation (orderings preserved) --
+    rho, p_value = stats.spearmanr(df["leth_binned"], df["leth_collapsed"])
     ok_corr = rho > 0.90
     log.info(
         "  Spearman rank correlation:  rho=%.4f  p=%.2e  [%s]",
@@ -193,79 +255,89 @@ def check_jensens_inequality() -> bool:
         "PASS" if ok_corr else "WARN",
     )
 
-    # -- Bias direction (Jensen's: per-vessel >= cell-average for convex f) --
-    df["bias"] = df["vw_avg_lethality"] - df["cell_avg_lethality"]
-    pct_higher = (df["bias"] > 0).mean() * 100
+    # -- Bias (binned - collapsed). Garrison's logistic is convex
+    #    below P=0.5 and concave above, so the sign is operating-point
+    #    dependent; we report it descriptively rather than asserting a
+    #    direction. --
+    df["bias"] = df["leth_binned"] - df["leth_collapsed"]
     mean_bias = df["bias"].mean()
     median_bias = df["bias"].median()
-    max_bias = df["bias"].max()
-
-    ok_direction = pct_higher > 50  # Majority should show positive bias
+    mean_abs_bias = df["bias"].abs().mean()
+    max_abs_bias = df["bias"].abs().max()
+    pct_positive = (df["bias"] > 0).mean() * 100
     log.info(
-        "  Per-vessel > cell-average:  %.1f%% of cells  [%s]",
-        pct_higher,
-        "PASS" if ok_direction else "WARN",
-    )
-    log.info(
-        "  Bias (per-vessel - cell-avg): mean=%.4f  median=%.4f  max=%.4f",
+        "  Bias (binned - collapsed): mean=%+.4f  median=%+.4f",
         mean_bias,
         median_bias,
-        max_bias,
+    )
+    log.info(
+        "  |Bias|: mean=%.4f  max=%.4f   positive in %.1f%% of cells",
+        mean_abs_bias,
+        max_abs_bias,
+        pct_positive,
+    )
+    ok_mag = mean_abs_bias < 0.15
+    log.info(
+        "  Mean |bias| < 0.15 (binning keeps estimate bounded):  [%s]",
+        "PASS" if ok_mag else "WARN",
     )
 
     # -- Percentile comparisons --
     for pct in [50, 90, 95, 99]:
-        pv = np.percentile(df["vw_avg_lethality"], pct)
-        ca = np.percentile(df["cell_avg_lethality"], pct)
+        bn = np.percentile(df["leth_binned"], pct)
+        cl = np.percentile(df["leth_collapsed"], pct)
         log.info(
-            "  P%d:  per-vessel=%.4f  cell-avg=%.4f  diff=%.4f", pct, pv, ca, pv - ca
+            "  P%d:  binned=%.4f  collapsed=%.4f  diff=%+.4f",
+            pct,
+            bn,
+            cl,
+            bn - cl,
         )
 
-    # -- Where is the bias largest? --
-    top_bias = df.nlargest(10, "bias")[
+    # -- Where is the |bias| largest? --
+    df["abs_bias"] = df["bias"].abs()
+    top_bias = df.nlargest(10, "abs_bias")[
         [
             "h3_cell",
-            "cell_lat",
-            "cell_lon",
-            "vw_avg_speed_knots",
-            "vw_avg_lethality",
-            "cell_avg_lethality",
+            "month",
+            "mean_speed",
+            "leth_binned",
+            "leth_collapsed",
             "bias",
-            "unique_vessels",
+            "track_km",
         ]
     ]
-    log.info("\n  Top 10 cells by Jensen's bias:")
+    log.info("\n  Top 10 cell-months by |Jensen bias|:")
     for _, row in top_bias.iterrows():
         log.info(
-            "    cell=%d  lat=%.2f  lon=%.2f  speed=%.1f kn  "
-            "pv=%.4f  ca=%.4f  bias=%.4f  vessels=%d",
-            row["h3_cell"],
-            row["cell_lat"],
-            row["cell_lon"],
-            row["vw_avg_speed_knots"],
-            row["vw_avg_lethality"],
-            row["cell_avg_lethality"],
+            "    cell=%d  month=%s  speed=%.1f kn  "
+            "binned=%.4f  collapsed=%.4f  bias=%+.4f  track_km=%.1f",
+            int(row["h3_cell"]),
+            row["month"],
+            row["mean_speed"],
+            row["leth_binned"],
+            row["leth_collapsed"],
             row["bias"],
-            int(row["unique_vessels"]),
+            row["track_km"],
         )
 
     # -- Plot --
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
-    # Scatter: per-vessel vs cell-average
+    # Scatter: collapsed vs binned
     ax = axes[0]
     sample = df.sample(min(50_000, n), random_state=42)
     ax.scatter(
-        sample["cell_avg_lethality"],
-        sample["vw_avg_lethality"],
+        sample["leth_collapsed"],
+        sample["leth_binned"],
         alpha=0.15,
         s=3,
         color=NAVY,
     )
     ax.plot([0, 1], [0, 1], "k--", alpha=0.5, label="1:1 line")
-    ax.set_xlabel("Cell-average lethality (Jensen-biased)")
-    ax.set_ylabel("Per-vessel lethality (correct)")
-    ax.set_title(f"Jensen's Inequality Check\n(rho={rho:.4f}, n={n:,})")
+    ax.set_xlabel("Speed-collapsed lethality (Jensen-biased)")
+    ax.set_ylabel("Speed-binned lethality (pipeline)")
+    ax.set_title(f"Garrison Speed-Binning Check\n(rho={rho:.4f}, n={n:,})")
     ax.legend()
     ax.grid(alpha=0.3)
 
@@ -274,27 +346,27 @@ def check_jensens_inequality() -> bool:
     ax.hist(df["bias"], bins=100, color=TEAL, edgecolor="white", alpha=0.8)
     ax.axvline(0, color="k", linestyle="--", alpha=0.5)
     ax.axvline(
-        mean_bias, color=RED, linestyle="-", linewidth=2, label=f"Mean={mean_bias:.4f}"
+        mean_bias, color=RED, linestyle="-", linewidth=2, label=f"Mean={mean_bias:+.4f}"
     )
-    ax.set_xlabel("Bias (per-vessel - cell-average)")
+    ax.set_xlabel("Bias (binned - collapsed)")
     ax.set_ylabel("Frequency")
-    ax.set_title("Distribution of Jensen's Bias")
+    ax.set_title("Distribution of Garrison Jensen Bias")
     ax.legend()
     ax.grid(alpha=0.3)
 
     # Bias vs speed
     ax = axes[2]
     ax.scatter(
-        sample["vw_avg_speed_knots"],
+        sample["mean_speed"],
         sample["bias"],
         alpha=0.15,
         s=3,
         color=AMBER,
     )
     ax.axhline(0, color="k", linestyle="--", alpha=0.5)
-    ax.set_xlabel("Mean speed (knots)")
-    ax.set_ylabel("Bias (per-vessel - cell-average)")
-    ax.set_title("Jensen's Bias vs Cell Speed")
+    ax.set_xlabel("Track-km-weighted mean speed (knots)")
+    ax.set_ylabel("Bias (binned - collapsed)")
+    ax.set_title("Garrison Jensen Bias vs Cell Speed")
     ax.grid(alpha=0.3)
 
     plt.tight_layout()
@@ -304,7 +376,7 @@ def check_jensens_inequality() -> bool:
     plt.close(fig)
     log.info("  Saved: jensens_inequality_check.png\n")
 
-    return ok_corr and ok_direction
+    return ok_corr and ok_mag
 
 
 def check_draft_imputation() -> bool:
@@ -1027,58 +1099,115 @@ def check_weight_perturbation() -> bool:
 
 
 def check_jensens_spatial_distribution() -> bool:
-    """Map where Jensen's bias is largest.
+    """Map where the Garrison speed-binning correction is largest.
 
-    Expected: largest bias in port approach areas where speed
-    distributions are bimodal (some vessels slow, some fast).
+    Expected: largest bias in port-approach areas where the speed
+    distribution is broad/bimodal (some vessels slow, some fast),
+    so collapsing the speed bins distorts the lethality most.
     """
     log.info("=" * 60)
-    log.info("CHECK: Spatial distribution of Jensen's inequality bias")
+    log.info("CHECK: Spatial distribution of Garrison speed-binning bias")
     log.info("=" * 60)
 
+    # Per-cell aggregate of the binned-vs-collapsed bias, with a
+    # track-km-weighted speed spread as the bimodality proxy.
     sql = """
-        select
-            h3_cell,
-            cell_lat,
-            cell_lon,
-            vw_avg_speed_knots,
-            vw_avg_lethality,
-            high_speed_fraction,
-            unique_vessels,
-            month
-        from ais_h3_summary
-        where vw_avg_lethality is not null
-          and vw_avg_speed_knots is not null
-    """
-    df = query_df(sql)
-
-    if df.empty:
-        log.warning("  No per-vessel lethality data. AIS re-run needed. SKIPPING.")
-        return True
-
-    # Compute cell-average lethality
-    df["cell_avg_lethality"] = 1.0 / (
-        1.0
-        + np.exp(-(VT_LETHALITY_BETA0 + VT_LETHALITY_BETA1 * df["vw_avg_speed_knots"]))
-    )
-    df["bias"] = df["vw_avg_lethality"] - df["cell_avg_lethality"]
-
-    # Aggregate to per-cell mean bias
-    cell_bias = (
-        df.groupby("h3_cell")
-        .agg(
-            mean_bias=("bias", "mean"),
-            max_bias=("bias", "max"),
-            mean_speed=("vw_avg_speed_knots", "mean"),
-            mean_lethality=("vw_avg_lethality", "mean"),
-            high_speed_frac=("high_speed_fraction", "mean"),
-            total_vessels=("unique_vessels", "sum"),
-            lat=("cell_lat", "first"),
-            lon=("cell_lon", "first"),
-            months=("month", "nunique"),
+        with strata as (
+            select
+                s.h3_cell,
+                s.month,
+                s.size_class,
+                s.track_km,
+                s.mean_implied_speed_kn,
+                g.beta0,
+                g.beta1
+            from ais_vtd_strata s
+            join (
+                select size_class, beta0, beta1
+                from garrison_lethality_coeffs
+                where whale_taxon = 'generic'
+            ) g on s.size_class = g.size_class
+            where s.track_km > 0
+        ),
+        cm_binned as (
+            select
+                h3_cell,
+                month,
+                sum(track_km) as track_km,
+                sum(
+                    track_km
+                    / (1.0 + exp(-(beta0 + beta1
+                        * coalesce(mean_implied_speed_kn, 0))))
+                ) / nullif(sum(track_km), 0) as leth_binned,
+                sum(track_km * mean_implied_speed_kn)
+                    / nullif(sum(track_km), 0) as mean_speed,
+                sum(track_km * mean_implied_speed_kn * mean_implied_speed_kn)
+                    / nullif(sum(track_km), 0)
+                    - power(
+                        sum(track_km * mean_implied_speed_kn)
+                            / nullif(sum(track_km), 0),
+                        2
+                    ) as speed_var
+            from strata
+            group by h3_cell, month
+        ),
+        cm_collapsed_size as (
+            select
+                h3_cell,
+                month,
+                size_class,
+                beta0,
+                beta1,
+                sum(track_km) as size_track_km,
+                sum(track_km * mean_implied_speed_kn)
+                    / nullif(sum(track_km), 0) as size_mean_speed
+            from strata
+            group by h3_cell, month, size_class, beta0, beta1
+        ),
+        cm_collapsed as (
+            select
+                h3_cell,
+                month,
+                sum(
+                    size_track_km
+                    / (1.0 + exp(-(beta0 + beta1
+                        * coalesce(size_mean_speed, 0))))
+                ) / nullif(sum(size_track_km), 0) as leth_collapsed
+            from cm_collapsed_size
+            group by h3_cell, month
+        ),
+        cm as (
+            select
+                b.h3_cell,
+                b.month,
+                b.track_km,
+                b.mean_speed,
+                b.speed_var,
+                b.leth_binned,
+                b.leth_binned - c.leth_collapsed as bias
+            from cm_binned b
+            join cm_collapsed c using (h3_cell, month)
         )
-        .reset_index()
-    )
+        select
+            cm.h3_cell,
+            g.cell_lat as lat,
+            g.cell_lon as lon,
+            avg(cm.bias) as mean_bias,
+            max(cm.bias) as max_bias,
+            avg(cm.mean_speed) as mean_speed,
+            avg(sqrt(greatest(cm.speed_var, 0))) as mean_speed_std,
+            avg(cm.leth_binned) as mean_lethality,
+            sum(cm.track_km) as total_track_km,
+            count(distinct cm.month) as months
+        from cm
+        join int_hex_grid g on cm.h3_cell = g.h3_cell
+        group by cm.h3_cell, g.cell_lat, g.cell_lon
+    """
+    cell_bias = query_df(sql)
+
+    if cell_bias.empty:
+        log.warning("  No VTD strata data. VTD aggregation needed. SKIPPING.")
+        return True
 
     n = len(cell_bias)
     log.info("  Unique cells analysed: %s", f"{n:,}")
@@ -1093,7 +1222,7 @@ def check_jensens_spatial_distribution() -> bool:
         mean_lethality=("mean_lethality", "mean"),
         count=("h3_cell", "count"),
     )
-    log.info("\n  Jensen's bias by speed decile:")
+    log.info("\n  Garrison speed-binning bias by speed decile:")
     log.info(
         "  %8s %12s %12s %12s %8s", "Decile", "Avg Speed", "Avg Bias", "Avg Lethal", "n"
     )
@@ -1107,18 +1236,20 @@ def check_jensens_spatial_distribution() -> bool:
             int(row["count"]),
         )
 
-    # Bias vs high-speed fraction (bimodal indicator)
+    # |Bias| vs speed spread (bimodal/broad-distribution indicator)
     rho, p = stats.spearmanr(
-        cell_bias["high_speed_frac"].fillna(0),
+        cell_bias["mean_speed_std"].fillna(0),
         cell_bias["mean_bias"].abs(),
     )
     log.info(
-        "\n  Correlation: |bias| vs high_speed_fraction:  rho=%.4f  p=%.2e", rho, p
+        "\n  Correlation: |bias| vs within-cell speed spread:  rho=%.4f  p=%.2e",
+        rho,
+        p,
     )
 
     # Geographic hotspots of bias
     top_bias_cells = cell_bias.nlargest(20, "mean_bias")
-    log.info("\n  Top 20 cells by Jensen's bias:")
+    log.info("\n  Top 20 cells by Garrison speed-binning bias:")
     log.info(
         "  %12s %8s %8s %8s %8s %8s",
         "h3_cell",
@@ -1126,17 +1257,17 @@ def check_jensens_spatial_distribution() -> bool:
         "lon",
         "speed",
         "bias",
-        "hs_frac",
+        "sp_std",
     )
     for _, row in top_bias_cells.iterrows():
         log.info(
             "  %12d %8.2f %8.2f %8.1f %8.4f %8.2f",
-            row["h3_cell"],
+            int(row["h3_cell"]),
             row["lat"],
             row["lon"],
             row["mean_speed"],
             row["mean_bias"],
-            row["high_speed_frac"] or 0,
+            row["mean_speed_std"] or 0,
         )
 
     # Plot: geographic scatter of bias
@@ -1150,26 +1281,26 @@ def check_jensens_spatial_distribution() -> bool:
         cmap="RdYlGn_r",
         s=1,
         alpha=0.4,
-        vmin=0,
+        vmin=cell_bias["mean_bias"].quantile(0.05),
         vmax=cell_bias["mean_bias"].quantile(0.95),
     )
     ax.set_xlabel("Longitude")
     ax.set_ylabel("Latitude")
-    ax.set_title("Geographic Distribution of Jensen's Bias")
-    fig.colorbar(scatter, ax=ax, label="Mean bias (per-vessel - cell-avg)")
+    ax.set_title("Geographic Distribution of Garrison Speed-Binning Bias")
+    fig.colorbar(scatter, ax=ax, label="Mean bias (binned - collapsed)")
     ax.grid(alpha=0.2)
 
     ax = axes[1]
     ax.scatter(
-        cell_bias["high_speed_frac"].fillna(0),
+        cell_bias["mean_speed_std"].fillna(0),
         cell_bias["mean_bias"],
         alpha=0.1,
         s=2,
         color=NAVY,
     )
-    ax.set_xlabel("High speed fraction (vessels >= 10 kn)")
-    ax.set_ylabel("Mean Jensen's bias")
-    ax.set_title(f"Bias vs Speed Distribution Shape\n(rho={rho:.4f})")
+    ax.set_xlabel("Within-cell speed spread (knots, track-km-weighted SD)")
+    ax.set_ylabel("Mean Garrison binning bias")
+    ax.set_title(f"Bias vs Speed Distribution Spread\n(rho={rho:.4f})")
     ax.grid(alpha=0.3)
 
     plt.tight_layout()

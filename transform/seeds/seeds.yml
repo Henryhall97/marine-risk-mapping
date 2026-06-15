@@ -172,3 +172,85 @@ seeds:
 
       - name: notes
         description: "Caveats and delivery status (which migration phase ships it)"
+
+  - name: garrison_lethality_coeffs
+    description: >
+      Garrison et al. (2025) speed-lethality logistic coefficients —
+      P(lethal | speed) = 1 / (1 + exp(-(β₀ + β₁ × speed_knots))) —
+      parameterised by whale_taxon × vessel size_class. Replaces the
+      single Vanderlaan & Taggart (2007) curve at TWO touchpoints:
+        (A) Phase 2 traffic screening uses the taxon-agnostic 'generic'
+            rows (read by the garrison_lethality() macro in int_vtd);
+        (B) Phase 4 mortality will use the full taxon × size grid.
+      Credible-interval columns (β*_lo / β*_hi) feed the Phase 5
+      Monte-Carlo so P_leth becomes a distribution, not a point.
+
+      SOURCE: Garrison et al. (2025) Front. Mar. Sci. 11:1467387,
+      Table 3 (best logit model: Speed + VesselSize + Humpback +
+      Speed×Humpback; n=192 events, R²=0.291). Non-humpback ("other")
+      slope β₁=0.129/kn; humpback slope β₁=0.026/kn (the −0.103
+      Speed×Humpback interaction). Garrison resolved only HUMPBACK vs
+      EVERYTHING-ELSE, so the 'generic' rows and all non-humpback
+      species (right, fin, blue, sei, sperm, minke, gray) share the
+      single "other" curve; only 'humpback' differs.
+
+      SIZE-CLASS MAPPING: Garrison's four classes are on vessel LENGTH
+      (Small <12.1 m, Medium 12.2–19.7 m, Large 19.8–108 m, XL ≥108 m).
+      AIS carriage begins ~20 m, so all our vessels are Garrison Large
+      or XL — the only edge that matters is 108 m. Our length bins
+      (50/100/200 m) are mapped onto that split: small/medium →
+      Garrison Large (β₀=−1.127), large/vlarge → Garrison XL
+      (β₀=+0.754). The sole approximation is the narrow 100–108 m band
+      (our 100 m edge ≈ Garrison's 108 m); avoiding it would require a
+      VTD re-aggregation at Garrison's edges for negligible gain. XL is
+      lethal at any realistic speed (P≥0.5 even at 0 kn), per Table 4.
+    columns:
+      - name: whale_taxon
+        description: >
+          Whale taxon: 'generic'/'humpback' are the two levels Garrison
+          resolved; non-humpback species (right, fin, blue, sei, sperm,
+          minke, gray) duplicate the 'generic' (other) curve and are
+          retained for the Phase 4 mortality module's join keys.
+        tests:
+          - not_null
+      - name: size_class
+        description: "Vessel size class: small, medium, large, vlarge, unknown"
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["small", "medium", "large", "vlarge", "unknown"]
+      - name: midpoint_kn
+        description: "Speed (kn) at which P(lethal) = 0.5 for this curve (−β₀/β₁; negative ⇒ ≥0.5 at rest)"
+        tests:
+          - not_null
+      - name: beta0
+        description: "Logistic intercept β₀"
+        tests:
+          - not_null
+      - name: beta1
+        description: "Logistic speed coefficient β₁ (per knot)"
+        tests:
+          - not_null
+      - name: beta0_lo
+        description: "Lower credible bound on β₀ (Phase 5 Monte-Carlo)"
+        tests:
+          - not_null
+      - name: beta0_hi
+        description: "Upper credible bound on β₀ (Phase 5 Monte-Carlo)"
+        tests:
+          - not_null
+      - name: beta1_lo
+        description: "Lower credible bound on β₁ (Phase 5 Monte-Carlo)"
+        tests:
+          - not_null
+      - name: beta1_hi
+        description: "Upper credible bound on β₁ (Phase 5 Monte-Carlo)"
+        tests:
+          - not_null
+      - name: source
+        description: "Provenance tag for the coefficient row"
+        tests:
+          - not_null
+      - name: notes
+        description: "Per-row rationale / caveat"
